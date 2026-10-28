@@ -102,28 +102,45 @@
     Z: [[0, 0], [1, 0], [1, 1], [2, 1]], J: [[0, 0], [0, 1], [1, 1], [2, 1]], L: [[2, 0], [0, 1], [1, 1], [2, 1]]
   };
   var KINDS = 'IOTSZJL';
+  var TCOL = { I: '#35d6e0', O: '#f5c542', T: '#a96bff', S: '#4cd964', Z: '#ff5a6e', J: '#4d7cff', L: '#ff9a3c' };
+  function shade(hex, k) {   // k>0 lighten toward white, k<0 darken toward black
+    var n = parseInt(hex.slice(1), 16), r = n >> 16, g = (n >> 8) & 255, b = n & 255, t = k < 0 ? 0 : 255, f = Math.abs(k);
+    return 'rgb(' + Math.round(r + (t - r) * f) + ',' + Math.round(g + (t - g) * f) + ',' + Math.round(b + (t - b) * f) + ')';
+  }
+  /* One solid, bevelled block: a face gradient, a lit top-left edge and a shaded bottom-right edge. */
+  function drawBlock(ctx, x, y, s, hex, alpha) {
+    var p = Math.max(1, s * .06), i = s - p * 2;
+    ctx.save(); ctx.globalAlpha = alpha == null ? 1 : alpha;
+    var g = ctx.createLinearGradient(x, y, x + s, y + s); g.addColorStop(0, shade(hex, .22)); g.addColorStop(1, shade(hex, -.18));
+    ctx.fillStyle = g; ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(x + p, y + p, i, i, s * .14); else ctx.rect(x + p, y + p, i, i); ctx.fill();
+    var b = Math.max(2, s * .13);
+    ctx.fillStyle = 'rgba(255,255,255,.34)'; ctx.beginPath(); ctx.moveTo(x + p, y + p); ctx.lineTo(x + p + i, y + p); ctx.lineTo(x + p + i - b, y + p + b); ctx.lineTo(x + p + b, y + p + b); ctx.lineTo(x + p + b, y + p + i - b); ctx.lineTo(x + p, y + p + i); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,.28)'; ctx.beginPath(); ctx.moveTo(x + p + i, y + p + i); ctx.lineTo(x + p, y + p + i); ctx.lineTo(x + p + b, y + p + i - b); ctx.lineTo(x + p + i - b, y + p + i - b); ctx.lineTo(x + p + i - b, y + p + b); ctx.lineTo(x + p + i, y + p); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = shade(hex, .08); ctx.fillRect(x + p + b, y + p + b, i - b * 2, i - b * 2);
+    ctx.restore();
+  }
   PG.register('arcade', 'tetris', {
-    title: 'Tetris', sub: 'Terminal edition. Arrows or WASD to move/rotate, Space to hard drop, C to hold, P to pause.',
+    title: 'Block Stacker', sub: 'Arrows or WASD to move and rotate, Space to hard drop, C to hold, P to pause. Clear lines to level up.',
     mount: function (host) {
-      var W = 10, H = 20, grid, cur, next, hold, held, bag = [], score, lines, level, over, paused, acc, started, t0, elapsed, dirty = true, best = PG.store.get('tetris-best', { scores: [], lines: 0, level: 0, time: 0 });
-      var wrap = PG.el('div', 'tt-wrap'), pre = PG.el('pre'); wrap.appendChild(pre); var row = PG.el('div', 'tt-row'); row.appendChild(wrap); host.appendChild(row);
-      var bar = PG.el('div', 'pg-bar'); host.appendChild(bar);
-      var bStart = PG.button(bar, 'New game', function () { reset(); }, true), bPause = PG.button(bar, 'Pause', function () { togglePause(); });
+      var W = 10, H = 20, grid, cur, next, hold, held, bag = [], score, lines, level, over, paused, acc, started, t0, elapsed, flashes = [], best = PG.store.get('tetris-best', { scores: [], lines: 0, level: 0, time: 0 });
+      var C = PG.canvas(host, 0.8), ctx = C.ctx; C.wrap.style.maxWidth = '470px'; C.wrap.style.margin = '0 auto';
+      var bar = PG.el('div', 'pg-bar'); bar.style.justifyContent = 'center'; host.appendChild(bar);
+      PG.button(bar, 'New game', function () { reset(); paused = false; }, true); var bPause = PG.button(bar, 'Pause', function () { togglePause(); });
       var pad = PG.el('div', 'tt-pad'); [['↺', 'rot'], ['←', 'left'], ['↓', 'down'], ['→', 'right'], ['⤓', 'drop'], ['H', 'hold']].forEach(function (b) { var x = PG.el('button', '', b[0]); x.type = 'button'; x.onpointerdown = function (e) { e.preventDefault(); act(b[1]); }; pad.appendChild(x); }); host.appendChild(pad);
       var pbs = PG.el('div', 'pg-list'); host.appendChild(PG.el('h4', '', 'Personal bests')); host.lastChild.style.cssText = 'margin:14px 0 0;font-size:13px'; host.appendChild(pbs);
       function bag7() { if (!bag.length) { bag = KINDS.split(''); for (var i = bag.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)), t = bag[i]; bag[i] = bag[j]; bag[j] = t; } } return bag.pop(); }
       function piece(k) { return { k: k, cells: SHAPES[k].map(function (a) { return a.slice(); }), x: 3, y: 0, rot: 0 }; }
       function rotated(p, dir) { if (p.k === 'O') return p.cells; var size = p.k === 'I' ? 4 : 3; return p.cells.map(function (a) { return dir > 0 ? [size - 1 - a[1], a[0]] : [a[1], size - 1 - a[0]]; }); }
       function fits(cells, x, y) { for (var i = 0; i < cells.length; i++) { var cx = cells[i][0] + x, cy = cells[i][1] + y; if (cx < 0 || cx >= W || cy >= H) return false; if (cy >= 0 && grid[cy][cx]) return false; } return true; }
-      function reset() { grid = []; for (var i = 0; i < H; i++) grid.push(new Array(W).fill('')); score = 0; lines = 0; level = 1; over = false; paused = false; acc = 0; hold = null; held = false; bag = []; next = bag7(); spawn(); t0 = performance.now(); elapsed = 0; started = true; bPause.textContent = 'Pause'; dirty = true; renderPB(); }
+      function reset() { grid = []; for (var i = 0; i < H; i++) grid.push(new Array(W).fill('')); score = 0; lines = 0; level = 1; over = false; paused = false; acc = 0; hold = null; held = false; bag = []; flashes = []; next = bag7(); spawn(); t0 = performance.now(); elapsed = 0; started = true; bPause.textContent = 'Pause'; renderPB(); }
       function spawn() { cur = piece(next); next = bag7(); held = false; if (!fits(cur.cells, cur.x, cur.y)) gameOver(); }
       function gameOver() { over = true; var b = best; b.scores.push(score); b.scores.sort(function (a, c) { return c - a; }); b.scores = b.scores.slice(0, 5); b.lines = Math.max(b.lines, lines); b.level = Math.max(b.level, level); b.time = Math.max(b.time, Math.floor(elapsed)); PG.store.set('tetris-best', b); renderPB(); }
       function renderPB() { var b = best; pbs.innerHTML = '<div class="pg-pb"><b>' + (b.scores[0] || 0) + '</b>best score</div><div class="pg-pb"><b>' + b.lines + '</b>most lines</div><div class="pg-pb"><b>' + b.level + '</b>highest level</div><div class="pg-pb"><b>' + PG.fmtTime(b.time) + '</b>longest game</div>' + (b.scores.length > 1 ? '<div class="pg-pb"><b>' + b.scores.join(' / ') + '</b>top 5 scores</div>' : ''); }
       function lock() {
         cur.cells.forEach(function (a) { var y = a[1] + cur.y, x = a[0] + cur.x; if (y >= 0) grid[y][x] = cur.k; });
-        var n = 0; for (var y = H - 1; y >= 0; y--) { if (grid[y].every(Boolean)) { grid.splice(y, 1); grid.unshift(new Array(W).fill('')); n++; y++; } }
+        var n = 0; for (var y = H - 1; y >= 0; y--) { if (grid[y].every(Boolean)) { flashes.push({ y: y + n, t: 1 }); grid.splice(y, 1); grid.unshift(new Array(W).fill('')); n++; y++; } }
         if (n) { lines += n; score += [0, 100, 300, 500, 800][n] * level; level = 1 + Math.floor(lines / 10); }
-        spawn(); dirty = true;
+        spawn();
       }
       function ghostY() { var y = cur.y; while (fits(cur.cells, cur.x, y + 1)) y++; return y; }
       function act(a) {
@@ -133,43 +150,65 @@
         else if (a === 'rot') { var r = rotated(cur, 1); [0, -1, 1, -2, 2].some(function (k) { if (fits(r, cur.x + k, cur.y)) { cur.cells = r; cur.x += k; return true; } return false; }); }
         else if (a === 'drop') { var y = ghostY(); score += 2 * (y - cur.y); cur.y = y; lock(); acc = 0; }
         else if (a === 'hold' && !held) { var k = cur.k; if (hold) { cur = piece(hold); } else { cur = piece(next); next = bag7(); } hold = k; held = true; }
-        dirty = true;
       }
-      function togglePause() { if (over) return; paused = !paused; bPause.textContent = paused ? 'Resume' : 'Pause'; dirty = true; }
+      function togglePause() { if (over) return; paused = !paused; bPause.textContent = paused ? 'Resume' : 'Pause'; }
       var off = PG.keyHandler(function (e) {
+        if (paused && !over && started && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); togglePause(); return; }
         var m = { ArrowLeft: 'left', a: 'left', A: 'left', ArrowRight: 'right', d: 'right', D: 'right', ArrowDown: 'down', s: 'down', S: 'down', ArrowUp: 'rot', w: 'rot', W: 'rot', x: 'rot', ' ': 'drop', c: 'hold', C: 'hold' }[e.key];
         if (e.key === 'p' || e.key === 'P' || e.key === 'Escape') { togglePause(); return; } if (m) { e.preventDefault(); act(m); }
       });
-      var BLK = { I: '[]', O: '[]', T: '[]', S: '[]', Z: '[]', J: '[]', L: '[]' };
-      function draw() {
-        var v = grid.map(function (r) { return r.slice(); }), gy = over ? cur.y : ghostY();
-        if (!over) { cur.cells.forEach(function (a) { var y = a[1] + gy, x = a[0] + cur.x; if (y >= 0 && !v[y][x]) v[y][x] = '.'; }); }
-        cur.cells.forEach(function (a) { var y = a[1] + cur.y, x = a[0] + cur.x; if (y >= 0) v[y][x] = cur.k; });
-        function mini(k) { var rows = ['        ', '        ']; if (k) SHAPES[k].forEach(function (a) { var rr = a[1] > 1 ? 1 : a[1]; var r = k === 'I' ? 0 : a[1]; if (k === 'I') { rows[0] = '[][][][]'; } else { var s = rows[r]; var px = a[0] * 2 + (k === 'O' ? 0 : 0); rows[r] = s.substr(0, px) + '[]' + s.substr(px + 2); } }); return rows; }
-        var nx = mini(next), hd = mini(hold), side = [
-          'NEXT', nx[0], nx[1], '', 'HOLD', hd[0], hd[1], '', 'SCORE', String(score), '', 'LINES ' + lines, 'LEVEL ' + level, 'TIME  ' + PG.fmtTime(elapsed), '', 'BEST  ' + (best.scores[0] || 0)
-        ];
-        var out = 't58@quant:~$ ./tetris' + ((Date.now() % 1000) < 500 ? ' _' : '  ') + '\n\n';
-        for (var y = 0; y < H; y++) {
-          var line = '<!'; for (var x = 0; x < W; x++) { var c = v[y][x]; line += c === '.' ? ' .' : c ? BLK[c] : ' .'.replace('.', ' '); } line += '!>';
-          out += line + '  ' + (side[y] || '') + '\n';
+      function miniPiece(k, x, y, s) {
+        if (!k) return; var cells = SHAPES[k], minx = 9, maxx = 0, miny = 9, maxy = 0;
+        cells.forEach(function (a) { minx = Math.min(minx, a[0]); maxx = Math.max(maxx, a[0]); miny = Math.min(miny, a[1]); maxy = Math.max(maxy, a[1]); });
+        var ox = x - (maxx - minx + 1) * s / 2 - minx * s, oy = y - (maxy - miny + 1) * s / 2 - miny * s;
+        cells.forEach(function (a) { drawBlock(ctx, ox + a[0] * s, oy + a[1] * s, s, TCOL[k]); });
+      }
+      function panel(x, y, w, h, label) {
+        ctx.fillStyle = 'rgba(255,255,255,.04)'; ctx.strokeStyle = 'rgba(255,255,255,.1)'; ctx.lineWidth = 1; ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(x, y, w, h, 10); else ctx.rect(x, y, w, h); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = 'rgba(200,215,230,.6)'; ctx.font = '700 ' + Math.max(9, Math.round(w * .13)) + 'px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.fillText(label, x + w / 2, y + Math.max(14, w * .2));
+      }
+      function stat(x, y, w, label, val) {
+        ctx.textAlign = 'left'; ctx.fillStyle = 'rgba(200,215,230,.6)'; ctx.font = '700 ' + Math.max(9, Math.round(w * .13)) + 'px system-ui, sans-serif'; ctx.fillText(label, x, y);
+        ctx.fillStyle = '#fff'; ctx.font = '800 ' + Math.max(13, Math.round(w * .24)) + 'px system-ui, sans-serif'; ctx.fillText(String(val), x, y + Math.max(16, w * .27));
+      }
+      function draw(dt) {
+        var s = Math.floor(Math.min(C.w / 16.2, C.h / 20.4)), bw = s * W, bh = s * H, bx = Math.round((C.w - (bw + s * 5.4)) / 2), by = Math.round((C.h - bh) / 2), sx = bx + bw + s * .4, sw = s * 5;
+        ctx.clearRect(0, 0, C.w, C.h);
+        var bg = ctx.createLinearGradient(0, 0, 0, C.h); bg.addColorStop(0, '#0d1722'); bg.addColorStop(1, '#060a10'); ctx.fillStyle = bg; ctx.fillRect(0, 0, C.w, C.h);
+        // well
+        ctx.fillStyle = '#070d14'; ctx.fillRect(bx, by, bw, bh);
+        ctx.strokeStyle = 'rgba(255,255,255,.05)'; ctx.lineWidth = 1; ctx.beginPath();
+        for (var i = 1; i < W; i++) { ctx.moveTo(bx + i * s + .5, by); ctx.lineTo(bx + i * s + .5, by + bh); } for (i = 1; i < H; i++) { ctx.moveTo(bx, by + i * s + .5); ctx.lineTo(bx + bw, by + i * s + .5); } ctx.stroke();
+        for (var y = 0; y < H; y++) for (var x = 0; x < W; x++) if (grid[y][x]) drawBlock(ctx, bx + x * s, by + y * s, s, TCOL[grid[y][x]]);
+        if (!over) {
+          var gy = ghostY(); cur.cells.forEach(function (a) { var yy = a[1] + gy; if (yy >= 0) { ctx.strokeStyle = TCOL[cur.k]; ctx.globalAlpha = .45; ctx.lineWidth = 1.5; ctx.strokeRect(bx + (a[0] + cur.x) * s + 2.5, by + yy * s + 2.5, s - 5, s - 5); ctx.globalAlpha = 1; } });
         }
-        out += '<!' + '=='.repeat(W) + '!>\n' + '  ' + '\\/'.repeat(W) + '\n';
-        if (paused) out += '\n  [ PAUSED ] press P to resume\n'; else if (over) out += '\n  GAME OVER. score ' + score + '. press New game\n'; else out += '\n  arrows/WASD move  space drop  C hold  P pause\n';
-        pre.textContent = out;
+        cur.cells.forEach(function (a) { var yy = a[1] + cur.y; if (yy >= 0) drawBlock(ctx, bx + (a[0] + cur.x) * s, by + yy * s, s, TCOL[cur.k]); });
+        flashes = flashes.filter(function (f) { return (f.t -= dt * 4) > 0; });
+        flashes.forEach(function (f) { ctx.fillStyle = 'rgba(255,255,255,' + Math.min(.8, f.t) + ')'; ctx.fillRect(bx, by + f.y * s, bw, s); });
+        ctx.strokeStyle = 'rgba(255,255,255,.18)'; ctx.lineWidth = 2; ctx.strokeRect(bx - 1, by - 1, bw + 2, bh + 2);
+        // side panel
+        panel(sx, by, sw, s * 3.4, 'NEXT'); miniPiece(next, sx + sw / 2, by + s * 2.1, s * .7);
+        panel(sx, by + s * 3.8, sw, s * 3.4, 'HOLD'); if (hold) { ctx.globalAlpha = held ? .4 : 1; miniPiece(hold, sx + sw / 2, by + s * 5.9, s * .7); ctx.globalAlpha = 1; }
+        stat(sx + 4, by + s * 8.4, sw, 'SCORE', score); stat(sx + 4, by + s * 10.8, sw, 'LINES', lines); stat(sx + 4, by + s * 13.2, sw, 'LEVEL', level);
+        stat(sx + 4, by + s * 15.6, sw, 'TIME', PG.fmtTime(elapsed)); stat(sx + 4, by + s * 18, sw, 'BEST', best.scores[0] || 0);
+        if (paused || over) {
+          ctx.fillStyle = 'rgba(4,8,14,.72)'; ctx.fillRect(bx, by, bw, bh); ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
+          ctx.font = '800 ' + Math.round(s * 1.1) + 'px system-ui, sans-serif'; ctx.fillText(over ? 'GAME OVER' : 'READY', bx + bw / 2, by + bh / 2 - s * .3);
+          ctx.font = '600 ' + Math.round(s * .55) + 'px system-ui, sans-serif'; ctx.fillStyle = 'rgba(220,230,240,.85)'; ctx.fillText(over ? 'Score ' + score + '. Press New game.' : 'Press Space or Resume', bx + bw / 2, by + bh / 2 + s * .6);
+        }
       }
       var L = PG.loop(function (dt) {
         if (started && !over && !paused) {
-          elapsed = (performance.now() - t0) / 1000 - 0; acc += dt; var step = Math.max(0.07, 0.8 - (level - 1) * 0.07);
-          while (acc >= step) { acc -= step; if (fits(cur.cells, cur.x, cur.y + 1)) cur.y++; else lock(); dirty = true; }
-          dirty = true;
+          elapsed = (performance.now() - t0) / 1000; acc += dt; var step = Math.max(0.07, 0.8 - (level - 1) * 0.07);
+          while (acc >= step) { acc -= step; if (fits(cur.cells, cur.x, cur.y + 1)) cur.y++; else lock(); }
         }
-        if (dirty) { draw(); dirty = false; }
+        draw(dt);
       });
-      var pauseVis = function () { if (document.hidden && started && !over && !paused) { paused = true; bPause.textContent = 'Resume'; dirty = true; } };
+      var pauseVis = function () { if (document.hidden && started && !over && !paused) { paused = true; bPause.textContent = 'Resume'; } };
       document.addEventListener('visibilitychange', pauseVis);
-      reset(); paused = true; bPause.textContent = 'Resume'; dirty = true;   // starts paused so nothing falls before you are ready
-      return { destroy: function () { L.stop(); off(); document.removeEventListener('visibilitychange', pauseVis); } };
+      reset(); paused = true; bPause.textContent = 'Resume';   // starts paused so nothing falls before you are ready
+      return { destroy: function () { L.stop(); off(); C.destroy(); document.removeEventListener('visibilitychange', pauseVis); } };
     }
   });
 })();

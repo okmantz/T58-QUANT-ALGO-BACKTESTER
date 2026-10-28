@@ -625,7 +625,7 @@ def _error_message(code: str) -> str:
     return _ERROR_MESSAGES.get(code, f"License error: {code}")
 
 
-def activate(email: str, license_key: str, remember: bool = True) -> tuple[bool, str]:
+def _activate_impl(email: str, license_key: str, remember: bool = True) -> tuple[bool, str]:
     """Returns (ok, message).
 
     `remember=True` (the default, and the only behavior that existed
@@ -692,13 +692,24 @@ def activate(email: str, license_key: str, remember: bool = True) -> tuple[bool,
         expires_at=body.get("expires_at"), last_validated_at=datetime.now(timezone.utc).isoformat(),
         plan=normalize_plan(body.get("plan")),
     ))
-    # Fresh install? Bring this account's saved runs back (best effort; never blocks or fails activation).
-    try:
-        from app.persistence import vault
-        vault.on_activated()
-    except Exception:  # noqa: BLE001
-        pass
     return True, "Activated."
+
+
+def activate(email: str, license_key: str, remember: bool = True) -> tuple[bool, str]:
+    """Sign in. See _activate_impl for the license logic.
+
+    v10 FIX: the saved-runs restore used to run only at the very end of the license-SERVER path, so signing in with the master
+    key (which returns early, offline) or through the sheet / allowlist modes never restored anything -- a reinstall came back
+    empty. It now runs after EVERY successful sign-in, whichever kind of key was used. Best effort: it never blocks or fails
+    the activation itself."""
+    ok, message = _activate_impl(email, license_key, remember=remember)
+    if ok:
+        try:
+            from app.persistence import vault
+            vault.on_activated()
+        except Exception:  # noqa: BLE001
+            pass
+    return ok, message
 
 
 def validate() -> tuple[bool, str]:

@@ -44,10 +44,14 @@ def achievements_ack():
 
 # ------------------------------------------------------------------ Playground
 PLAYGROUND_SECTIONS = {
-    "fidgets": {"title": "Fidgets", "blurb": "Calm things to fiddle with between runs.", "toys": ["Infinity Cube", "Liquid Playground", "Particle Field"]},
-    "arcade": {"title": "Arcade", "blurb": "Quick games that fit in a coffee break.", "toys": ["Chess vs computer", "2048 Quant Edition", "Tetris"]},
-    "puzzles": {"title": "Daily Puzzles", "blurb": "A fresh set every day, same for everyone.", "toys": ["Infinite Maze", "Daily chess puzzle", "Chart analyzer"]},
-    "quantum": {"title": "Quantum Playground", "blurb": "Physics toys and tiny challenges.", "toys": ["Gravity Well", "Particle Storm", "Orbit Challenge", "Signal Path", "Light Tunnel"]},
+    "fidgets": {"title": "Fidgets", "blurb": "Calm things to fiddle with between runs. A twisting cube with secret combos, a ring of liquid light, a field of drifting particles.",
+                "tag": "Unwind", "accent": "#35e0b0", "toys": [["Infinity Cube", "cube"], ["Liquid Playground", "liquid"], ["Particle Field", "field"]]},
+    "arcade": {"title": "Arcade", "blurb": "Quick games that fit in a coffee break. Chess against the computer, 2048 with a quant twist, and a polished block stacker.",
+               "tag": "Play", "accent": "#f5b83d", "toys": [["Chess vs computer", "chess"], ["2048 Quant Edition", "2048"], ["Block Stacker", "tetris"]]},
+    "puzzles": {"title": "Daily Puzzles", "blurb": "A fresh set every day, the same for everyone. Keep a streak going and sharpen your pattern recognition.",
+                "tag": "Think", "accent": "#4d90ff", "toys": [["Infinite Maze", "maze"], ["Daily chess puzzle", "chess"], ["Chart analyzer", "chart"]]},
+    "quantum": {"title": "Quantum Playground", "blurb": "Physics toys and tiny challenges: bend gravity, steer particle storms, fly a relaxed light tunnel.",
+                "tag": "Explore", "accent": "#9b8cff", "toys": [["Gravity Well", "well"], ["Particle Storm", "storm"], ["Orbit Challenge", "orbit"], ["Signal Path", "signal"], ["Light Tunnel", "tunnel"]]},
 }
 
 
@@ -133,36 +137,148 @@ def parse_reading_list(text: str) -> list[dict]:
         elif s.startswith("#"):
             cur = None
     for e in out:
+        e["in_repo"] = "[IN REPO" in e["title"]
         e["links"] = list(dict.fromkeys(e["links"]))
         e["title"] = _re.sub(r"\s*\[IN REPO[^\]]*\]\s*", " ", e["title"]).strip()
     return out
 
 
+# One line on why each bundled paper matters to a prop-firm backtester. Keyed by lower-cased file stem; unknown PDFs still list fine.
+_PAPER_NOTES = {
+    "the deflated sharpe ratio": ("Bailey, Lopez de Prado", "Corrects a Sharpe ratio for how many strategies you tried and for non-normal returns. The basis of the engine's search-bias check."),
+    "the probability of backtest overfitting": ("Bailey, Borwein, Lopez de Prado, Zhu", "How to estimate the chance the best in-sample strategy is a fluke (CSCV)."),
+    "backtest overfitting in financial markets": ("Survey", "Why optimised backtests look great and then fail live, and the usual remedies."),
+    "determining optimal trading rules": ("Optimal trading rules", "Choosing profit-target and stop levels without overfitting them to one history."),
+    "do simple technical trading rules survive realistic costs": ("Cost study", "Most simple rules vanish once spreads, slippage and commissions are charged."),
+    "a novel approach to trading strategy parameter optimization": ("Parameter optimisation", "A way to pick parameters that stay stable rather than the single best in-sample peak."),
+    "structural limits of ohlcv-based intraday signals in mnq futures": ("MNQ study", "How much edge OHLCV bars can honestly carry on micro Nasdaq futures."),
+    "a validated volatility-volume-gap classifier for regime identification mnq data": ("MNQ study", "A regime classifier built on volatility, volume and gaps, validated on MNQ."),
+    "a century of evidence on trend-following investing": ("Hurst, Ooi, Pedersen", "A hundred years of trend-following results across asset classes."),
+    "momentum crashes": ("Daniel, Moskowitz", "When and why momentum strategies suffer sharp losses, and how to temper them."),
+    "do momentum and reversal strategies work in commodity futures": ("Commodity futures", "Tests momentum and reversal rules on commodity futures."),
+    "momentum strategies in futures markets and trend-following funds": ("Futures momentum", "How momentum works in futures and how trend-following funds apply it."),
+    "trend following, risk parity and momentum in commodity futures": ("Commodity futures", "Links trend following, risk parity and momentum."),
+    "a comparative study of breakout and mean-reversion strategies": ("Comparative study", "Breakout and mean-reversion rules compared on the same data."),
+    "analysis of the bollinger bands and mean reversion trading strategy in sp 500": ("S&P 500 study", "Bollinger-band mean reversion tested on the S&P 500."),
+    "design and development of mean reversion strategies on quantconnect platform": ("QuantConnect", "Building and testing mean-reversion strategies end to end."),
+    "mean reversion trading strategies and the black swan events": ("Tail risk", "How mean reversion behaves when rare shocks arrive."),
+    "101 formulaic alphas": ("Kakushadze", "101 real-world quantitative alpha formulas, a source of signal ideas."),
+    "a hybrid ai-driven trading system integrating technical analysis, machine learning and financial sentiment": ("Hybrid system", "Combines technical, ML and sentiment inputs in one system."),
+    "a reinforcement learning and genetic algorithm framework for intraday index futures trading": ("RL + GA", "Reinforcement learning with a genetic search on intraday index futures."),
+    "adaptive limits of algorithmic cryptocurrency trading from a complex adaptive systems perspective": ("Crypto", "Why algorithmic edges decay as markets adapt."),
+    "deep reinforcement learning on a multi-asset": ("Deep RL", "Deep reinforcement learning applied across several assets."),
+    "deep reinforcement learning for trading": ("Deep RL", "A practical look at deep RL trading agents."),
+    "expectancy-optimised algorithmic trading on gold spot markets": ("Gold", "Optimising for expectancy, not win rate, on gold."),
+    "machine learning in futures markets": ("ML in futures", "What machine learning does and does not add on futures data."),
+    "how order flow affects stock price": ("Order flow", "How buying and selling pressure moves prices."),
+    "order flow and exchange rate dynamics in electronic brokerage system data": ("Order flow, FX", "Order flow and currency movements from brokerage data."),
+    "order flow and exchange rate dynamics": ("Evans, Lyons", "The classic result that signed order flow explains exchange-rate moves."),
+    "an actuarial analysis of proprietary trading firm challenges": ("Prop firm math", "Models prop-firm challenges as insurance-style bets: pass rates, fees and expected value."),
+    "day trading adapting to change": ("Day trading", "How day-trading edges change over time and what to do about it."),
+    "the kelly criterion and the stock market": ("Kelly", "Optimal bet sizing, and why fractional Kelly is safer when the edge is uncertain."),
+}
+
+
+def _paper_state_path() -> _Path:
+    return _lib_dir() / "paper_state.json"
+
+
+def _load_paper_state() -> dict:
+    try:
+        d = _json.loads(_paper_state_path().read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _paper_year(stem: str) -> str:
+    m = _re.search(r"\b(19|20)\d{2}\b", stem)
+    return m.group(0) if m else ""
+
+
 @pages_bp.route("/api/library/papers")
 def library_papers():
+    """Bundled PDFs (research/papers/<NN_Category>/*.pdf) first, then the link-only entries from the reading lists
+    (research/<NN_...>/Reading_List.md), plus per-paper like/read state."""
     root = _research_dir()
+    state = _load_paper_state()
     cats: list[dict] = []
-    used_pdfs: set[str] = set()
-    for folder in sorted(p for p in root.iterdir() if p.is_dir()):
+    seen_pdf: set[str] = set()
+    pdf_root = root / "papers"
+    if pdf_root.is_dir():
+        for folder in sorted(p for p in pdf_root.iterdir() if p.is_dir()):
+            papers = []
+            for f in sorted(folder.glob("*.pdf")):
+                seen_pdf.add(str(f))
+                key = _re.sub(r"\s*\(alt\)$", "", f.stem).strip().lower()
+                au, why = _PAPER_NOTES.get(key, ("", ""))
+                pid = f.relative_to(root).with_suffix("").as_posix()
+                st = state.get(pid, {})
+                papers.append({"id": pid, "title": f.stem, "authors": au, "role": why, "links": [], "pdf": True, "bundled": True,
+                               "size_kb": round(f.stat().st_size / 1024), "liked": bool(st.get("liked")), "read": bool(st.get("read"))})
+            if papers:
+                cats.append({"id": folder.name, "name": _pretty_category(folder.name), "group": "library", "papers": papers, "docs": []})
+    for folder in sorted(p for p in root.iterdir() if p.is_dir() and p.name != "papers"):
         rl = folder / "Reading_List.md"
         entries = parse_reading_list(rl.read_text(encoding="utf-8", errors="replace")) if rl.exists() else []
         papers = []
         for i, e in enumerate(entries):
+            if e.get("in_repo"):
+                continue  # already bundled as a PDF above
             pid = f"{folder.name}/{i + 1:02d}-{_slug(e['title'])[:48]}"
             pdf = root / folder.name / f"{pid.split('/')[1]}.pdf"
-            if pdf.exists():
-                used_pdfs.add(str(pdf))
-            papers.append({"id": pid, "title": e["title"], "role": e["role"], "links": e["links"], "pdf": pdf.exists()})
-        extra = [p for p in sorted(folder.rglob("*.pdf")) if str(p) not in used_pdfs]
+            m = _re.match(r"^(.*?)\s-\s(.*)$", e["title"])
+            st = state.get(pid, {})
+            papers.append({"id": pid, "title": (m.group(2) if m else e["title"]).strip(' "'), "authors": m.group(1) if m else "", "role": e["role"],
+                           "links": e["links"], "pdf": pdf.exists(), "bundled": False, "liked": bool(st.get("liked")), "read": bool(st.get("read"))})
+        extra = [p for p in sorted(folder.rglob("*.pdf")) if str(p) not in seen_pdf and not (p.name.startswith(tuple(f"{j + 1:02d}-" for j in range(60))))]
         for p in extra:
-            rel = p.relative_to(root).as_posix()
-            papers.append({"id": rel[:-4], "title": p.stem.replace("_", " "), "role": "Your PDF", "links": [], "pdf": True})
+            rel = p.relative_to(root).with_suffix("").as_posix()
+            st = state.get(rel, {})
+            papers.append({"id": rel, "title": p.stem.replace("_", " "), "authors": "", "role": "Your PDF", "links": [], "pdf": True, "bundled": False,
+                           "liked": bool(st.get("liked")), "read": bool(st.get("read"))})
         docs = [{"name": p.name, "path": p.relative_to(root).as_posix()} for p in sorted(folder.glob("*.md")) if p.name != "Reading_List.md"]
-        cats.append({"id": folder.name, "name": _pretty_category(folder.name), "papers": papers, "docs": docs})
+        if papers or docs:
+            cats.append({"id": folder.name, "name": _pretty_category(folder.name), "group": "reading" if folder.name[:2] != "00" else "guides",
+                         "papers": papers, "docs": docs})
     loose = [p for p in sorted(root.glob("*.pdf"))]
     if loose:
-        cats.append({"id": "_loose", "name": "Other PDFs", "papers": [{"id": p.stem, "title": p.stem.replace("_", " "), "role": "Your PDF", "links": [], "pdf": True} for p in loose], "docs": []})
-    return jsonify({"categories": [c for c in cats if c["papers"] or c["docs"]]})
+        cats.append({"id": "_loose", "name": "Other PDFs", "group": "library", "docs": [], "papers": [
+            {"id": p.stem, "title": p.stem.replace("_", " "), "authors": "", "role": "Your PDF", "links": [], "pdf": True, "bundled": False,
+             "liked": bool(state.get(p.stem, {}).get("liked")), "read": bool(state.get(p.stem, {}).get("read"))} for p in loose]})
+    return jsonify({"categories": cats})
+
+
+@pages_bp.route("/api/library/paper-state", methods=["POST"])
+def library_paper_state():
+    data = request.get_json(silent=True) or {}
+    pid = str(data.get("id", ""))[:300]
+    if not pid:
+        return jsonify({"ok": False}), 400
+    state = _load_paper_state()
+    cur = state.get(pid, {})
+    for k in ("liked", "read"):
+        if k in data:
+            cur[k] = bool(data[k])
+    if cur.get("liked") or cur.get("read"):
+        state[pid] = cur
+    else:
+        state.pop(pid, None)
+    if len(state) > 5000:
+        return jsonify({"ok": False, "error": "Too many saved items."}), 400
+    _paper_state_path().write_text(_json.dumps(state), encoding="utf-8")
+    return jsonify({"ok": True, "state": cur})
+
+
+@pages_bp.route("/research-docs/<path:rel>")
+def library_research_doc(rel):
+    """Read-only view of the markdown guides (research/00_Start_Here/*.md) so they open inside the app."""
+    from flask import abort, send_file
+    root = _research_dir().resolve()
+    p = (root / rel).resolve()
+    if root not in p.parents or p.suffix.lower() != ".md" or not p.is_file():
+        abort(404)
+    return send_file(str(p), mimetype="text/plain; charset=utf-8", max_age=0)
 
 
 def _pdf_path(kind: str, ident: str):

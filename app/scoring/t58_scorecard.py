@@ -79,7 +79,7 @@ already exists:
             funded survival  6   (funded-stage breach only: breaching after you pass costs the account)
         Independent of that Monte Carlo
             replay pass      15  (the real engine from many real start dates, dependence-aware lower bound)
-            expectancy LB    15  (lower bound of average R per trade after 2x costs; 0R -> 0, 0.15R -> 100)
+            expectancy LB    15  (lower bound of average R per trade after 2x costs; 0R -> 0, 0.10R -> 100)
             walk-forward     15, drawdown 8, MC robustness 5, parameter stability 5, parsimony 4, CPCV 3
 
     Previously pass + payout + ruin were 65 of 120 points (54%) and all three came from the same Monte Carlo,
@@ -660,13 +660,14 @@ def _preferred_payout_ci(mc_result):
 
 
 # Lower bound of average R per trade (after 2x costs) at which the expectancy component reaches 100.
-# A lower bound is already pessimistic, so full marks need only 0.15R; a lower bound at or below 0R scores 0.
-_EXPECTANCY_LB_FULL_SCORE_R = 0.15
+# A lower bound is already pessimistic, so full marks need only 0.10R (was 0.15R before the 2026-10-27 audit, which showed a
+# planted 0.21R edge scoring 71.6 because its 2x-cost lower bound could not reach 0.15R); a lower bound at or below 0R scores 0.
+_EXPECTANCY_LB_FULL_SCORE_R = 0.10
 
 
 def _expectancy_lb_score(lb_r: float | None) -> float | None:
     """Score the LOWER confidence bound on average R per trade (see app.scoring.edge_bounds.expectancy_bound).
-    0R or worse -> 0, 0.15R or better -> 100, linear between. None (not measured) stays missing."""
+    0R or worse -> 0, 0.10R or better -> 100, linear between. None (not measured) stays missing."""
     if lb_r is None:
         return None
     try:

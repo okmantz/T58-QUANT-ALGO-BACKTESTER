@@ -193,6 +193,21 @@ class FullPipelineConfig:
     # untouched holdout. The gate uses the holdout when it is long enough, else dev.
     payout_window_days: int = 30
     payout_horizon_days: int = 35
+    # 2026-10-27 audit (fix 4/5 + speed objective): prop traders are happy with a first payout in 30-45 days, so the replay also counts
+    # payouts inside a longer window (horizon is stretched to cover it). A strategy under the 30-day target but over
+    # ``payout45_waiver_pct`` inside 45 days is not penalised for being a little slower than 30 days.
+    payout_window_days_long: int = 45
+    payout45_waiver_pct: float = 40.0
+    # Attempt-replay window = at least this multiple of the median days to pass (a window shorter than the time to target cannot pass).
+    replay_window_multiple: float = 2.0
+    replay_horizon_cap_days: int = 365
+    # Size rr_planned to the drawdown budget: raise planned risk until the baseline's max drawdown uses ``size_to_dd_fraction`` of the
+    # firm's limit (capped at ``size_to_dd_max_scale`` x and always under the risk-per-trade cap), instead of leaving the account idle.
+    size_to_drawdown_budget: bool = True
+    size_to_dd_fraction: float = 0.5
+    size_to_dd_max_scale: float = 4.0
+    # Use the holdout to CONFIRM the edge (pooled with the walk-forward out-of-sample trades) instead of MC-simulating a target from it.
+    pool_holdout_evidence: bool = True
     payout_replay_starts_dev: int = 48
     payout_replay_starts_oos: int = 36
     payout30_min_pct: float = 25.0        # target: % of fresh accounts paid within the window (tracked metric)
@@ -1313,7 +1328,7 @@ _VERDICT_TO_LIBRARY_STATUS = {
     "NOT READY": "tested_failed",
 }
 
-def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 25.0, replay_min_gap_pts: float = 10.0, null_result=None, null_p_max: float = 0.10, cost_stress=None, cost_stress_min_retained: float = 0.25, mc_dispersion_pts=None, payout30=None, payout30_min_pct: float = 25.0, payout30_mode: str = 'soft', payout30_max_score_penalty: float = 5.0, payout30_hard_floor_pct: float = 0.0, payout30_min_windows: float = 3.0, paid_min_pct: float = 35.0,
+def _make_verdict_inner(*args, attempt_replay=None, replay_disagreement_pts: float = 25.0, replay_min_gap_pts: float = 10.0, null_result=None, null_p_max: float = 0.10, cost_stress=None, cost_stress_min_retained: float = 0.25, mc_dispersion_pts=None, payout30=None, payout30_min_pct: float = 25.0, payout30_mode: str = 'soft', payout30_max_score_penalty: float = 5.0, payout30_hard_floor_pct: float = 0.0, payout30_min_windows: float = 3.0, paid_min_pct: float = 35.0,
                   transfer=None, transfer_mode: str = "cap",
                   evidence_required: bool = False, min_expectancy_lb_r: float = 0.0, min_trades_for_expectancy_gate: int = 30,
                   funded_breach_cap_pct: float = 50.0, **kwargs):
@@ -1470,7 +1485,9 @@ def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 2
     # accounts through the real engine. Demote-only like every other gate here.
     if payout30 and payout30.get("rate") is not None and float(payout30.get("n_effective", 0.0)) >= payout30_min_windows:
         _rate_pct = float(payout30["rate"]) * 100.0
-        if _rate_pct < payout30_min_pct and payout30_mode != "off":
+        _r45 = payout30.get('rate_long')
+        _waived = _r45 is not None and float(_r45) * 100.0 >= float(payout30.get('waiver_pct', 40.0))
+        if _rate_pct < payout30_min_pct and payout30_mode != "off" and not _waived:
             _detail = (
                 f"{_rate_pct:.0f}% of {payout30.get('n', '?')} fresh accounts "
                 f"({payout30.get('source', 'replay')}) reached a first payout within {payout30.get('window', 30)} calendar days "
@@ -1509,6 +1526,42 @@ def _make_verdict(*args, attempt_replay=None, replay_disagreement_pts: float = 2
     return verdict, reasons, scorecard, ruin_fail, look_fail
 
 
+def _make_verdict(*args, **kwargs):
+    """Runs the verdict and attaches ``scorecard.gate_vector`` (every gate evaluated independently; audit fix 7). Never changes the verdict."""
+    out = _make_verdict_inner(*args, **kwargs)
+    try:
+        names = ("final_mc", "oos_validation", "icir_gate")
+        core = {n: (args[i] if len(args) > i else kwargs.get(n)) for i, n in enumerate(names)}
+        for k in ("statistics", "risk_of_ruin_cap", "cpcv_primary_result", "primary_robustness_method", "dsr_gate_result",
+                  "pbo_gate_result", "holdout", "min_holdout_trades_for_gate", "min_per_attempt_pass_pct", "per_attempt_pass_mode",
+                  "min_trades_for_ready", "lookahead_bug_detected"):
+            if k in kwargs:
+                core[k] = kwargs[k]
+        extra = dict(kwargs)
+        extra["attempt_replay"] = kwargs.get("attempt_replay")
+        extra["expectancy_bound"] = kwargs.get("expectancy_bound") or ((kwargs.get("cost_stress") or {}).get("expectancy_bound"))
+        extra["null_result"] = kwargs.get("null_result")
+        gv = _gate_vector(core, extra, scorecard=out[2], core_verdict=out[0])
+        if out[2] is not None:
+            out[2].gate_vector = gv
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _oos_fold_r_for_audit(wf) -> list:
+    """Per-trade R values from the walk-forward out-of-sample folds (pooled with the holdout in the audit layers). [] when unavailable."""
+    out: list = []
+    try:
+        for f in getattr(wf, "folds", None) or []:
+            v = getattr(f, "test_r", None)
+            if v is not None:
+                out.extend(float(x) for x in v if x is not None and x == x)
+    except Exception:  # noqa: BLE001
+        return []
+    return out
+
+
 def _transfer_evidence(final_strategy, dev_df, risk, final_bt, cfg, instrument, log):
     """Cross-instrument transfer result dict (or None when off/unavailable). Never raises."""
     mode = str(getattr(cfg, "transfer_mode", "cap") or "off").lower()
@@ -1532,8 +1585,202 @@ def _transfer_evidence(final_strategy, dev_df, risk, final_bt, cfg, instrument, 
         return None
 
 
+def _size_to_drawdown_budget(strategy, dev_df, risk, baseline_bt, prop_rules, adaptive_risk, cfg, log):
+    """2026-10-27 audit (fix 4). rr_planned risks planned_target_dollars / RR per trade, which on a $100k account is ~0.24% and
+    leaves most of the drawdown budget unused (max DD 2.3% against a 10% limit), so reaching the target takes ~200 trades and every
+    pass-rate / replay number is slow. Raise planned_target_dollars until the DEV baseline's max drawdown uses about
+    ``size_to_dd_fraction`` of the firm's limit. Never scales a losing baseline up, never scales down, never passes the
+    risk-per-trade cap (that cap still bounds planned risk), and verifies the result with a re-run, shrinking the factor if the
+    realised drawdown overshoots. Returns (risk, baseline_bt, adjustment-dict-or-None). Never raises."""
+    try:
+        if not getattr(cfg, "size_to_drawdown_budget", True) or getattr(risk, "sizing_mode", "") != "rr_planned":
+            return risk, baseline_bt, None
+        st = baseline_bt.statistics
+        if not baseline_bt.trades or int(getattr(st, "total_trades", 0) or 0) < 30 or float(getattr(st, "net_profit", 0.0) or 0.0) <= 0:
+            return risk, baseline_bt, None
+        limit_pct = float(getattr(prop_rules, "max_drawdown_pct", 0.0) or 0.0)
+        if limit_pct <= 0:
+            return risk, baseline_bt, None
+        target_pct = float(cfg.size_to_dd_fraction) * limit_pct
+        dd0 = float(st.max_drawdown_pct)
+        if dd0 >= 0.8 * target_pct:
+            return risk, baseline_bt, None                       # already using a sensible share of the budget
+        k = min(float(cfg.size_to_dd_max_scale), target_pct / max(dd0, 0.25))
+        if k < 1.15:
+            return risk, baseline_bt, None
+        base_target = float(risk.planned_target_dollars)
+        new_target = base_target * k
+        for _ in range(3):
+            cand = replace(risk, planned_target_dollars=new_target)
+            bt2 = run_backtest(dev_df, strategy, cand, adaptive_risk=adaptive_risk)
+            if not bt2.trades:
+                return risk, baseline_bt, None
+            dd2 = float(bt2.statistics.max_drawdown_pct)
+            if dd2 <= 1.25 * target_pct:
+                txt = (f"SIZING ADJUSTMENT (drawdown budget, this run only): planned risk anchor ${base_target:,.0f} -> ${new_target:,.0f} "
+                       f"(x{new_target / base_target:.2f}). The baseline used only {dd0:.1f}% of the firm's {limit_pct:g}% drawdown limit; "
+                       f"it now uses {dd2:.1f}% (target ~{target_pct:.1f}%). Risk per trade is still capped by the risk setting.")
+                log("  " + txt)
+                return cand, bt2, {"applied": True, "kind": "drawdown_budget", "planned_target_before": base_target, "planned_target_after": new_target,
+                                   "dd_pct_before": dd0, "dd_pct_after": dd2, "limit_pct": limit_pct, "text": txt}
+            new_target = new_target * max(0.5, target_pct / max(dd2, 1e-9)) * 0.95
+            if new_target <= base_target * 1.1:
+                break
+        log("  Drawdown-budget sizing: no safe larger size found; keeping the configured sizing.")
+    except Exception as exc:  # noqa: BLE001 -- sizing help must never sink the run
+        log(f"  Drawdown-budget sizing skipped: {exc}")
+    return risk, baseline_bt, None
+
+
+def _gate_vector(core: dict, extra: dict, scorecard=None, core_verdict: str | None = None) -> dict:
+    """2026-10-27 audit (fix 7). Every verdict gate evaluated INDEPENDENTLY and stored, instead of reporting only the first failure
+    (_make_verdict returns on the first one). status: "pass" | "fail" (rejects -> NOT READY) | "cap" (caps at MARGINAL) | "n/a" (not
+    measured). Summed up in ``failing`` / ``capping`` so a run's histogram of why candidates fail, and which fail exactly one gate, is
+    one query away. Pure; never raises."""
+    gates: list = []
+
+    def add(gid, label, status, detail=""):
+        gates.append({"id": gid, "label": label, "status": status, "detail": str(detail)[:300]})
+
+    def safe(fn):
+        try:
+            fn()
+        except Exception as exc:  # noqa: BLE001
+            add("error", "gate vector helper", "n/a", f"{type(exc).__name__}: {exc}")
+
+    mc = core.get("final_mc")
+    wf = core.get("oos_validation")
+    stats = core.get("statistics")
+
+    def _lookahead():
+        add("lookahead", "Lookahead check", "fail" if core.get("lookahead_bug_detected") else "pass")
+    def _ruin():
+        if mc is None:
+            return add("ruin", "Risk of ruin", "n/a")
+        cap = float(core.get("risk_of_ruin_cap", 20.0))
+        add("ruin", "Risk of ruin", "fail" if mc.risk_of_ruin_pct > cap else "pass", f"{mc.risk_of_ruin_pct:.1f}% vs cap {cap:g}%")
+    def _pooled():
+        ps = getattr(wf, "pooled_status", None) if wf is not None else None
+        if ps is None and wf is None and core.get("cpcv_primary_result") is None:
+            return add("oos", "Out-of-sample edge (pooled)", "n/a", "did not run")
+        if ps is None:
+            ok = bool(getattr(wf, "is_stable", True)) if wf is not None else True
+            return add("oos", "Out-of-sample edge (walk-forward)", "pass" if ok else "fail")
+        add("oos", "Out-of-sample edge (pooled)", {"PASS": "pass", "FAIL": "fail", "NOT_PROVEN": "cap"}.get(ps, "n/a"),
+            f"{ps}; mean R {getattr(wf, 'pooled_mean_r', None)}; LB {getattr(wf, 'pooled_lb_r', None)}; {getattr(wf, 'pooled_trades', 0)} trades")
+    def _cpcv():
+        if core.get("primary_robustness_method") != "cpcv":
+            return
+        r = core.get("cpcv_primary_result")
+        add("cpcv", "CPCV (primary)", "n/a" if r is None else ("pass" if r.is_robust else "fail"))
+    def _dsr():
+        d = core.get("dsr_gate_result")
+        add("dsr", "Deflated Sharpe", "n/a" if d is None else ("pass" if d.passed else "fail"),
+            "" if d is None else f"PSR {d.probabilistic_sharpe:.3f} vs benchmark {d.benchmark_sharpe:.3f} over {d.n_trials} trials")
+    def _pbo():
+        d = core.get("pbo_gate_result")
+        add("pbo", "Probability of backtest overfitting", "n/a" if d is None else ("pass" if d.passed else "fail"))
+    def _pass_lb():
+        if mc is None:
+            return add("pass_lb", "Per-attempt pass odds", "n/a")
+        from app.scoring.t58_scorecard import _preferred_pass_ci
+        ci = _preferred_pass_ci(mc)
+        lo = ci[0] if ci is not None else getattr(mc, "per_attempt_pass_probability", None)
+        bar = float(core.get("min_per_attempt_pass_pct", 70.0))
+        if lo is None:
+            return add("pass_lb", "Per-attempt pass odds", "n/a")
+        bad = "fail" if str(core.get("per_attempt_pass_mode", "cap")).lower() == "hard" else "cap"
+        add("pass_lb", "Per-attempt pass odds", "pass" if lo >= bar else bad, f"lower bound {lo:.1f}% vs {bar:g}%")
+    def _holdout():
+        hg = _holdout_gate_state(core.get("holdout"), int(core.get("min_holdout_trades_for_gate", 30)))
+        if not hg["ran"]:
+            return add("holdout", "Untouched holdout", "n/a", f"{hg['trades']} trades")
+        add("holdout", "Untouched holdout", "fail" if hg["hard_fail"] else ("cap" if hg["inconclusive"] else "pass"),
+            f"{hg['trades']} trades, net {hg['net']}, PF {hg['pf']}")
+    def _trades():
+        n = getattr(stats, "total_trades", None) if stats is not None else None
+        floor = int(core.get("min_trades_for_ready", 300))
+        add("trades", "Trade count", "n/a" if n is None else ("pass" if n >= floor else "cap"), f"{n} vs {floor}")
+    def _score():
+        if scorecard is None:
+            return add("score", "T58 score", "n/a")
+        add("score", "T58 score", "pass" if scorecard.tier in ("Elite", "Strong") else ("cap" if scorecard.tier == "Promising" else "fail"),
+            f"{scorecard.score:.1f} ({scorecard.tier})")
+    def _exp():
+        eb = extra.get("expectancy_bound")
+        if not eb or eb.get("lb") is None or int(eb.get("n", 0)) < int(extra.get("min_trades_for_expectancy_gate", 30)):
+            return add("expectancy", "Expectancy after 2x costs", "n/a")
+        st_ = "fail" if float(eb.get("ub", 0.0)) < 0 else ("pass" if float(eb["lb"]) > float(extra.get("min_expectancy_lb_r", 0.0)) else "cap")
+        add("expectancy", "Expectancy after 2x costs", st_, f"mean {eb.get('mean'):+.3f}R, LB {eb['lb']:+.3f}R over {eb['n']}")
+    def _replay():
+        ar = extra.get("attempt_replay")
+        if ar is None or not getattr(ar, "sample_ok", False) or mc is None:
+            return add("replay", "Attempt replay agrees with Monte Carlo", "n/a")
+        gap = abs(float(mc.per_attempt_pass_probability) - float(ar.pass_rate) * 100.0)
+        mci, rci = getattr(mc, "per_attempt_pass_ci95", None), getattr(ar, "pass_ci_honest", None)
+        if mci is not None and tuple(mci) != (0.0, 0.0) and rci is not None and float(getattr(ar, "n_effective", 0.0) or 0.0) > 0:
+            disjoint = float(rci[0]) * 100.0 > float(mci[1]) or float(mci[0]) > float(rci[1]) * 100.0
+            bad = disjoint and gap >= float(extra.get("replay_min_gap_pts", 10.0))
+        else:
+            bad = gap > float(extra.get("replay_disagreement_pts", 25.0))
+        add("replay", "Attempt replay agrees with Monte Carlo", "cap" if bad else "pass", f"gap {gap:.0f} pts")
+    def _null():
+        nr = extra.get("null_result")
+        if not nr or nr.get("p_value") is None:
+            return add("null", "Random-entry null", "n/a")
+        add("null", "Random-entry null", "pass" if nr["p_value"] <= float(extra.get("null_p_max", 0.10)) else "cap", f"p = {nr['p_value']:.3f}")
+    def _cost():
+        cs = extra.get("cost_stress")
+        if not cs or float(cs.get("base_net_profit", 0.0)) <= 0:
+            return add("cost_stress", "Cost stress", "n/a")
+        kept = float(cs.get("net_profit", 0.0)) / float(cs["base_net_profit"])
+        add("cost_stress", "Cost stress", "pass" if kept >= float(extra.get("cost_stress_min_retained", 0.25)) else "cap", f"{kept * 100:.0f}% of profit kept")
+    def _paid():
+        ci = getattr(mc, "per_attempt_paid_ci95", None) if mc is not None else None
+        if ci is None or tuple(ci) == (0.0, 0.0):
+            return add("paid", "Pass-and-paid odds", "n/a")
+        bar = float(extra.get("paid_min_pct", 35.0))
+        add("paid", "Pass-and-paid odds", "pass" if float(ci[0]) >= bar else "cap", f"lower bound {float(ci[0]):.1f}% vs {bar:g}%")
+    def _funded():
+        fa = int(getattr(mc, "funded_attempts", 0) or 0) if mc is not None else 0
+        if fa < 30:
+            return add("funded", "Funded-account survival", "n/a", f"{fa} funded accounts")
+        br = float(getattr(mc, "funded_breach_within_horizon_pct", 0.0))
+        add("funded", "Funded-account survival", "pass" if br <= float(extra.get("funded_breach_cap_pct", 50.0)) else "cap", f"{br:.0f}% breach")
+    def _horizon():
+        add("ruin_window", "Ruin window covered by history", "pass" if getattr(mc, "ruin_horizon_covered", True) is not False else "cap")
+    def _sample():
+        add("sample", "Monte Carlo sample floor", "pass" if getattr(mc, "sample_ok", True) is not False else "cap")
+    def _payout():
+        p = extra.get("payout30")
+        if not p or p.get("rate") is None or float(p.get("n_effective", 0.0)) < float(extra.get("payout30_min_windows", 3.0)):
+            return add("payout", "First payout inside the target window", "n/a")
+        r30 = float(p["rate"]) * 100.0
+        r45 = p.get("rate_long")
+        bar = float(extra.get("payout30_min_pct", 25.0))
+        ok = r30 >= bar or (r45 is not None and float(r45) * 100.0 >= float(extra.get("payout45_waiver_pct", 40.0)))
+        add("payout", "First payout inside the target window", "pass" if ok else "cap", f"{r30:.0f}% in 30d" + (f", {float(r45) * 100:.0f}% in 45d" if r45 is not None else ""))
+    def _seed():
+        d = extra.get("mc_dispersion_pts")
+        add("seed", "Monte Carlo seed stability", "n/a" if d is None else ("pass" if float(d) <= 10.0 else "cap"), "" if d is None else f"sd {float(d):.1f} pts")
+    def _transfer():
+        t = extra.get("transfer")
+        if not t or t.get("status") not in ("PASS", "FAIL") or str(extra.get("transfer_mode", "cap")).lower() == "off":
+            return add("transfer", "Cross-instrument transfer", "n/a")
+        add("transfer", "Cross-instrument transfer", "pass" if t["status"] == "PASS" else ("cap" if str(extra.get("transfer_mode")).lower() == "cap" else "pass"))
+
+    for fn in (_lookahead, _ruin, _pooled, _cpcv, _dsr, _pbo, _pass_lb, _holdout, _trades, _score, _exp, _replay, _null, _cost, _paid,
+               _funded, _horizon, _sample, _payout, _seed, _transfer):
+        safe(fn)
+    failing = [g["id"] for g in gates if g["status"] == "fail"]
+    capping = [g["id"] for g in gates if g["status"] == "cap"]
+    return {"gates": gates, "failing": failing, "capping": capping, "n_pass": sum(1 for g in gates if g["status"] == "pass"),
+            "n_unmeasured": sum(1 for g in gates if g["status"] == "n/a"), "core_verdict": core_verdict,
+            "fails_exactly_one": (len(failing) + len(capping)) == 1}
+
+
 def _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt, cfg, log,
-                              workers: int = 1, progress_hook=None, run_null: bool = True):
+                              workers: int = 1, progress_hook=None, run_null: bool = True, median_days_to_pass=None):
     """Evidence the verdict wrapper gates on, computed once on the final
     strategy: (a) the real engine re-run from many start dates on fresh
     accounts, (b) a random-entry null DISTRIBUTION with the strategy's own
@@ -1558,12 +1805,25 @@ def _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt
         sr = final_strategy.generate(d2)
         if getattr(sr, "entry_orders", None) is not None:
             return replay, null, cost_stress
-        log(f"  Attempt replay: re-running from {cfg.attempt_replay_starts} fresh-account start dates...")
+        # 2026-10-27 audit (fix 5): a replay window shorter than the time it takes to reach the target is a gate that cannot pass (a
+        # strategy trading once every four days passed 0% of 48 attempts inside 120 days). With no firm time limit, give each attempt at
+        # least ``replay_window_multiple`` x the median days to pass (trading -> calendar days), never less than the old default.
+        _horizon = None
+        try:
+            if not getattr(prop_rules, "max_eval_calendar_days", None) and median_days_to_pass and float(median_days_to_pass) > 0:
+                _want = int(math.ceil(float(cfg.replay_window_multiple) * float(median_days_to_pass) * 7.0 / 5.0))
+                _horizon = int(min(int(cfg.replay_horizon_cap_days), max(120, _want)))
+                if _horizon <= 120:
+                    _horizon = None
+        except Exception:  # noqa: BLE001
+            _horizon = None
+        log(f"  Attempt replay: re-running from {cfg.attempt_replay_starts} fresh-account start dates"
+            + (f" with a {_horizon}-day window (2x the median time to pass)" if _horizon else "") + "...")
         try:
             from app.prop.attempt_replay import run_attempt_replay
             replay = run_attempt_replay(
                 d2, sr.signals, risk, prop_rules, sr.stop_loss_pips, sr.take_profit_pips,
-                n_starts=cfg.attempt_replay_starts,
+                n_starts=cfg.attempt_replay_starts, horizon_days=_horizon,
                 stop_loss_distance=sr.stop_loss_distance, take_profit_distance=sr.take_profit_distance,
                 trailing_stop_distance=sr.trailing_stop_distance, breakeven_trigger_r=sr.breakeven_trigger_r,
                 partial_exit_config=sr.partial_exit,
@@ -1680,6 +1940,8 @@ def _payout_window_evidence(final_strategy, full_df, dev_df, risk, prop_rules, c
         from app.prop.attempt_replay import run_attempt_replay
 
         win = int(cfg.payout_window_days)
+        _long = max(win, int(getattr(cfg, 'payout_window_days_long', 45)))
+        _hz = max(int(cfg.payout_horizon_days), _long + 5)
         d_all, _ = prepare_timeframe_aligned_data(full_df, final_strategy)
         sr = final_strategy.generate(d_all)
         if getattr(sr, "entry_orders", None) is not None:
@@ -1707,8 +1969,8 @@ def _payout_window_evidence(final_strategy, full_df, dev_df, risk, prop_rules, c
             d, sg, sl, tp, kw = _slice(lo, hi)
             return run_attempt_replay(
                 d, sg, risk, prop_rules, sl, tp,
-                horizon_days=int(cfg.payout_horizon_days), n_starts=int(n_starts),
-                track_payout=True, payout_windows=(win,),
+                horizon_days=_hz, n_starts=int(n_starts),
+                track_payout=True, payout_windows=tuple(sorted({win, _long})),
                 breakeven_trigger_r=sr.breakeven_trigger_r, partial_exit_config=sr.partial_exit,
                 max_workers=workers, keep_attempts=False,
                 progress_cb=(lambda dn, tt: progress_hook(
@@ -1719,7 +1981,7 @@ def _payout_window_evidence(final_strategy, full_df, dev_df, risk, prop_rules, c
         b_dev = b if has_holdout else len(d_all)
         log(f"  Payout-window replay: {cfg.payout_replay_starts_dev} fresh accounts on the dev slice, "
             f"{cfg.payout_replay_starts_oos if has_holdout else 0} on the untouched holdout "
-            f"(each run {cfg.payout_horizon_days} calendar days; counting first payouts within {win}).")
+            f"(each run {_hz} calendar days; counting first payouts within {win} and {_long}).")
         out["dev"] = _run(0, b_dev, cfg.payout_replay_starts_dev, "Payout replay (dev)", 0.02, 0.10)
         if has_holdout:
             out["oos"] = _run(b, len(d_all), cfg.payout_replay_starts_oos, "Payout replay (holdout)", 0.10, 0.16)
@@ -1737,6 +1999,8 @@ def _payout_window_evidence(final_strategy, full_df, dev_df, risk, prop_rules, c
                 "rate": pick.payout_within_rate.get(win, 0.0), "ci": pick.payout_within_ci.get(win, (0.0, 1.0)),
                 "n": pick.n_attempts, "n_effective": pick.n_effective, "window": win, "source": src,
                 "median_days": pick.median_days_to_payout,
+                "window_long": _long, "rate_long": pick.payout_within_rate.get(_long) if _long != win else None,
+                "waiver_pct": float(getattr(cfg, "payout45_waiver_pct", 40.0)),
             }
     except Exception as exc:  # noqa: BLE001 -- evidence must never sink the run
         log(f"  Payout-window replay skipped: {exc}")
@@ -2177,6 +2441,13 @@ def run_full_pipeline(
             f"{_micro_n} micro, {int(_ss.get('skipped_for_sizing', 0) or 0)} skipped "
             f"(reasons: {_ss.get('skip_reasons', {})})."
         )
+    # 2026-10-27 audit (fix 4): size the planned risk to the drawdown budget (verified by a re-run on the dev slice only).
+    if baseline_bt.trades:
+        risk, baseline_bt, _dd_adj = _size_to_drawdown_budget(strategy, dev_df, risk, baseline_bt, prop_rules, adaptive_risk, cfg, log)
+        if _dd_adj is not None:
+            warnings.append(_dd_adj["text"])
+            if sizing_adjustment is None:
+                sizing_adjustment = _dd_adj
     # v9.13: the baseline is final now (any sizing remedy above has
     # been adopted or rejected) -- hand it to the caller's explorer
     # hook before the expensive steps start, so the run page can show
@@ -3068,6 +3339,7 @@ def run_full_pipeline(
         _replay_ev, _null_ev, _cost_ev = _replay_and_null_evidence(
             final_strategy, dev_df, risk, prop_rules, final_bt, cfg, log,
             workers=_mc_workers, progress_hook=_progress, run_null=_can_be_ready,
+            median_days_to_pass=getattr(final_mc, "median_days_to_pass", None),
         )
         _payout_ev = _payout_window_evidence(
             final_strategy, df, dev_df, risk, prop_rules, cfg, log,
@@ -3157,8 +3429,11 @@ def run_full_pipeline(
             verdict, verdict_reasons, cfg=cfg, prop_rules=prop_rules, df=df, dev_df=dev_df, instrument_label=instrument,
             final_strategy=final_strategy, risk=risk, adaptive_risk=adaptive_risk, final_mc=final_mc, final_holdout=final_holdout,
             payout_ev=_payout_ev, lookahead_check_crashed=lookahead_check_crashed, n_trials=_n_trials, log=log,
+            parameters_tuned=bool(refinement_ran), final_trades=list(final_bt.trades),
+            oos_fold_r=_oos_fold_r_for_audit(oos_validation),
         )
         if isinstance(_audit_ev, dict):
+            _audit_ev["gate_vector"] = getattr(scorecard, "gate_vector", None)
             _audit_ev["pooled_status"] = getattr(oos_validation, "pooled_status", None) if oos_validation is not None else None
             _audit_ev["edge_decay"] = edge_decay
             from app.orchestration.verdict_ladder import ladder_stage as _ls

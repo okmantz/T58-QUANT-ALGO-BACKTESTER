@@ -7,6 +7,8 @@
   POST /api/vault/cloud/push|pull   explicit upload / download
   GET  /api/vault/export            download everything as a zip
   POST /api/vault/import            upload a zip made by export
+  GET  /api/prefs                   the server's copy of the browser preferences (background, theme, accent, ...)
+  POST /api/prefs                   {changes: {"t58-bg": "midnight-ocean", "t58-fx": null}} merge / remove keys
 CSRF is enforced globally (X-CSRF-Token header on fetch()).
 """
 from __future__ import annotations
@@ -16,7 +18,7 @@ import time
 
 from flask import Blueprint, jsonify, request, send_file
 
-from app.persistence import vault
+from app.persistence import ui_prefs, vault
 
 vault_bp = Blueprint("vault", __name__)
 
@@ -92,3 +94,19 @@ def vault_import():
         return _fail("Choose a vault zip first.")
     res = vault.restore_zip(io.BytesIO(f.read()), mode="merge")
     return jsonify(res), (200 if res.get("ok") else 400)
+
+
+@vault_bp.route("/api/prefs", methods=["GET"])
+def prefs_get():
+    return jsonify({"ok": True, "prefs": ui_prefs.load()})
+
+
+@vault_bp.route("/api/prefs", methods=["POST"])
+def prefs_post():
+    body = request.get_json(silent=True) or {}
+    changes = body.get("changes")
+    if not isinstance(changes, dict):
+        return _fail("Send {\"changes\": {key: value-or-null}}.")
+    saved = ui_prefs.update(changes)
+    vault.schedule_profile_backup()
+    return jsonify({"ok": True, "count": len(saved)})

@@ -1212,14 +1212,13 @@ html[data-theme="light"] .t58-fx-cosmic .star { --c: 90, 100, 170; }
 html[data-theme="light"] .t58-fx-obsidian .sheen { background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, .0) 22%, rgba(255, 255, 255, .42) 50%, transparent 82%); }
 @keyframes t58-sheen { 0% { transform: translate3d(-70vw, 0, 0) skewX(-14deg); opacity: 0; } 14% { opacity: 1; } 86% { opacity: 1; } 100% { transform: translate3d(120vw, 0, 0) skewX(-14deg); opacity: 0; } }
 
-/* midnight ocean: rolling swell lines + a breathing moon path */
-.t58-fx-ocean .swell { left: 0; width: 100%; height: 46px; overflow: hidden; opacity: var(--o); animation: t58-bob var(--bob) ease-in-out infinite alternate; }
-.t58-fx-ocean .swell::before { content: ""; position: absolute; top: 0; left: 0; width: calc(100% + 520px); height: 100%; will-change: transform;
-  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='520' height='46' viewBox='0 0 520 46'%3E%3Cpath d='M0 23 C65 5 130 5 195 23 S325 41 390 23 S455 5 520 23' fill='none' stroke='white' stroke-width='1.6'/%3E%3Cpath d='M0 33 C86 19 172 19 260 33 S433 47 520 33' fill='none' stroke='white' stroke-width='1' opacity='.55'/%3E%3C/svg%3E") repeat-x 0 0 / 520px 46px;
-  animation: t58-swell var(--dur) linear infinite; }
-html[data-theme="light"] .t58-fx-ocean .swell::before { filter: none; opacity: .8; }
-@keyframes t58-swell { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-520px, 0, 0); } }
-@keyframes t58-bob { from { transform: translate3d(0, -4px, 0); } to { transform: translate3d(0, 5px, 0); } }
+/* midnight ocean: the painting's own water ripples and clouds drift (canvas, t58-scene-canvas.js) + a breathing moon path.
+   The canvas replaces the CSS picture, so a sibling .scrim re-applies the same readability scrim from the same variables. */
+.t58-scene-fx .sc-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: block; }
+.t58-scene-fx .scrim { top: 0; left: 0; width: 100%; height: 100%;
+  background: linear-gradient(180deg, rgba(2, 8, 10, var(--sc1, .5)) 0%, rgba(2, 8, 10, var(--sc2, .5)) 50%, rgba(2, 8, 10, var(--sc3, .7)) 100%); }
+html[data-theme="light"] .t58-scene-fx .scrim {
+  background: linear-gradient(180deg, rgba(236, 242, 248, var(--sc1, .4)) 0%, rgba(236, 242, 248, var(--sc2, .44)) 50%, rgba(236, 242, 248, var(--sc3, .64)) 100%); }
 .t58-fx-ocean .moonpath { left: 69%; top: 51%; width: 11vw; min-width: 90px; height: 40%; margin-left: -5.5vw; will-change: transform, opacity; transform-origin: 50% 0;
   background: radial-gradient(50% 50% at 50% 0%, rgba(214, 228, 255, .34), rgba(190, 210, 255, .10) 55%, transparent 76%);
   animation: t58-moonpath 7s ease-in-out infinite alternate; }

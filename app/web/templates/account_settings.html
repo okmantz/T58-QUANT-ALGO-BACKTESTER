@@ -83,8 +83,12 @@
   .as-grid { display: grid; grid-template-columns: minmax(0, 560px) minmax(0, 520px); gap: 0 28px; align-items: start; }
   .as-grid > * { grid-column: 1; min-width: 0; }
   .as-grid .card { max-width: none; }
-  .as-grid .pz-card { grid-column: 2; grid-row: 1 / span 6; position: sticky; top: 16px; }
-  @media (max-width: 1060px) { .as-grid { grid-template-columns: minmax(0, 1fr); } .as-grid > *, .as-grid .pz-card { grid-column: 1; grid-row: auto; position: static; } }
+  /* FIX: the sticky Personalize card is taller than a laptop viewport, so its lower half (Background scenes, motion, verse) stayed
+     out of reach until the LEFT column had scrolled all the way to the bottom. Capping it at the viewport height and letting it
+     scroll on its own makes every option reachable at any time, wherever the left column is. */
+  .as-grid .pz-card { grid-column: 2; grid-row: 1 / span 6; position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto;
+    overscroll-behavior: contain; scrollbar-width: thin; }
+  @media (max-width: 1060px) { .as-grid { grid-template-columns: minmax(0, 1fr); } .as-grid > *, .as-grid .pz-card { grid-column: 1; grid-row: auto; position: static; max-height: none; overflow: visible; } }
   .as-grid form > .btn-row, .as-grid form > .submit-btn { margin-bottom: 14px; }
   @media (max-width: 520px) { .btn-row > button, .submit-btn { width: 100%; } .row > div { min-width: 100%; } }
   .ac-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
@@ -113,8 +117,8 @@
 <div class="t58-page-header">
   <h1>Account settings</h1>
   <p class="lede">
-    Everything below is local to this computer -- this app has no cloud account or login of
-    its own. Profile fields personalize exported reports; the Security section's password
+    Your profile, preferences, API keys and runs are filed under your license key (and the email you signed in with), so they
+    come back after a reinstall. Profile fields personalize exported reports; the Security section's password
     is an OPTIONAL local lock for this app (useful mainly if you use Mobile Access on a
     shared Wi-Fi); Subscription shows your plan and license, which come from your license key.
   </p>
@@ -223,7 +227,7 @@
   <!-- ================= PERSONALIZE ================= -->
   <div class="card pz-card" id="personalize">
     <h2>Personalize</h2>
-    <p class="help">Saved in this browser. Switch the theme in the sidebar to preview the night and day version of every scene.</p>
+    <p class="help">Saved to your account (it follows your license key through a reinstall). Switch the theme in the sidebar to preview the night and day version of every scene.</p>
 
     <label>Accent colour</label>
     <div class="ac-row" id="ac-row" role="radiogroup" aria-label="Accent colour">
@@ -322,8 +326,8 @@
 
   <!-- ================= SAVED RUNS (vault) ================= -->
   <div class="card" id="saved-runs" style="margin-top:14px;">
-    <h2>Saved runs</h2>
-    <p class="help">Your reports, strategy graveyard, journal and saved strategies are copied to a folder that an uninstall doesn't touch, and are put back automatically the next time the app starts. Sign in with the same email and license key after a reinstall and you pick up where you left off &mdash; no need to re-run the pipeline. API keys, passwords and your license key are never copied.</p>
+    <h2>Saved runs &amp; account</h2>
+    <p class="help">Everything is filed under your license key. Your reports, pipeline and validation runs, strategy graveyard, journal and saved strategies, <b>plus your profile (name, username, picture, lock password), achievements, background, theme and colour, and your API keys</b>, are copied to a folder an uninstall doesn't touch &mdash; and put back automatically the moment you sign in again after a reinstall. API keys and broker passwords are stored <b>encrypted with your license key</b>, never as plain files, and only fill fields that are still empty. The license key itself is never copied. Works with the master key too.</p>
     <p class="field-note" id="vault-line">Checking&hellip;</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 4px;">
       <button type="button" class="submit-btn" id="vault-backup">Save now</button>
@@ -333,7 +337,7 @@
     </div>
     <hr class="divider">
     <label class="pz-switch"><input type="checkbox" id="vault-cloud"> Also keep a copy on my account (email + license key)</label>
-    <p class="field-note" id="vault-cloud-note">Uploads a snapshot to your license server about every 15 minutes, so your runs also survive a new computer or a wiped disk. Switching it on uploads right away.</p>
+    <p class="field-note" id="vault-cloud-note">Uploads a snapshot to your license server about every 15 minutes (on by default), so your account also survives a new computer or a wiped disk. Switching it on uploads right away.</p>
     <p class="field-note" id="vault-msg" role="status" aria-live="polite"></p>
   </div>
   <script>
@@ -350,12 +354,12 @@
       api('/api/vault/status').then(function (s) {
         if (!s.ok) { $('vault-line').textContent = 'Saved-runs status unavailable.'; return; }
         var st = s.settings || {};
-        $('vault-line').textContent = s.app_files + ' files in the app (' + mb(s.app_bytes) + '). Local copy: ' + s.local.files +
+        $('vault-line').textContent = (s.signed_in ? '' : 'Not signed in yet \u2014 nothing is saved until you sign in. ') + s.app_files + ' files in the app (' + mb(s.app_bytes) + '). Local copy: ' + s.local.files +
           ' files' + (st.last_local_backup ? ', last saved ' + st.last_local_backup.replace('T', ' ').slice(0, 16) : ', not saved yet') + '.';
         var c = $('vault-cloud'); c.checked = !!st.cloud_auto; c.disabled = !s.cloud_available && !st.cloud_auto;
         $('vault-cloud-note').textContent = s.cloud_available
-          ? 'Uploads a snapshot to your license server about every 15 minutes, so your runs also survive a new computer or a wiped disk. Switching it on uploads right away.' + (st.last_cloud_push ? ' Last upload ' + st.last_cloud_push.replace('T', ' ').slice(0, 16) + '.' : '')
-          : 'Account copy unavailable: ' + s.cloud_reason;
+          ? 'Uploads a snapshot to your license server about every 15 minutes (on by default), so your account also survives a new computer or a wiped disk. Switching it on uploads right away.' + (st.last_cloud_push ? ' Last upload ' + st.last_cloud_push.replace('T', ' ').slice(0, 16) + '.' : '')
+          : 'Account copy unavailable: ' + s.cloud_reason + ' Your local copy still protects you across a reinstall on this computer.';
       });
     }
     $('vault-backup').onclick = function () { say('Saving…'); api('/api/vault/backup', {method: 'POST'}).then(function (r) {

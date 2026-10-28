@@ -98,20 +98,39 @@ class DeflatedSharpeResult:
     note: str
 
 
-def expected_max_sharpe(trial_sharpes: list[float], n_trials: int) -> float:
+def null_sharpe_spread(n_returns: int) -> float:
+    """Standard error of a Sharpe estimate under the null of no edge: 1 / sqrt(T - 1).
+
+    This is the spread the Bailey / Lopez de Prado benchmark needs: how far apart the Sharpe ratios of N *zero-edge*
+    candidates would land purely from sampling noise over T returns. (2026-10-27 audit, fix 1)"""
+    return 1.0 / math.sqrt(max(int(n_returns), 2) - 1)
+
+
+def expected_max_sharpe(trial_sharpes: list[float], n_trials: int, n_returns: int | None = None) -> float:
     """
     Bailey & Lopez de Prado's approximation of the best Sharpe ratio you'd
-    expect to see by PURE CHANCE across `n_trials` independent backtests,
-    given the actual observed spread (std dev) of Sharpe ratios across
-    those trials. This -- not zero -- is the bar a search's champion
-    candidate has to clear.
+    expect to see by PURE CHANCE across `n_trials` independent backtests.
+    This -- not zero -- is the bar a search's champion candidate has to clear.
+
+    ``n_returns`` (the number of returns behind the candidate's Sharpe) selects the spread of the null
+    distribution: when given, the spread is the textbook null standard error 1/sqrt(T-1) (see
+    null_sharpe_spread). Before 2026-10-27 the spread was the standard deviation of the GA leaderboard's Sharpe
+    ratios, which measures how different the candidates are from one another rather than how noisy a Sharpe
+    estimate is, and it pushed the bar to ~0.7 per trade (15 standard errors) for a strategy with a planted edge.
+    Without ``n_returns`` the legacy leaderboard-spread behaviour is kept for callers that have no return count.
+    ``n_trials`` still carries the full multiple-testing burden.
     """
-    finite = [s for s in trial_sharpes if isinstance(s, (int, float)) and math.isfinite(s)]
-    if n_trials <= 1 or len(finite) < 2:
+    if n_trials <= 1:
         return 0.0
-    sigma_sr = float(np.std(finite, ddof=1))
-    if sigma_sr <= 0:
-        return 0.0
+    if n_returns is not None:
+        sigma_sr = null_sharpe_spread(n_returns)
+    else:
+        finite = [s for s in trial_sharpes if isinstance(s, (int, float)) and math.isfinite(s)]
+        if len(finite) < 2:
+            return 0.0
+        sigma_sr = float(np.std(finite, ddof=1))
+        if sigma_sr <= 0:
+            return 0.0
     n = max(int(n_trials), 2)
     z1 = _norm_ppf(1 - 1.0 / n)
     z2 = _norm_ppf(1 - 1.0 / (n * math.e))
@@ -147,8 +166,8 @@ def deflated_sharpe_ratio(
     only in the sense of being the textbook default, not in the sense of
     understating risk -- pass real values when you have them.
     """
-    benchmark = expected_max_sharpe(trial_sharpes, n_trials)
     n = max(int(n_trade_returns), 2)
+    benchmark = expected_max_sharpe(trial_sharpes, n_trials, n_returns=n)
     sr = float(observed_sharpe) if math.isfinite(observed_sharpe) else 0.0
     denom = math.sqrt(max(1 - returns_skew * sr + ((returns_kurtosis - 1) / 4.0) * sr * sr, 1e-9))
     z = (sr - benchmark) * math.sqrt(n - 1) / denom
@@ -164,8 +183,8 @@ def deflated_sharpe_ratio(
         significance_threshold=significance_threshold,
         note=(
             f"Deflated against an expected best-of-{n_trials} chance Sharpe of "
-            f"{benchmark:.3f}, derived from the spread of Sharpe ratios this search's own "
-            f"Stage 1 pass actually produced (not an assumed/textbook spread)."
+            f"{benchmark:.3f}, using the null sampling spread 1/sqrt(T-1) of a Sharpe estimate over "
+            f"{n} returns scaled by the full trial count."
         ),
     )
 

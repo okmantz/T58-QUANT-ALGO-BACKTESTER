@@ -12,7 +12,7 @@
       app.web.job_manager.JobManager.list_jobs. No delegation/controls
       here yet, by design (see app.ai.project_chat's module docstring).
 -->
-<div id="t58-pc-launcher" class="t58-pc-launcher" title="Open Project Chat" role="button" tabindex="0"
+<div id="t58-pc-launcher" class="t58-pc-launcher" data-login="{{ t58_login_id|default('none') }}" title="Open Project Chat" role="button" tabindex="0"
      aria-label="Open Project Chat" aria-expanded="false" aria-controls="t58-pc-panel">
   <span id="t58-pc-launcher-icon" class="t58-pc-launcher-icon" aria-hidden="true">&#128172;</span>
 </div>

@@ -10,27 +10,57 @@
 <div class="t58-shell">
 {% include '_sidebar.html' %}
 <div class="t58-main"><div class="pg">
-<div class="t58-page-header">
-  <h1>Playground</h1>
-  <p>Take a breath between runs. Everything here runs inside the app, works offline and never touches market data or your strategies.</p>
-</div>
-<div class="pg-hub">
-  {% set art = {
-   'fidgets': '<svg viewBox="0 0 150 150"><g fill="none" stroke-width="3" stroke-linejoin="round"><path d="M75 28 112 49v42L75 112 38 91V49z" stroke="#35e0b0"/><path d="M38 49 75 70l37-21M75 70v42" stroke="#4d90ff"/><circle cx="75" cy="70" r="46" stroke="#9b8cff" stroke-dasharray="4 7" opacity=".6"/></g></svg>',
-   'arcade': '<svg viewBox="0 0 150 150"><g stroke-width="2"><rect x="28" y="40" width="30" height="30" rx="4" fill="#35e0b0" stroke="#0b1d18"/><rect x="58" y="40" width="30" height="30" rx="4" fill="#4d90ff" stroke="#0b1d18"/><rect x="58" y="70" width="30" height="30" rx="4" fill="#9b8cff" stroke="#0b1d18"/><rect x="88" y="70" width="30" height="30" rx="4" fill="#f5b83d" stroke="#0b1d18"/></g></svg>',
-   'puzzles': '<svg viewBox="0 0 150 150"><g fill="none" stroke="#35e0b0" stroke-width="4" stroke-linecap="round"><path d="M30 30h80v30H50v30h60v30H30"/></g><circle cx="110" cy="120" r="7" fill="#f5b83d"/></svg>',
-   'quantum': '<svg viewBox="0 0 150 150"><g fill="none" stroke-width="2.5"><ellipse cx="75" cy="75" rx="52" ry="20" stroke="#35e0b0"/><ellipse cx="75" cy="75" rx="52" ry="20" stroke="#4d90ff" transform="rotate(60 75 75)"/><ellipse cx="75" cy="75" rx="52" ry="20" stroke="#9b8cff" transform="rotate(120 75 75)"/></g><circle cx="75" cy="75" r="7" fill="#f5b83d"/></svg>'} %}
+<header class="pgx-hero">
+  <div class="pgx-orbs" aria-hidden="true"><i></i><i></i><i></i></div>
+  <div class="pgx-copy">
+    <span class="pgx-eyebrow">T58 Playground</span>
+    <h1>Step away from the charts.<br><em>Come back sharper.</em></h1>
+    <p>Fidgets, games, daily puzzles and physics toys. Everything runs inside the app, works offline and never touches market data or your strategies.</p>
+  </div>
+  <div class="pgx-stats" id="pgx-stats" aria-label="Your Playground stats">
+    <div><b data-k="toys">{{ sections.values()|map(attribute='toys')|map('length')|sum }}</b><span>toys &amp; games</span></div>
+    <div><b data-k="secrets">0/6</b><span>cube secrets</span></div>
+    <div><b data-k="stack">0</b><span>stacker best</span></div>
+    <div><b data-k="tunnel">0</b><span>tunnel best</span></div>
+  </div>
+</header>
+{% set art = {
+ 'fidgets': '<svg viewBox="0 0 150 150"><g fill="none" stroke-width="3" stroke-linejoin="round"><path d="M75 28 112 49v42L75 112 38 91V49z" stroke="#35e0b0"/><path d="M38 49 75 70l37-21M75 70v42" stroke="#4d90ff"/><circle cx="75" cy="70" r="46" stroke="#9b8cff" stroke-dasharray="4 7" opacity=".6"/></g></svg>',
+ 'arcade': '<svg viewBox="0 0 150 150"><g stroke-width="2"><rect x="28" y="40" width="30" height="30" rx="5" fill="#35e0b0" stroke="#0b1d18"/><rect x="58" y="40" width="30" height="30" rx="5" fill="#4d90ff" stroke="#0b1d18"/><rect x="58" y="70" width="30" height="30" rx="5" fill="#9b8cff" stroke="#0b1d18"/><rect x="88" y="70" width="30" height="30" rx="5" fill="#f5b83d" stroke="#0b1d18"/></g></svg>',
+ 'puzzles': '<svg viewBox="0 0 150 150"><g fill="none" stroke="#4d90ff" stroke-width="4" stroke-linecap="round"><path d="M30 30h80v30H50v30h60v30H30"/></g><circle cx="110" cy="120" r="7" fill="#f5b83d"/></svg>',
+ 'quantum': '<svg viewBox="0 0 150 150"><g fill="none" stroke-width="2.5"><ellipse cx="75" cy="75" rx="52" ry="20" stroke="#35e0b0"/><ellipse cx="75" cy="75" rx="52" ry="20" stroke="#4d90ff" transform="rotate(60 75 75)"/><ellipse cx="75" cy="75" rx="52" ry="20" stroke="#9b8cff" transform="rotate(120 75 75)"/></g><circle cx="75" cy="75" r="7" fill="#f5b83d"/></svg>'} %}
+<div class="pgx-grid">
   {% for key, s in sections.items() %}
-  <a class="pg-card" href="/playground/{{ key }}">
-    <div class="art">{{ art[key]|safe }}</div>
-    <h2>{{ s.title }}</h2>
-    <p>{{ s.blurb }}</p>
-    <ul>{% for t in s.toys %}<li>{{ t }}</li>{% endfor %}</ul>
-    <span class="go">Open &rarr;</span>
-  </a>
+  <article class="pgx-card" style="--a: {{ s.accent }}">
+    <a class="pgx-main" href="/playground/{{ key }}" aria-label="Open {{ s.title }}">
+      <span class="pgx-tag">{{ s.tag }}</span>
+      <div class="pgx-art">{{ art[key]|safe }}</div>
+      <h2>{{ s.title }}</h2>
+      <p>{{ s.blurb }}</p>
+    </a>
+    <ul class="pgx-toys">
+      {% for name, tid in s.toys %}<li><a href="/playground/{{ key }}#{{ tid }}"><span class="n">{{ loop.index }}</span>{{ name }}<span class="ar">&rarr;</span></a></li>{% endfor %}
+    </ul>
+  </article>
   {% endfor %}
 </div>
-<p class="pg-hint" style="margin-top:16px">Looking for something quieter? <a href="/playground/library" style="color:var(--teal)">Library</a> has books, research papers, a Bible reader and an optional focus timer.</p>
+<a class="pgx-lib" href="/playground/library">
+  <div><span class="pgx-tag">Quiet corner</span><h2>Library</h2><p>Books, a research-paper reader with 30+ papers on validation, momentum and prop-firm math, a Bible reader and an optional focus timer.</p></div>
+  <span class="go">Open the Library &rarr;</span>
+</a>
 </div></div></div>
+<script>
+(function () {
+  function g(k, d) { try { var v = localStorage.getItem('t58-pg-' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } }
+  var set = function (k, v) { var el = document.querySelector('#pgx-stats [data-k="' + k + '"]'); if (el) el.textContent = v; };
+  set('secrets', (g('cube-secrets', []).length) + '/6');
+  var tb = g('tetris-best', { scores: [] }); set('stack', (tb.scores && tb.scores[0]) || 0);
+  set('tunnel', Math.floor(g('tunnel-best', 0)));
+  /* cards follow the pointer with a soft glow */
+  [].forEach.call(document.querySelectorAll('.pgx-card'), function (c) {
+    c.addEventListener('pointermove', function (e) { var r = c.getBoundingClientRect(); c.style.setProperty('--mx', (e.clientX - r.left) + 'px'); c.style.setProperty('--my', (e.clientY - r.top) + 'px'); });
+  });
+})();
+</script>
 </body>
 </html>

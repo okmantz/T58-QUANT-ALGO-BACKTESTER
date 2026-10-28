@@ -936,6 +936,26 @@ _VERIFIED_STAMPS = {
     "fundednext_100k": ("2026-10-22", "https://help.fundednext.com/en/articles/17255124-stellar-2-step-challenge", "primary"),
     "e8_one_100k": ("2026-10-22", "https://e8markets.com/e8-one", "primary"),
 }
+# 2026-10-27 audit (fix 8): stamps expire after the READY age limit, so a preset the owner re-checked must be re-stampable without
+# editing code. ``data/preset_stamps.json`` ({"key": {"date": "YYYY-MM-DD", "url": "...", "tier": "primary"}}) overrides the table
+# above; ``python scripts/restamp_presets.py key1 key2 ... --date 2026-11-01`` writes it. Only stamp rows you actually re-read
+# against the firm's own page: a stamp is a claim that the numbers were checked.
+def _load_stamp_overrides() -> dict:
+    try:
+        import json as _json
+        from pathlib import Path as _P
+        fp = _P(__file__).resolve().parents[2] / "data" / "preset_stamps.json"
+        if fp.exists():
+            raw = _json.loads(fp.read_text(encoding="utf-8"))
+            return {k: (v["date"], v.get("url", ""), v.get("tier", "primary")) for k, v in raw.items()
+                    if isinstance(v, dict) and v.get("date")}
+    except Exception:  # noqa: BLE001 -- a bad override file must never break import
+        pass
+    return {}
+
+
+_VERIFIED_STAMPS = {**_VERIFIED_STAMPS, **{k: (d, (u or (_VERIFIED_STAMPS.get(k) or ("", "", ""))[1]), t)
+                                            for k, (d, u, t) in _load_stamp_overrides().items()}}
 for _p in PROP_FIRM_PRESETS:
     _st = _VERIFIED_STAMPS.get(_p.key)
     if _st:

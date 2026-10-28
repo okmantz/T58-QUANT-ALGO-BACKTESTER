@@ -31,6 +31,12 @@
   .ach-chip.on { background: var(--teal); color: var(--on-teal); border-color: var(--teal); }
   .ach-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
   .ach-badge { --c: var(--tier-easy); position: relative; display: flex; flex-direction: column; gap: 6px; padding: 12px 14px 13px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel-2); }
+  /* FIX: the filter sets the [hidden] attribute, but this rule's display:flex outranks the browser's built-in [hidden] { display:none },
+     so every card stayed visible and the filters looked dead. */
+  .ach-badge[hidden], .ach-empty[hidden] { display: none !important; }
+  .ach-empty { grid-column: 1 / -1; padding: 22px; text-align: center; color: var(--text-muted); border: 1px dashed var(--border-light); border-radius: 12px; font-size: 13px; }
+  .ach-count { font-size: 12px; color: var(--text-muted); margin: 0 0 8px; }
+  .ach-sep { flex: 1; }
   .ach-badge[data-tier="medium"] { --c: var(--tier-medium); } .ach-badge[data-tier="hard"] { --c: var(--tier-hard); } .ach-badge[data-tier="elite"] { --c: var(--tier-elite); }
   .ach-badge .top { display: flex; align-items: center; gap: 10px; }
   .ach-medal { flex: none; width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; font-size: 18px; border: 2px solid var(--c); color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); }
@@ -94,18 +100,20 @@
 {% endif %}
 
 <h3>All achievements</h3>
-<div class="ach-chips" id="ach-chips" role="tablist" aria-label="Filter achievements">
-  <button class="ach-chip on" data-f="all" type="button">All</button>
-  <button class="ach-chip" data-f="todo" type="button">In progress</button>
-  <button class="ach-chip" data-f="done" type="button">Unlocked</button>
-  {% for cat, v in model.categories.items() %}<button class="ach-chip" data-f="cat:{{ cat }}" type="button">{{ cat }} {{ v.done }}/{{ v.total }}</button>{% endfor %}
-  <span style="flex:1"></span>
-  <button class="ach-chip" data-f="tier:easy" type="button">Easy</button>
-  <button class="ach-chip" data-f="tier:medium" type="button">Medium</button>
-  <button class="ach-chip" data-f="tier:hard" type="button">Hard</button>
-  <button class="ach-chip" data-f="tier:elite" type="button">Elite</button>
+<div class="ach-chips" id="ach-chips" role="group" aria-label="Filter achievements">
+  <button class="ach-chip on" data-g="status" data-f="all" type="button" aria-pressed="true">All</button>
+  <button class="ach-chip" data-g="status" data-f="todo" type="button" aria-pressed="false">In progress</button>
+  <button class="ach-chip" data-g="status" data-f="done" type="button" aria-pressed="false">Unlocked</button>
+  {% for cat, v in model.categories.items() %}<button class="ach-chip" data-g="cat" data-f="{{ cat }}" type="button" aria-pressed="false">{{ cat }} {{ v.done }}/{{ v.total }}</button>{% endfor %}
+  <span class="ach-sep"></span>
+  <button class="ach-chip" data-g="tier" data-f="easy" type="button" aria-pressed="false">Easy</button>
+  <button class="ach-chip" data-g="tier" data-f="medium" type="button" aria-pressed="false">Medium</button>
+  <button class="ach-chip" data-g="tier" data-f="hard" type="button" aria-pressed="false">Hard</button>
+  <button class="ach-chip" data-g="tier" data-f="elite" type="button" aria-pressed="false">Elite</button>
 </div>
+<p class="ach-count" id="ach-count" role="status" aria-live="polite"></p>
 <div class="ach-grid" id="ach-grid">
+  <div class="ach-empty" id="ach-empty" hidden>Nothing matches those filters. Clear one to see more.</div>
   {% for a in model['items'] %}
   <div class="ach-badge {{ 'done' if a.unlocked else 'locked' }}{{ ' new' if a.new else '' }}" data-tier="{{ a.tier }}" data-cat="{{ a.category }}" data-done="{{ 1 if a.unlocked else 0 }}">
     <div class="top">
@@ -123,16 +131,39 @@
 </div></div></div>
 <script>
 (function () {
-  var chips = [].slice.call(document.querySelectorAll('#ach-chips .ach-chip')), cards = [].slice.call(document.querySelectorAll('#ach-grid .ach-badge'));
-  chips.forEach(function (c) { c.addEventListener('click', function () {
-    chips.forEach(function (x) { x.classList.toggle('on', x === c); });
-    var f = c.dataset.f;
+  // Three independent filter groups that combine (AND): status (All / In progress / Unlocked), category, and tier.
+  // Clicking a category or tier chip again clears it; "All" clears the status group.
+  var chips = [].slice.call(document.querySelectorAll('#ach-chips .ach-chip'));
+  var cards = [].slice.call(document.querySelectorAll('#ach-grid .ach-badge'));
+  var count = document.getElementById('ach-count'), empty = document.getElementById('ach-empty');
+  var sel = { status: 'all', cat: '', tier: '' };
+
+  function apply() {
+    var shown = 0;
     cards.forEach(function (card) {
-      var show = f === 'all' || (f === 'todo' && card.dataset.done === '0') || (f === 'done' && card.dataset.done === '1') ||
-        (f.indexOf('cat:') === 0 && card.dataset.cat === f.slice(4)) || (f.indexOf('tier:') === 0 && card.dataset.tier === f.slice(5));
-      card.hidden = !show;
+      var ok = (sel.status === 'all' || (sel.status === 'todo' && card.dataset.done === '0') || (sel.status === 'done' && card.dataset.done === '1')) &&
+        (!sel.cat || card.dataset.cat === sel.cat) && (!sel.tier || card.dataset.tier === sel.tier);
+      card.hidden = !ok;
+      if (ok) shown++;
     });
-  }); });
+    chips.forEach(function (c) {
+      var on = c.dataset.g === 'status' ? sel.status === c.dataset.f : sel[c.dataset.g] === c.dataset.f;
+      c.classList.toggle('on', on);
+      c.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    count.textContent = 'Showing ' + shown + ' of ' + cards.length + ' achievements';
+    empty.hidden = shown !== 0;
+  }
+
+  chips.forEach(function (c) {
+    c.addEventListener('click', function () {
+      var g = c.dataset.g, f = c.dataset.f;
+      if (g === 'status') sel.status = f;
+      else sel[g] = sel[g] === f ? '' : f;
+      apply();
+    });
+  });
+  apply();
 })();
 </script>
 </body>

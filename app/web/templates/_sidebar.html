@@ -206,8 +206,8 @@
     </div>
   </details>
 
-  <!-- (12) Education -- Education (Course), Resources, then the User Manual
-       (moved here from the top-level list). -->
+  <!-- (12) Education -- Education (Course), Resources, Playground, Library, then the
+       User Manual last (all siblings, same left alignment). -->
   <details class="t58-nav-group">
     <summary><span class="t58-num">&#9313;</span> Education <span class="chev">&#9656;</span></summary>
     <div class="t58-nav-group-items">
@@ -217,14 +217,14 @@
       <a href="/resources" class="t58-nav-item {{ 'active' if active_page == 'resources' else '' }}">
         <span class="t58-nav-icon">&#127891;</span><span class="label">Resources</span>
       </a>
-      <a href="/user-manual" class="t58-nav-item {{ 'active' if active_page == 'user_manual' else '' }}">
-        <span class="t58-nav-icon">&#128214;</span><span class="label">User Manual</span>
-      </a>
       <a href="/playground" class="t58-nav-item {{ 'active' if (active_page or '').startswith('playground') else '' }}">
         <span class="t58-nav-icon">&#127918;</span><span class="label">Playground</span>
       </a>
-      <a href="/playground/library" class="t58-nav-item t58-nav-sub {{ 'active' if active_page == 'books_library' else '' }}" style="padding-left:34px;">
+      <a href="/playground/library" class="t58-nav-item {{ 'active' if active_page == 'books_library' else '' }}">
         <span class="t58-nav-icon">&#128218;</span><span class="label">Library</span>
+      </a>
+      <a href="/user-manual" class="t58-nav-item {{ 'active' if active_page == 'user_manual' else '' }}">
+        <span class="t58-nav-icon">&#128214;</span><span class="label">User Manual</span>
       </a>
     </div>
   </details>

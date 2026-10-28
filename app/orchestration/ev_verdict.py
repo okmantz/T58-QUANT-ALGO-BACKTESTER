@@ -68,18 +68,31 @@ def expected_max_std_normal(n_trials: int) -> float:
     return a - (math.log(math.log(n)) + math.log(4.0 * math.pi)) / (2.0 * a) if n > 2 else 0.5642
 
 
-def deflate_pass_rate(p: float, n_trials: int, n_effective: float) -> float:
+MAX_SEARCH_BIAS_HAIRCUT = 0.5   # the search-bias haircut never removes more than half of a measured pass rate
+
+
+def deflate_pass_rate(p: float, n_trials: int, n_effective: float, *, tunable: bool = True,
+                      max_haircut: float = MAX_SEARCH_BIAS_HAIRCUT) -> float:
     """Heuristic search-bias deflation of a pass rate (fraction 0..1).
 
     Picking the best of ``n_trials`` configurations inflates the winner's measured rate by about
     (sampling noise) x E[max of n_trials standard normals]. With ``n_effective`` independent
-    observations behind the rate, noise sd = sqrt(p(1-p)/n_effective). Returns p minus that
-    inflation, floored at 0. It is an approximation (trials are correlated, so it can over-
-    correct) -- use it as a haircut, not as an exact estimate."""
+    observations behind the rate, noise sd = sqrt(p(1-p)/n_effective). It is an approximation
+    (trials are correlated, so it over-corrects) -- use it as a haircut, not as an exact estimate.
+
+    2026-10-27 audit (fix 3), two changes:
+      * ``tunable=False`` (the strategy has no free parameters, so nothing was searched) applies NO deflation:
+        a fixed rule is not a best-of-N pick however many raw configurations a run logged.
+      * the haircut is bounded to ``max_haircut`` of the measured rate (default one half) instead of being allowed to
+        drive a real 19% pass rate to 0.0%. The Deflated Sharpe gate still carries the full, unbounded multiple-testing
+        correction, so a lucky pick cannot hide behind the cap."""
     p = min(max(float(p), 0.0), 1.0)
+    if not tunable or int(n_trials) <= 1:
+        return p
     n_eff = max(float(n_effective), 1.0)
     sd = math.sqrt(max(p * (1.0 - p), 1e-9) / n_eff)
-    return max(0.0, p - sd * expected_max_std_normal(n_trials))
+    floor = p * (1.0 - min(max(float(max_haircut), 0.0), 1.0))
+    return max(floor, p - sd * expected_max_std_normal(n_trials))
 
 
 @dataclass
@@ -135,6 +148,7 @@ def evaluate_ev(
     rules_verified: bool = True,
     lookahead_ok: bool = True,
     holdout_clean: bool = True,
+    parameters_tuned: bool = True,
     automation_confirmed: bool | None = None,
     challenge_months: int = 1,
     monthly_subscription: bool = False,
@@ -171,7 +185,7 @@ def evaluate_ev(
     c = float(challenge_price) * months
     q = min(r / p, 1.0) if p > 0 else 0.0
     n_eff = n_effective if (n_effective and n_effective > 0) else 30.0
-    p_def = deflate_pass_rate(p, n_trials, n_eff)
+    p_def = deflate_pass_rate(p, n_trials, n_eff, tunable=parameters_tuned)
     v.p, v.p_deflated, v.q, v.v, v.c = p, p_def, q, net_v, c
     a = max(float(activation_fee or 0.0), 0.0)
     v.ev = compute_ev(p_def, q, net_v, c, a)
@@ -189,10 +203,12 @@ def evaluate_ev(
         )
     if a > 0:
         reasons.append(f"Activation fee ${a:,.0f} is charged on every pass (EV = p x q x V - p x ${a:,.0f} - c).")
-    if n_trials > 1:
+    if n_trials > 1 and not parameters_tuned:
+        reasons.append("No search-bias deflation: the strategy has no tunable parameters, so no configuration was picked out of a search.")
+    elif n_trials > 1:
         reasons.append(
             f"Pass rate deflated from {p * 100:.1f}% to {p_def * 100:.1f}% for {n_trials} configurations tried "
-            f"(~{n_eff:.0f} independent observations; heuristic haircut, see deflate_pass_rate)."
+            f"(~{n_eff:.0f} independent observations; heuristic haircut capped at half the rate, see deflate_pass_rate)."
         )
     if v.break_even_p is None:
         v.label = NOT_WORTH_A_FEE

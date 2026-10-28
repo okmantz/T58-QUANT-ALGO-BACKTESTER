@@ -21,6 +21,7 @@ import math
 import numpy as np
 
 # Two-sided 95% critical values used when scipy is not wanted here.
+DEFAULT_TRADES_PER_ATTEMPT = 10.0
 _Z95 = 1.959964
 _Z90_ONE_SIDED = 1.644854
 
@@ -49,11 +50,12 @@ def effective_independent_attempts(
 
     Two ceilings, take the smaller:
       * calendar -- history days / typical attempt length (default 30 days, the payout window);
-      * trades   -- source trades / trades one attempt consumes (default: 20).
+      * trades   -- source trades / trades one attempt consumes (default: 10; was 20 before the 2026-10-27 audit, which showed
+        trades/20 left 593 trades at ~24 independent attempts and capped a planted 0.2R edge's pass-probability bound near 86%).
     Never more than the simulated count, and never below 1."""
     ad = float(attempt_days) if attempt_days and attempt_days > 0 else 30.0
     n_cal = float(n_source_calendar_days) / ad if n_source_calendar_days and n_source_calendar_days > 0 else None
-    tpa = float(trades_per_attempt) if trades_per_attempt and trades_per_attempt > 0 else 20.0
+    tpa = float(trades_per_attempt) if trades_per_attempt and trades_per_attempt > 0 else DEFAULT_TRADES_PER_ATTEMPT
     n_tr = float(n_source_trades) / tpa if n_source_trades and n_source_trades > 0 else None
     cands = [c for c in (n_cal, n_tr) if c is not None]
     if not cands:

@@ -183,13 +183,13 @@
 
   /* ---------------------------------------------------------------- Light Tunnel */
   PG.register('quantum', 'tunnel', {
-    title: 'Light Tunnel', sub: 'Fly through rings of light. Steer around the tunnel (arrows, drag, or tilt left/right on the pad) and slip through each gap.',
+    title: 'Light Tunnel', sub: 'A relaxed flight through rings of light. Steer around the tunnel (arrows, A/D, or drag) and slip through each gap. It starts slow and speeds up gently.',
     mount: function (host) {
       var C = PG.canvas(host, 1.7), ctx = C.ctx, ang = -Math.PI / 2, targetAng = ang, rings = [], z0 = 0, speed = 1, score = 0, best = PG.store.get('tunnel-best', 0), over = false, started = false, hue = 180, keys = {}, dead = false;
       var top = PG.el('div', 'pg-bar'); host.appendChild(top); var sS = PG.el('span', 'pg-stat'), sB = PG.el('span', 'pg-stat'); top.appendChild(sS); top.appendChild(sB); PG.button(top, 'Restart', function () { reset(); }, true);
       var msg = PG.el('div', 'pg-msg', 'Press an arrow key, or touch and drag, to start.'); host.appendChild(msg);
-      function reset() { rings = []; z0 = 0; speed = 1; score = 0; over = false; started = false; ang = -Math.PI / 2; targetAng = ang; for (var i = 0; i < 14; i++) addRing(i * 1.1 + 3); msg.textContent = 'Press an arrow key, or touch and drag, to start.'; hud(); }
-      function addRing(z) { var gap = Math.max(.55, 1.15 - score / 3500); rings.push({ z: z, gapCenter: Math.random() * TAU, gap: gap, passed: false }); }
+      function reset() { rings = []; z0 = 0; speed = 1; score = 0; over = false; started = false; ang = -Math.PI / 2; targetAng = ang; for (var i = 0; i < 14; i++) addRing(i * 1.5 + 3.5); msg.textContent = 'Press an arrow key, or touch and drag, to start.'; hud(); }
+      function addRing(z) { var gap = Math.max(.95, 1.7 - score / 4200); rings.push({ z: z, gapCenter: Math.random() * TAU, gap: gap, passed: false }); }
       function hud() { sS.innerHTML = 'Distance <b>' + Math.floor(score) + '</b>'; sB.innerHTML = 'Best <b>' + Math.floor(best) + '</b>'; }
       var off = PG.keyHandler(function (e) { if (['ArrowLeft', 'ArrowRight', 'a', 'd', 'A', 'D'].indexOf(e.key) >= 0) { e.preventDefault(); keys[e.key] = 1; started = true; msg.textContent = ''; } if (e.key === ' ' && over) reset(); });
       var offUp = (function () { function up(e) { delete keys[e.key]; } window.addEventListener('keyup', up); return function () { window.removeEventListener('keyup', up); }; })();
@@ -199,10 +199,10 @@
       var L = PG.loop(function (dt, t) {
         var W = C.w, H = C.h, cx = W / 2, cy = H / 2, R0 = Math.min(W, H) * .46;
         if (started && !over) {
-          var turn = (keys.ArrowRight || keys.d || keys.D ? 1 : 0) - (keys.ArrowLeft || keys.a || keys.A ? 1 : 0); if (turn) targetAng = ang + turn * 3.2 * dt * 2; var dA = angDiff(targetAng, ang); ang += Math.max(-7 * dt, Math.min(7 * dt, dA * 12 * dt));
-          speed = 1 + Math.min(2.2, score / 900); var dz = speed * dt * 2.6; score += dz * 18; rings.forEach(function (r) { r.z -= dz; });
-          rings.forEach(function (r) { if (!r.passed && r.z <= .5) { r.passed = true; if (Math.abs(angDiff(ang, r.gapCenter)) > r.gap / 2) { over = true; if (score > best) { best = score; PG.store.set('tunnel-best', best); } msg.textContent = 'Crashed at ' + Math.floor(score) + '. Tap or press Space to try again.'; } } });
-          rings = rings.filter(function (r) { return r.z > -.3; }); while (rings.length < 14) addRing((rings.length ? rings[rings.length - 1].z : 3) + 1.1); hue = (hue + dt * 14) % 360; hud();
+          var turn = (keys.ArrowRight || keys.d || keys.D ? 1 : 0) - (keys.ArrowLeft || keys.a || keys.A ? 1 : 0); if (turn) targetAng = ang + turn * 2.4 * dt * 2; var dA = angDiff(targetAng, ang); ang += Math.max(-7 * dt, Math.min(7 * dt, dA * 12 * dt));
+          speed = 1 + Math.min(.9, score / 2600); var dz = speed * dt * 1.05; score += dz * 45; rings.forEach(function (r) { r.z -= dz; });
+          rings.forEach(function (r) { if (!r.passed && r.z <= .5) { r.passed = true; if (Math.abs(angDiff(ang, r.gapCenter)) > r.gap / 2 + .1) { over = true; if (score > best) { best = score; PG.store.set('tunnel-best', best); } msg.textContent = 'Crashed at ' + Math.floor(score) + '. Tap or press Space to try again.'; } } });
+          rings = rings.filter(function (r) { return r.z > -.3; }); while (rings.length < 14) addRing((rings.length ? rings[rings.length - 1].z : 3) + 1.5); hue = (hue + dt * 14) % 360; hud();
         }
         ctx.fillStyle = '#02040a'; ctx.fillRect(0, 0, W, H);
         var order = rings.slice().sort(function (a, b) { return b.z - a.z; }); ctx.lineCap = 'round';

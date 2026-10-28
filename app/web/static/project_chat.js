@@ -14,7 +14,12 @@
 
   var API_BASE = "/api/projects";
   var ACTIVITY_POLL_MS = 4000;
-  var OPEN_KEY = "t58_project_chat_open";   // remembered per browser: "1" = expanded, anything else = collapsed
+  // Per LOGIN-SESSION panel state (open/collapsed, active tab, which briefing sections are expanded). The server stamps each
+  // login (a fresh browser session, activation, lock-unlock or log-out) with an id in data-login on the launcher. State is
+  // only honoured while that id is unchanged, so: the briefing may pop open ONCE at the start of a login session, and once the
+  // person collapses it (or opens it) that choice sticks across every page until they log off and back on.
+  var SESS_KEY = "t58_pc_session";
+  var sess = null;
 
   var state = {
     project: null,       // full project dict {id, name, chat_history, ...} or null
@@ -44,12 +49,36 @@
   // Panel open/close
   // -------------------------------------------------------------------
 
+  function loginId() {
+    var l = document.getElementById("t58-pc-launcher");
+    return (l && l.getAttribute("data-login")) || "none";
+  }
+
+  function loadSess() {
+    var id = loginId();
+    try {
+      var raw = window.localStorage.getItem(SESS_KEY);
+      var s = raw ? JSON.parse(raw) : null;
+      if (s && s.login === id) { s.sections = s.sections || {}; return s; }
+    } catch (e) { /* storage blocked or corrupt: start fresh */ }
+    // A new login session: collapsed, nothing remembered, and the briefing is allowed to pop open once.
+    return { login: id, open: false, tab: "chat", first: false, sections: {} };
+  }
+
+  function saveSess() {
+    if (!sess) return;
+    try { window.localStorage.setItem(SESS_KEY, JSON.stringify(sess)); } catch (e) { /* storage blocked: fine */ }
+  }
+
   function rememberOpen(isOpen) {
-    try { window.localStorage.setItem(OPEN_KEY, isOpen ? "1" : "0"); } catch (e) { /* storage blocked: fine */ }
+    if (!sess) sess = loadSess();
+    sess.open = !!isOpen;
+    saveSess();
   }
 
   function wasOpen() {
-    try { return window.localStorage.getItem(OPEN_KEY) === "1"; } catch (e) { return false; }
+    if (!sess) sess = loadSess();
+    return !!sess.open;
   }
 
   function setLauncherState(isOpen) {
@@ -66,10 +95,8 @@
     setLauncherState(true);
     rememberOpen(true);
     refreshProjectList().then(function () {
-      var onBrief = els.tabBrief && !els.tabBrief.hidden;
-      if (state.project && !onBrief) {
-        showTab("chat");
-      }
+      // Keep whichever tab was showing (Brief / Activity / Chat) -- never yank the person back to Chat.
+      showTab((sess && sess.tab) || "chat");
     });
   }
 
@@ -86,6 +113,9 @@
   }
 
   function showTab(name) {
+    if (!sess) sess = loadSess();
+    sess.tab = name;
+    saveSess();
     var tabs = els.panel.querySelectorAll(".t58-pc-tab");
     for (var i = 0; i < tabs.length; i++) {
       tabs[i].classList.toggle("active", tabs[i].getAttribute("data-tab") === name);
@@ -110,8 +140,10 @@
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]; }); }
   function renderBrief(d) {
     var box = document.getElementById("t58-pc-brief"); if (!box) return;
+    if (!sess) sess = loadSess();
     var open = {};
     box.querySelectorAll(".t58-pc-bs").forEach(function (s) { open[s.getAttribute("data-id")] = !s.querySelector(".t58-pc-bb").hidden; });
+    Object.keys(sess.sections || {}).forEach(function (k) { if (!(k in open)) open[k] = !!sess.sections[k]; });
     var html = '<div class="t58-pc-bh"><b>T58 Morning Briefing</b><span>' + new Date(d.generated_at * 1000).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"}) + '</span></div>';
     if (d.empty) html += '<div class="t58-pc-bempty">' + esc(d.empty_line) + '</div>';
     (d.sections || []).forEach(function (s, i) {
@@ -126,6 +158,7 @@
       b.addEventListener("click", function () {
         var body = b.parentNode.querySelector(".t58-pc-bb"); body.hidden = !body.hidden;
         b.setAttribute("aria-expanded", String(!body.hidden)); b.lastChild.innerHTML = body.hidden ? "&#9656;" : "&#9662;";
+        sess.sections[b.parentNode.getAttribute("data-id")] = !body.hidden; saveSess();
       });
     });
   }
@@ -160,7 +193,7 @@
       renderProjectSelect();
       var activeId = data.active_project_id;
       if (activeId) {
-        return loadProject(activeId);
+        return loadProject(activeId, true);
       }
       state.project = null;
       renderEmptyState();
@@ -193,14 +226,15 @@
     els.tabActivity.hidden = true;
   }
 
-  function loadProject(projectId) {
+  function loadProject(projectId, keepTab) {
     return apiFetch("/" + projectId).then(function (data) {
       if (!data.project) return;
       state.project = data.project;
       renderProjectSelect();
       els.empty.hidden = true;
       renderMessages();
-      showTab("chat");
+      // Re-loading the active project on a page load must not switch away from the Brief/Activity tab.
+      showTab(keepTab && sess && sess.tab ? sess.tab : "chat");
     });
   }
 
@@ -421,10 +455,15 @@
       els.input.style.height = Math.min(els.input.scrollHeight, 90) + "px";
     });
 
-    // Start collapsed (out of the way) unless it was left open on the last page.
+    // Start collapsed (out of the way) unless it was left open earlier in THIS login session.
+    sess = loadSess();
+    var firstPageOfSession = !sess.first;
+    sess.first = true;
+    saveSess();
     if (wasOpen()) { openPanel(); } else { closePanel(); }
-    // Morning Briefing: pops up on first access when due, otherwise just keeps the tab's dot current.
-    setTimeout(function () { loadBrief(true); }, 1200);
+    // Morning Briefing: may pop open ONCE, on the first page of a login session and only when due. On every later page
+    // (and after the person collapses it) it just keeps the tab's dot current and stays however it was left.
+    setTimeout(function () { loadBrief(firstPageOfSession); }, 1200);
   }
 
   if (document.readyState === "loading") {

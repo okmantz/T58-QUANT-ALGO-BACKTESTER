@@ -235,7 +235,12 @@
     return e;
   }
   function f1(v) { return (+v).toFixed(1); }
-  function removeScene() { var el = document.getElementById(SCENE_ID); if (el) el.remove(); }
+  var sceneStage = null;   // the canvas-driven scenes (t58-scene-canvas.js) own a render loop that must be stopped with the layer
+  function removeScene() {
+    if (sceneStage && sceneStage.destroy) { try { sceneStage.destroy(); } catch (e) {} }
+    sceneStage = null;
+    var el = document.getElementById(SCENE_ID); if (el) el.remove();
+  }
   function buildScene() {
     removeScene();
     var kind = SCENES[bg()];
@@ -257,15 +262,14 @@
     } else if (kind === 'obsidian') {
       layer.appendChild(mk('sheen')); layer.appendChild(mk('sheen b'));
     } else if (kind === 'ocean') {
-      var ys = [58, 66, 74, 82, 90];
-      ys.forEach(function (y, k) {
-        layer.appendChild(mk('swell', { top: y + '%', '--o': f1(.07 + k * .035), '--dur': f1(46 - k * 6) + 's', '--bob': f1(rnd(5, 8)) + 's' }));
-      });
-      layer.appendChild(mk('moonpath'));
-      for (i = 0; i < cnt(14); i++) layer.appendChild(mk('glint', {
-        '--x': f1(rnd(58, 82)) + '%', '--y': f1(rnd(54, 90)) + '%', '--sz': f1(rnd(10, 30)) + 'px', '--o': f1(rnd(.35, .8)),
-        '--dur': f1(rnd(3, 7)) + 's', '--delay': f1(-rnd(0, 7)) + 's'
-      }));
+      // The water in the painting itself ripples and soft clouds drift over the sky (t58-scene-canvas.js). The old
+      // "swell lines drawn over the picture" are gone. If the canvas can't start, the still picture is simply left alone.
+      if (window.T58SceneCanvas) sceneStage = window.T58SceneCanvas.mount('ocean', layer);
+      if (sceneStage) {
+        // the glitter on the moon's path is drawn inside the canvas now (it follows the rippling water)
+      } else {
+        layer.appendChild(mk('moonpath'));
+      }
     } else if (kind === 'rain') {
       for (i = 0; i < cnt(46); i++) layer.appendChild(mk('drop', {
         '--x': f1(rnd(0, 108)) + '%', '--len': f1(rnd(22, 58)) + 'px', '--o': f1(rnd(.18, .5)),
@@ -295,9 +299,14 @@
         var b = document.createElement('b'); b.className = 'l' + (i % 2); e.appendChild(b); layer.appendChild(e);
       }
     } else if (kind === 'forest') {
-      [[8, 30, .85, 70], [30, 26, .7, 96], [52, 30, .8, 80], [70, 24, .55, 120]].forEach(function (c) {
-        layer.appendChild(mk('fog', { '--y': c[0] + '%', '--h': c[1] + '%', '--o': c[2], '--dur': c[3] + 's' }));
-      });
+      // Layered mist (t58-scene-canvas.js): far haze, two bands in the trees, low mist on the lake and a thin veil, each its
+      // own drifting cloud texture. Falls back to the earlier CSS fog banks only if the canvas can't start.
+      sceneStage = window.T58SceneCanvas ? window.T58SceneCanvas.mount('forest', layer) : null;
+      if (!sceneStage) {
+        [[8, 30, .85, 70], [30, 26, .7, 96], [52, 30, .8, 80], [70, 24, .55, 120]].forEach(function (c) {
+          layer.appendChild(mk('fog', { '--y': c[0] + '%', '--h': c[1] + '%', '--o': c[2], '--dur': c[3] + 's' }));
+        });
+      }
       for (i = 0; i < cnt(7); i++) layer.appendChild(mk('ripple', {
         '--x': f1(rnd(22, 80)) + '%', '--y': f1(rnd(70, 92)) + '%', '--w': f1(rnd(90, 190)) + 'px',
         '--dur': f1(rnd(7, 12)) + 's', '--delay': f1(-rnd(0, 12)) + 's'

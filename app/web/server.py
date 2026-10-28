@@ -637,19 +637,67 @@ def _static_cache_headers(resp):
     return resp
 
 
+def _prefs_bootstrap_tag() -> str:
+    """Server's saved copy of the browser preferences + the sync script (see app/persistence/ui_prefs.py). Emitted as the
+    very first thing in <head> so localStorage is hydrated before any inline theme/background script reads it."""
+    import json as _json
+    try:
+        from app.persistence import ui_prefs
+        prefs = ui_prefs.load()
+    except Exception:  # noqa: BLE001
+        prefs = {}
+    blob = _json.dumps(prefs).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    csrf = _json.dumps(session.get("csrf_token", "")).replace("<", "\\u003c")
+    return ("<script>window.__T58_PREFS=" + blob + ";window.__T58_CSRF=" + csrf + ";</script>"
+            '<script src="/static/t58-prefs-sync.js"></script>')
+
+
 @app.after_request
 def _inject_poll_governor(resp):
     try:
         if (resp.mimetype == "text/html" and resp.status_code == 200 and not resp.direct_passthrough
                 and not resp.is_streamed):
             body = resp.get_data(as_text=True)
+            tag = ""
             if "t58-poll.js" not in body:
-                new, n = _HEAD_RE.subn(lambda m: m.group(0) + _POLL_TAG, body, count=1)
+                tag += _POLL_TAG
+            if "t58-prefs-sync.js" not in body:
+                tag = _prefs_bootstrap_tag() + tag
+            if tag:
+                new, n = _HEAD_RE.subn(lambda m: m.group(0) + tag, body, count=1)
                 if n:
                     resp.set_data(new)
     except Exception:  # noqa: BLE001 -- never break a page over an optimisation
         pass
     return resp
+
+
+# Saved-runs vault: a change to the profile, a key or a preference is copied to the vault a few seconds later (debounced), so it
+# survives a crash, a forced close or a reinstall -- not just the next 5-minute sweep.
+_VAULT_AUTOSAVE_PREFIXES = ("/settings", "/api/prefs", "/api/briefing/settings", "/achievements", "/api/achievements", "/activate")
+
+
+@app.after_request
+def _vault_profile_autosave(resp):
+    try:
+        if request.method == "POST" and resp.status_code < 400 and (request.path or "").startswith(_VAULT_AUTOSAVE_PREFIXES):
+            from app.persistence import vault
+            vault.schedule_profile_backup()
+    except Exception:  # noqa: BLE001
+        pass
+    return resp
+
+
+def _new_login_id() -> str:
+    """A fresh id for this browser's login session: the briefing panel's remembered state is only honoured while it matches."""
+    import secrets as _secrets
+    session["t58_login_id"] = _secrets.token_hex(6)
+    return session["t58_login_id"]
+
+
+@app.context_processor
+def _inject_login_id():
+    return {"t58_login_id": session.get("t58_login_id") or _new_login_id()}
 
 
 @app.before_request
@@ -833,6 +881,7 @@ def activate_submit():
     ok, message = license_client.activate(email, license_key, remember=remember)
     if ok:
         _license_ok_cached = True
+        _new_login_id()          # a new login: the morning briefing may pop open once
         return redirect(next_path)
     return render_template("activate.html", next=next_path, error=message, email=email), 401
 
@@ -913,6 +962,7 @@ def account_lock_unlock():
         return redirect(next_path)
     if verify_password(request.form.get("password", ""), settings.password_hash):
         session["t58_unlocked"] = True
+        _new_login_id()          # unlocking is a (re-)login: the morning briefing may pop open once
         return redirect(next_path)
     return render_template("lock.html", next=next_path, error="Incorrect password."), 401
 
@@ -5074,6 +5124,7 @@ def account_settings_change_password():
 @app.route("/settings/account/logout", methods=["POST"])
 def account_settings_logout():
     session.pop("t58_unlocked", None)
+    session.pop("t58_login_id", None)
     from app.accounts.settings import load_account_settings
     if load_account_settings().has_password:
         return redirect(url_for("account_lock_form"))

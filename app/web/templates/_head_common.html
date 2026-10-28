@@ -17,4 +17,5 @@
 <script>try{var b=localStorage.getItem('t58-bg');if(b&&b!=='mountains')document.documentElement.setAttribute('data-bg',b)}catch(e){}</script>
 <script>/* accent colour, painted before first paint (t58-personalize.js owns the logic and refreshes this cache) */
 try{var a=localStorage.getItem('t58-accent');if(a&&a!=='teal'){var v=JSON.parse(localStorage.getItem('t58-accent-vars')||'null'),r=document.documentElement;if(v){var m=localStorage.getItem('t58-theme')==='light'?'light':'dark',o=v[m];for(var k in o)r.style.setProperty(k,o[k]);r.setAttribute('data-ui-accent',a)}}}catch(e){}</script>
+<script src="/static/t58-scene-canvas.js" defer></script>
 <script src="/static/t58-personalize.js" defer></script>

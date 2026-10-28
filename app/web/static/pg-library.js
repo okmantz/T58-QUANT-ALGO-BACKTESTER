@@ -72,26 +72,62 @@
 
   /* ---------------------------------------------------------------- Papers */
   function papers(host) {
-    var data = null, q = '', only = false; var bar = PG.el('div', 'pg-bar'); host.appendChild(bar);
-    var search = PG.el('input', 'lib-search'); search.placeholder = 'Search papers'; search.type = 'search'; bar.appendChild(search); PG.seg(bar, [[false, 'All papers'], [true, 'Has PDF']], false, function (v) { only = v; draw(); });
-    var cont = PG.el('div'); host.appendChild(cont); host.appendChild(PG.el('p', 'pg-hint', 'The list comes from the reading lists in your repo’s research/ folder. Publisher pages open in a new tab. Attach the PDF you download and it opens here, and the AI assistant can also draw on it (it lives in research/).'));
+    var data = null, q = '', filter = 'all', collapsed = PG.store.get('lib-paper-collapsed', {});
+    var hero = PG.el('div', 'lib-phero'); host.appendChild(hero);
+    var bar = PG.el('div', 'pg-bar'); host.appendChild(bar);
+    var search = PG.el('input', 'lib-search'); search.placeholder = 'Search title, author or topic'; search.type = 'search'; bar.appendChild(search);
+    PG.seg(bar, [['all', 'All'], ['liked', '♥ Liked'], ['unread', 'Unread'], ['read', 'Read'], ['pdf', 'PDF in app'], ['links', 'Links only']], 'all', function (v) { filter = v; draw(); });
+    var cont = PG.el('div'); host.appendChild(cont);
+    host.appendChild(PG.el('p', 'pg-hint', 'Papers marked PDF are stored with the app and open in the reader here. “Links only” entries open the publisher’s page in a new tab. Attach a PDF you download to any of them and it opens here too. Likes and read marks are saved to your account.'));
     cont.textContent = 'Loading...';
     function domain(u) { try { return new URL(u).hostname.replace(/^www\./, ''); } catch (e) { return u; } }
+    function setState(p, patch) {
+      for (var k in patch) p[k] = patch[k]; patch.id = p.id;
+      csrfFetch('/api/library/paper-state', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) }).catch(function () {});
+    }
+    function match(p, c) {
+      if (q && (p.title + ' ' + p.authors + ' ' + p.role + ' ' + c.name).toLowerCase().indexOf(q) < 0) return false;
+      if (filter === 'liked') return p.liked; if (filter === 'unread') return !p.read; if (filter === 'read') return p.read;
+      if (filter === 'pdf') return p.pdf; if (filter === 'links') return !p.pdf; return true;
+    }
+    function card(p) {
+      var lk = p.links.slice(0, 3).map(function (u) { return '<a href="' + esc(u) + '" target="_blank" rel="noopener noreferrer">' + esc(domain(u)) + '</a>'; }).join('');
+      return '<article class="lib-paper' + (p.read ? ' is-read' : '') + '" data-id="' + esc(p.id) + '">' +
+        '<div class="top"><span class="badge ' + (p.pdf ? 'pdf' : 'lnk') + '">' + (p.pdf ? 'PDF' : 'LINK') + '</span>' +
+        '<button class="ico like' + (p.liked ? ' on' : '') + '" data-act="like" type="button" aria-pressed="' + !!p.liked + '" title="Like">♥</button></div>' +
+        '<div class="t">' + esc(p.title) + '</div>' + (p.authors ? '<div class="a">' + esc(p.authors) + '</div>' : '') + (p.role ? '<div class="r">' + esc(p.role) + '</div>' : '') +
+        '<div class="act">' + (p.pdf ? '<button class="pg-btn pri" data-act="read" type="button">Read</button>' : '<button class="pg-btn" data-act="add" type="button">Attach PDF</button>') +
+        '<button class="pg-btn' + (p.read ? ' done' : '') + '" data-act="mark" type="button">' + (p.read ? '✓ Read' : 'Mark read') + '</button>' +
+        (p.pdf && !p.bundled ? '<button class="pg-btn" data-act="del" type="button">Remove</button>' : '') + lk + '</div></article>';
+    }
     function draw() {
-      if (!data) return; var h = '';
-      data.categories.forEach(function (c) {
-        var ps = c.papers.filter(function (p) { return (!q || (p.title + ' ' + p.role).toLowerCase().indexOf(q) >= 0) && (!only || p.pdf); }); if (!ps.length) return;
-        h += '<div class="lib-cat"><h4>' + esc(c.name) + ' <span class="pg-stat">' + ps.length + '</span></h4>' + ps.map(function (p) {
-          var m = p.title.match(/^(.*?)\s-\s(.*)$/), au = m ? m[1] : '', ti = m ? m[2] : p.title;
-          return '<div class="lib-paper" data-id="' + esc(p.id) + '"><div class="t">' + esc(ti.replace(/^"|"$/g, '')) + '</div>' + (au ? '<div class="a">' + esc(au) + '</div>' : '') + (p.role ? '<div class="r">' + esc(p.role) + '</div>' : '') +
-            '<div class="act">' + (p.pdf ? '<button class="pg-btn pri" data-act="read" type="button">Read PDF</button>' : '<button class="pg-btn" data-act="add" type="button">Attach PDF</button>') + (p.pdf ? '<button class="pg-btn" data-act="del" type="button">Remove</button>' : '') + p.links.slice(0, 4).map(function (u) { return '<a href="' + esc(u) + '" target="_blank" rel="noopener noreferrer">' + esc(domain(u)) + '</a>'; }).join('') + '</div></div>';
-        }).join('') + '</div>';
+      if (!data) return;
+      var all = [], h = '';
+      data.categories.forEach(function (c) { c.papers.forEach(function (p) { all.push(p); }); });
+      hero.innerHTML = '<div><b>' + all.length + '</b><span>papers</span></div><div><b>' + all.filter(function (p) { return p.pdf; }).length + '</b><span>readable here</span></div><div><b>' + all.filter(function (p) { return p.liked; }).length + '</b><span>liked</span></div><div><b>' + all.filter(function (p) { return p.read; }).length + '</b><span>read</span></div>';
+      var groups = [['library', 'Research library'], ['reading', 'Reading lists'], ['guides', 'Strategy guides']];
+      groups.forEach(function (g) {
+        var cs = data.categories.filter(function (c) { return c.group === g[0]; }), gh = '';
+        cs.forEach(function (c) {
+          var ps = c.papers.filter(function (p) { return match(p, c); });
+          var docs = (g[0] === 'guides' && !q && filter === 'all') ? c.docs : [];
+          if (!ps.length && !docs.length) return;
+          var shut = collapsed[c.id] && !q;
+          gh += '<section class="lib-cat"><button class="cat-h" type="button" data-cat="' + esc(c.id) + '" aria-expanded="' + !shut + '"><span class="chev">' + (shut ? '▸' : '▾') + '</span>' + esc(c.name) + '<span class="pg-stat">' + ps.length + '</span></button>' +
+            (shut ? '' : '<div class="lib-pgrid">' + docs.map(function (d) { return '<article class="lib-paper doc"><div class="top"><span class="badge doc">GUIDE</span></div><div class="t">' + esc(d.name.replace(/\.md$/, '').replace(/_/g, ' ')) + '</div><div class="act"><button class="pg-btn pri" data-doc="' + esc(d.path) + '" type="button">Open guide</button></div></article>'; }).join('') + ps.map(card).join('') + '</div>') + '</section>';
+        });
+        if (gh) h += '<h3 class="lib-group">' + g[1] + '</h3>' + gh;
       });
       cont.innerHTML = h || '<p class="pg-hint">No papers match.</p>';
-      [].forEach.call(cont.querySelectorAll('.lib-paper'), function (el) {
-        var id = el.dataset.id, t = el.querySelector('.t').textContent;
+      [].forEach.call(cont.querySelectorAll('.cat-h'), function (b) { b.onclick = function () { collapsed[b.dataset.cat] = !collapsed[b.dataset.cat]; PG.store.set('lib-paper-collapsed', collapsed); draw(); }; });
+      [].forEach.call(cont.querySelectorAll('[data-doc]'), function (b) { b.onclick = function () { openPdf('/research-docs/' + b.dataset.doc, b.closest('.lib-paper').querySelector('.t').textContent); }; });
+      [].forEach.call(cont.querySelectorAll('article.lib-paper[data-id]'), function (el) {
+        var id = el.dataset.id, p = all.filter(function (x) { return x.id === id; })[0], t = p.title;
         [].forEach.call(el.querySelectorAll('button'), function (b) { b.onclick = function () {
-          var a = b.dataset.act; if (a === 'read') openPdf('/library-files/papers/' + id + '.pdf', t);
+          var a = b.dataset.act;
+          if (a === 'read') { openPdf('/library-files/papers/' + id + '.pdf', t); if (!p.read) { setState(p, { read: true }); draw(); } }
+          else if (a === 'like') { setState(p, { liked: !p.liked }); draw(); }
+          else if (a === 'mark') { setState(p, { read: !p.read }); draw(); }
           else if (a === 'add') pickPdf(function (f) { b.textContent = 'Uploading...'; upload('papers', id, f, function (j) { if (j.ok) load(); else { b.textContent = j.error || 'Failed'; } }); });
           else if (a === 'del') csrfFetch('/api/library/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'papers', id: id }) }).then(load);
         }; });
