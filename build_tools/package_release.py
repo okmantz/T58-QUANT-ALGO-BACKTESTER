@@ -56,7 +56,7 @@ FOLLOW_SYMLINKS = False
 
 # Files/folders the app creates next to its exe the first time it RUNS (see
 # app.data.storage.get_app_base_dir). They never belong in a release zip.
-RUNTIME_ONLY_TOP_LEVEL = {".flask_secret_key", "data", "reports", "strategies", ".t58_write_test"}
+RUNTIME_ONLY_TOP_LEVEL = {".flask_secret_key", "data", "reports", "strategies", "research", ".t58_write_test"}
 
 SKIP_DIRS = {"__pycache__", ".git", ".pytest_cache"}
 SKIP_SUFFIXES = {".pyc", ".pyo"}
@@ -242,6 +242,9 @@ def collect_app_entries(dist: Path, tmp_dir: Path, platform: str = "windows") ->
     if not any(a.startswith("_internal/") for _, a in entries):
         raise PackagingError(f"{dist} has no _internal/ folder -- expected a PyInstaller one-folder build.")
     entries += _walk(ROOT / "strategies", "strategies")
+    # The Library's research papers ship beside the app (the Library tab reads <app folder>/research); without this
+    # the tab opens empty on a customer's machine.
+    entries += _walk(ROOT / "research", "research")
     # Customer-facing docs only -- the EULA / privacy / refund / Sentry files in
     # docs/buyer are templates with placeholders for the owner, not for customers.
     for doc in ("INSTALL.md", "QUICKSTART.md"):

@@ -31,6 +31,7 @@ COMMON_DATA = [
     ("strategies", "strategies"),            # built-in Strategy Library (seeded on first run)
     ("app/ui/assets", "app/ui/assets"),      # logo/icons used by the desktop UI and activation window
     ("app/search/seed_data", "app/search/seed_data"),  # starter Strategy Graveyard seed (merged on first use)
+    ("research", "research"),                # bundled research papers (PDFs + reading lists) seeded into the Library on first use
 ]
 WEB_DATA = [
     ("app/web/templates", "app/web/templates"),
