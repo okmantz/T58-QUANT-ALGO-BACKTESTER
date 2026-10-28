@@ -217,9 +217,9 @@ class QuickOptimizeConfig:
     # v7 (2026-10-05, workstream D): budget raised 16x8 -> 32x12 to match the
     # web Quick Optimize route/template defaults. Non-trivial budget is part
     # of the "actually optimizes" bar.
-    ga_population: int = 32
-    ga_generations: int = 12
-    fitness_metric: str = "eval_pass_probability"
+    ga_population: int = 40
+    ga_generations: int = 14
+    fitness_metric: str = "pass_gradient"
     # UPGRADE (optimizer core): explicit optimizer mode -- "genetic"
     # (default, byte-identical to every run before this field existed),
     # or the optional TPE/CMA-ES samplers (see
@@ -1089,11 +1089,29 @@ def run_quick_optimize(
     # hidden.
     baseline_per_attempt = float(baseline_mc.per_attempt_pass_probability or 0.0)
     final_per_attempt = float(final_mc.per_attempt_pass_probability or 0.0)
+    # 2026-10-28: when per-attempt pass odds are tied (typically both ~0% for a
+    # strategy that is not close to passing yet) a candidate that is
+    # genuinely better on the edge itself -- more profit, better Sharpe and
+    # profit factor, on a credible trade count -- IS an improvement. Before,
+    # such a candidate was thrown away and the user was told "no better
+    # settings found". The READY gate below is untouched: this only decides
+    # whether the settings are worth keeping, never whether they are READY.
+    def _edge_better(a, b) -> bool:
+        try:
+            return (a.net_profit > b.net_profit and a.sharpe_ratio > b.sharpe_ratio
+                    and a.profit_factor >= b.profit_factor)
+        except Exception:  # noqa: BLE001
+            return False
+
     improved = (
         final_per_attempt > baseline_per_attempt
         or (
             final_per_attempt == baseline_per_attempt
-            and final_bt.statistics.win_rate > baseline_bt.statistics.win_rate
+            and (
+                final_bt.statistics.win_rate > baseline_bt.statistics.win_rate
+                or (mutated_by_ga and len(final_bt.trades) >= cfg.ready_gate_min_trades
+                    and _edge_better(final_bt.statistics, baseline_bt.statistics))
+            )
         )
     )
 
