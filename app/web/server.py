@@ -866,7 +866,7 @@ def activate_form():
     state = license_client.load_state()
     return render_template(
         "activate.html", next=_post_activation_target(request.args.get("next")),
-        error=None, email=state.email,
+        error=None, email=state.email, needs_url=not license_client.check_license_server_configured()[0],
     )
 
 
@@ -878,12 +878,18 @@ def activate_submit():
     email = request.form.get("email", "")
     license_key = request.form.get("license_key", "")
     remember = request.form.get("remember") == "1"
+    sheet_url = (request.form.get("sheet_url") or "").strip()
+    if sheet_url and not license_client.check_license_server_configured()[0]:
+        saved, save_msg = license_client.save_sheet_url(sheet_url)
+        if not saved:
+            return render_template("activate.html", next=next_path, error=save_msg, email=email, needs_url=True), 400
     ok, message = license_client.activate(email, license_key, remember=remember)
     if ok:
         _license_ok_cached = True
         _new_login_id()          # a new login: the morning briefing may pop open once
         return redirect(next_path)
-    return render_template("activate.html", next=next_path, error=message, email=email), 401
+    return render_template("activate.html", next=next_path, error=message, email=email,
+                           needs_url=not license_client.check_license_server_configured()[0]), 401
 
 
 # Paths the account lock gate below never blocks, even when a password is
@@ -1999,20 +2005,39 @@ def _job_row(job: dict, now: float) -> dict:
 
 @app.route("/api/running-jobs.json")
 def api_running_jobs():
-    """Jobs still running, for the Runs page -- so a user who clicked Back
-    (or switched pages) mid-run can get straight back into a live job page instead of wondering whether it's gone.
-    Only jobs that recorded a page_url at create() time are listed. ``recent`` carries the last few finished runs (last 6 h,
-    the same window the job feed is pruned on) so a run that just finished can still be opened."""
+    """Jobs still running plus EVERY finished run on record, for the Runs page.
+
+    Live jobs come from memory; finished ones are merged with the saved job history (data/job_history.json) so runs
+    survive a restart and the 6-hour in-memory prune. A saved job that was never marked finished and is no longer in
+    memory was interrupted by the app closing, and is shown as such."""
     import time as _time
+    from app.web.job_manager import load_job_history
 
     now = _time.time()
-    running, recent = [], []
-    for job in JOB_MANAGER.list_jobs(limit=80):
+    running, recent, seen = [], [], set()
+    for job in JOB_MANAGER.list_jobs(limit=200):
         if not job.get("page_url"):
             continue
         row = _job_row(job, now)
+        row["saved_only"] = False
+        row["report_html"] = job.get("report_html") if isinstance(job.get("report_html"), str) else None
+        seen.add(row["job_id"])
         (recent if row["done"] else running).append(row)
-    return jsonify({"running": running, "recent": recent[:12], "server_time": now})
+    for rec in load_job_history():
+        if rec["job_id"] in seen:
+            continue
+        started, finished = rec.get("started_at"), rec.get("finished_at")
+        done = bool(rec.get("done"))
+        err = rec.get("error") or (None if done else "Interrupted -- the app was closed before this run finished.")
+        recent.append({
+            "job_id": rec["job_id"], "tool": rec.get("tool") or "Job", "instrument": rec.get("instrument") or "",
+            "page_url": rec.get("page_url"), "report_html": rec.get("report_html"), "done": True,
+            "error": err, "started_at": started if isinstance(started, (int, float)) else None,
+            "elapsed_seconds": round(finished - started, 1) if isinstance(started, (int, float)) and isinstance(finished, (int, float)) else None,
+            "progress": None, "saved_only": True,
+        })
+    recent.sort(key=lambda r: r.get("started_at") or 0.0, reverse=True)
+    return jsonify({"running": running, "recent": recent[:300], "server_time": now})
 
 
 @app.route("/api/memory")
@@ -2638,9 +2663,9 @@ def _run_optimize_simple_job(job_id: str, df, strategy, risk, rules, engines, fo
                     res = run_quick_optimize(
                         df, strategy, risk, rules,
                         QuickOptimizeConfig(
-                            ga_population=int(form.get("ga_population", 16) or 16),
-                            ga_generations=int(form.get("ga_generations", 6) or 6),
-                            fitness_metric=form.get("fitness_metric", "eval_pass_probability") or "eval_pass_probability",
+                            ga_population=max(int(form.get("ga_population", 40) or 40), 40),
+                            ga_generations=max(int(form.get("ga_generations", 14) or 14), 14),
+                            fitness_metric=form.get("fitness_metric", "pass_gradient") or "pass_gradient",
                             # One strategy, one record: a library strategy is
                             # updated in place (never overwritten by a result
                             # that did not improve it); a copy only on request.
@@ -2713,7 +2738,7 @@ def optimize_simple_form():
 #   "Risk size" = Risk Sweep over risk-per-trade against the prop rules
 # The goal decides which engine(s) run and what the settings GA is scored on. The older engines keep their own pages.
 OPTIMIZE_GOALS = {
-    "eval":   {"title": "Pass the evaluation", "engines": ["quick_optimize", "risk_sweep"], "metric": "eval_pass_probability",
+    "eval":   {"title": "Pass the evaluation", "engines": ["quick_optimize", "risk_sweep"], "metric": "pass_gradient",
                "desc": "Tunes settings for the highest chance of hitting the profit target before a loss limit, then right-sizes risk."},
     "payout": {"title": "Get to a payout faster", "engines": ["quick_optimize", "risk_sweep"], "metric": "payout_30d",
                "desc": "Scores settings on reaching a first payout inside 30 days from a fresh account."},
@@ -3951,6 +3976,26 @@ def delete_saved_strategy_route():
         delete_saved_strategy(strategy_type, filename)
     except (ValueError, FileNotFoundError) as exc:
         notice = str(exc)
+    return redirect(url_for(_redirect_target(request.form), strategy_notice=notice))
+
+
+@app.route("/strategies/retire", methods=["POST"])
+def retire_saved_strategy_route():
+    """Retire ONE library strategy to the Strategy Graveyard (keeps a recoverable copy, records why)."""
+    from app.strategy.retire import retire_to_graveyard
+    strategy_type = request.form.get("strategy_type", "")
+    filename = request.form.get("filename", "")
+    reason = request.form.get("reason", "")
+    wants_json = request.headers.get("X-Requested-With") == "fetch" or request.accept_mimetypes.best == "application/json"
+    try:
+        out = retire_to_graveyard(strategy_type, filename, reason)
+        notice = f"Retired '{filename}' to the Strategy Graveyard. A copy of its source is kept in case you change your mind."
+        if wants_json:
+            return jsonify({"ok": True, "notice": notice, **out})
+    except (ValueError, FileNotFoundError) as exc:
+        notice = str(exc)
+        if wants_json:
+            return jsonify({"ok": False, "error": notice}), 400
     return redirect(url_for(_redirect_target(request.form), strategy_notice=notice))
 
 

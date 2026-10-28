@@ -95,9 +95,53 @@ def _slug(text: str) -> str:
     return _re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")[:80] or "item"
 
 
+_RESEARCH_SEEDED = False
+
+
+def _seed_research(dest: _Path) -> None:
+    """Copy the research papers shipped with the app into the folder the Library reads, without overwriting anything.
+
+    A packaged build keeps its papers inside the bundle (sys._MEIPASS/research) or next to the executable's release
+    folder; the Library reads <app data folder>/research, so on a customer's machine it came up with 0 papers.
+    Files the person added or changed are never overwritten. Runs at most once per process."""
+    global _RESEARCH_SEEDED
+    if _RESEARCH_SEEDED:
+        return
+    _RESEARCH_SEEDED = True
+    try:
+        if any(dest.rglob("*.pdf")):          # already stocked (or deliberately curated): leave it alone
+            return
+    except OSError:
+        pass
+    import shutil
+    import sys
+    sources: list[_Path] = []
+    mei = getattr(sys, "_MEIPASS", None)
+    if mei:
+        sources.append(_Path(mei) / "research")
+    sources.append(_Path(__file__).resolve().parents[2] / "research")
+    if getattr(sys, "frozen", False):
+        sources.append(_Path(sys.executable).resolve().parent / "research")
+    for src in sources:
+        try:
+            if not src.is_dir() or src.resolve() == dest.resolve():
+                continue
+            for f in src.rglob("*"):
+                if not f.is_file():
+                    continue
+                target = dest / f.relative_to(src)
+                if target.exists():
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, target)
+        except OSError:
+            continue
+
+
 def _research_dir() -> _Path:
     d = _base_dir() / "research"
     d.mkdir(parents=True, exist_ok=True)
+    _seed_research(d)
     return d
 
 

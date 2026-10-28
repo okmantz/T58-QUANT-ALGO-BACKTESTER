@@ -70,9 +70,12 @@ app.orchestration.projects / app.web.project_routes):
 """
 from __future__ import annotations
 
+import json
+import os
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from app.orchestration.run_progress import ProgressTracker
@@ -84,6 +87,71 @@ from app.orchestration.run_progress import ProgressTracker
 # count of lines dropped from the front is kept in job["log_dropped"] so a
 # poller that tracks "lines seen" can still compute its offset.
 MAX_JOB_LOG_LINES = 5000
+
+
+# 2026-10-28: the Runs page used to read only the in-memory job dict, which is pruned after 6 hours and lost on every
+# restart -- so a person who had run 7 things saw 2. Every job's start/finish is now also appended to a small JSON file
+# (the most recent MAX_JOB_HISTORY records) that survives restarts; the Runs page merges it with the live jobs.
+MAX_JOB_HISTORY = 500
+_HISTORY_LOCK = threading.Lock()
+
+
+def job_history_path() -> Path:
+    override = os.environ.get("T58_JOB_HISTORY_PATH")
+    if override:
+        return Path(override)
+    from app.data.storage import get_app_base_dir
+    return get_app_base_dir() / "data" / "job_history.json"
+
+
+def _history_enabled() -> bool:
+    # tests must never write into a real user's history unless they point T58_JOB_HISTORY_PATH at a temp file
+    return bool(os.environ.get("T58_JOB_HISTORY_PATH")) or not os.environ.get("PYTEST_CURRENT_TEST")
+
+
+def load_job_history() -> list[dict[str, Any]]:
+    try:
+        with open(job_history_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return [r for r in data if isinstance(r, dict) and r.get("job_id")] if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _history_record(job_id: str, job: dict[str, Any]) -> dict[str, Any]:
+    err = job.get("error")
+    return {
+        "job_id": job_id,
+        "tool": job.get("tool") or "Job",
+        "instrument": job.get("instrument") or "",
+        "page_url": job.get("page_url"),
+        "report_html": job.get("report_html") if isinstance(job.get("report_html"), str) else None,
+        "started_at": job.get("started_at"),
+        "finished_at": job.get("finished_at"),
+        "done": bool(job.get("done")),
+        "cancelled": bool(job.get("cancelled")),
+        "error": (str(err)[:300] if err else None),
+    }
+
+
+def _history_upsert(job_id: str, job: dict[str, Any]) -> None:
+    """Best-effort and never raises: a history write must not break a real run."""
+    if not _history_enabled() or not job.get("page_url"):
+        return
+    try:
+        rec = _history_record(job_id, job)
+        with _HISTORY_LOCK:
+            path = job_history_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            rows = [r for r in load_job_history() if r.get("job_id") != job_id]
+            rows.append(rec)
+            rows = rows[-MAX_JOB_HISTORY:]
+            tmp = path.with_suffix(".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(rows, f)
+            tmp.replace(path)
+    except Exception:
+        pass
 
 
 class JobManager:
@@ -218,6 +286,7 @@ class JobManager:
                 pass  # a broken getter must never break job creation itself
         with self._lock:
             self._jobs[job_id] = job
+        _history_upsert(job_id, job)
         return job_id
 
     def get(self, job_id: str) -> Optional[dict[str, Any]]:
@@ -258,12 +327,19 @@ class JobManager:
         ambiguous."""
         self.update(job_id, **{"finished_at": time.time(), **fields, "done": True})
         self._freeze_tracker(job_id)
+        self._persist(job_id)
 
     def fail(self, job_id: str, error: str) -> None:
         """update() plus done=True, error=<message> -- the single call
         every job runner's except-block should end on."""
         self.update(job_id, finished_at=time.time(), done=True, error=error)
         self._freeze_tracker(job_id)
+        self._persist(job_id)
+
+    def _persist(self, job_id: str) -> None:
+        job = self.get(job_id)
+        if job is not None:
+            _history_upsert(job_id, job)
 
     def _freeze_tracker(self, job_id: str) -> None:
         with self._lock:

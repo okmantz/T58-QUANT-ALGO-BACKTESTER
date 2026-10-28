@@ -27,9 +27,9 @@ JOB_DISCOVERY_ENGINE = "Strategy Discovery Engine"
 
 # How thoroughly to look -> (engine preset, headline). Plain words on the page; the preset names stay internal.
 EFFORT = {
-    "quick": ("lab", "Quick look", "About 400 ideas in under a minute. Good for a first pass."),
-    "standard": ("lab", "Standard search", "About 2,500 ideas across 18 strategy types, each checked on data it never trained on."),
-    "deep": ("lab", "Deep search", "Up to 9,000 ideas with every stop/target variant. Takes a few minutes."),
+    "quick": ("lab", "Quick look", "2,500+ ideas across 29 strategy types, in well under a minute. Good for a first pass."),
+    "standard": ("lab", "Standard search", "5,000+ ideas, evolved and refined, each checked on data it never trained on and then proven in the real backtester."),
+    "deep": ("lab", "Deep search", "10,000+ ideas with the widest stop, target, filter and hold-time variants. Takes a few minutes."),
 }
 # "Deep statistical gauntlet": the original multi-lab engine (slow, very strict). Reachable from Advanced options.
 GAUNTLET = {"quick": "speed_run", "standard": "search_lab", "deep": "forge"}
@@ -220,9 +220,9 @@ def start():
     df = res.dataframe
     is_lab = (form.get("method") or "").strip() in ("", "lab")
     try:
-        max_bars = int(form.get("max_bars") or (400000 if is_lab else 60000))
+        max_bars = int(form.get("max_bars") or (0 if is_lab else 60000))
     except ValueError:
-        max_bars = 400000 if is_lab else 60000
+        max_bars = 0 if is_lab else 60000
     if max_bars > 0 and len(df) > max_bars:
         df = df.tail(max_bars).reset_index(drop=True)
     if len(df) < 500:
@@ -338,8 +338,9 @@ def _bury_near_misses(res, label, minutes, risk_pct):
             oos_result="negative" if (te.get("mean") or 0) <= 0 else "positive", neighbor_robustness_pct=round((c.get("robust") or 0) * 100, 0),
             fitness_score=round((c.get("train") or {}).get("t", 0) / 10.0, 3),
             param_signature="lab_" + c["family"] + "|" + ",".join(f"{k}={float(v)}" for k, v in sorted(c["params"].items()) if isinstance(v, (int, float)))
-                            + f",stop_atr={c['stop_atr']},target_r={c['target_r']}",
-            notes=["lab: " + json.dumps({"dataset": ds, "bar_minutes": minutes, "family": c["family"], "params": c["params"], "stop_atr": c["stop_atr"],
+                            + f",stop_atr={c['stop_atr']},target_r={c['target_r']},hold={c.get('hold')},flt={json.dumps(c.get('flt') or {}, sort_keys=True)},bars={c.get('bar_minutes')}",
+            notes=["lab: " + json.dumps({"dataset": ds, "bar_minutes": c.get("bar_minutes") or minutes, "family": c["family"], "params": c["params"],
+                                         "flt": c.get("flt") or {}, "hold": c.get("hold"), "stop_atr": c["stop_atr"],
                                          "target_r": c["target_r"], "risk_pct": risk_pct}),
                    f"Found by the Discovery Lab; sealed test {te.get('mean')}R over {te.get('n')} trades."],
             primary_failure=("out-of-sample collapse" if "lost money" in pf else ("too few trades" if "too few" in pf else
@@ -366,19 +367,23 @@ def _run_lab_job(job_id, df, risk, rules, label, effort, risk_pct, balance, seed
 
     try:
         from app.discovery_lab import LabConfig, run_lab
-        from app.discovery_lab.engine import pick_bar_size
+        from app.discovery_lab.engine import native_minutes, plan_bar_sizes
+        from app.discovery_lab.verify import make_verifier
         JOB_MANAGER.log(job_id, "Measuring trading costs against typical price movement...")
-        cost = cost_for(df)
-        minutes = None
         if bar_size == "native":
-            d, note = df, None
+            frames, plan_notes = [(int(round(native_minutes(df))), df, cost_for(df))], []
         else:
-            d, minutes, note = pick_bar_size(df, cost)
-            cost = cost_for(d)
-        if note:
-            JOB_MANAGER.log(job_id, note)
+            frames, plan_notes = plan_bar_sizes(df, cost_for)
+        for n_ in plan_notes:
+            JOB_MANAGER.log(job_id, n_)
+        sizes_txt = ", ".join(f"{m}-minute ({len(f):,} bars)" for m, f, _ in frames)
+        note = f"Searching these bar sizes: {sizes_txt}."
+        minutes = frames[-1][0]
+        d, cost = frames[-1][1], frames[-1][2]
+        JOB_MANAGER.log(job_id, note)
         JOB_MANAGER.update(job_id, bar_minutes=minutes)
-        JOB_MANAGER.log(job_id, f"Searching 18 strategy types on {len(d):,} bars: train on the first 55%, validate on the next 25%, keep the last 20% sealed.")
+        JOB_MANAGER.log(job_id, "Searching 29 strategy types with random search, evolution and refinement: train on the first 60%, validate on the next 20%, keep the last 20% sealed. "
+                                "Every finalist is then re-run in the real backtester, including the lookahead test.")
         last = {"phase": None}
 
         def on_event(ev):
@@ -387,11 +392,53 @@ def _run_lab_job(job_id, df, risk, rules, label, effort, risk_pct, balance, seed
                 last["phase"] = ev["phase"]
                 JOB_MANAGER.log(job_id, {"validate": f"{ev.get('train_pass', 0):,} ideas looked good on training data -- checking them on fresh data...",
                                          "verify": f"{ev.get('val_pass', 0)} held up -- now stress-testing neighbours, the sealed slice and double costs...",
+                                         "prove": "Re-running the finalists in the real backtester, including the lookahead test...",
                                          }.get(ev["phase"], "") or "")
 
         cfg = LabConfig(effort=effort, seed=seed, risk_pct=risk_pct, balance=balance,
-                        max_dd_limit_pct=float(getattr(rules, "max_drawdown_pct", 10.0) or 10.0))
-        res = run_lab(d, cost, cfg, progress=on_event, cancel=cancel)
+                        max_dd_limit_pct=float(getattr(rules, "max_drawdown_pct", 10.0) or 10.0),
+                        profit_target_pct=float(getattr(rules, "evaluation_profit_target_pct", 8.0) or 8.0),
+                        trailing_dd=str(getattr(rules, "drawdown_type", "trailing")) == "trailing")
+        verifier = None
+        try:
+            verifier = make_verifier(df, {m: f for m, f, _ in frames}, risk, _symbol_for(label))
+        except Exception as exc:  # noqa: BLE001 -- without it winners are unproven leads, and the page says so
+            JOB_MANAGER.log(job_id, f"Couldn't set up the real-engine check ({exc}); results are not proven.")
+            cfg.prove_in_engine = False
+        try:
+            res = run_lab(d, cost, cfg, progress=on_event, cancel=cancel, frames=frames, verify=verifier)
+            # Nothing proven? Keep hunting with fresh random starts (standard: up to 2 more rounds, deep: up to 3). Every extra round is more
+            # ideas tried, so winners found in a later round are never labelled "strong" -- the more you look, the more luck you must rule out.
+            extra_rounds = {"standard": 2, "deep": 3}.get(effort, 0)
+            rounds = 0
+            while not res.winners and rounds < extra_rounds and not cancel.is_set():
+                rounds += 1
+                JOB_MANAGER.log(job_id, f"Nothing cleared every check yet ({res.tested:,} ideas tried) -- starting search round {rounds + 1} from fresh random starts...")
+                more = run_lab(d, cost, LabConfig(**{**cfg.__dict__, "seed": seed + 101 * rounds}), progress=on_event, cancel=cancel,
+                               frames=frames, verify=verifier)
+                tested_before = res.tested
+                if more.winners:
+                    for w_ in more.winners:
+                        if w_.get("confidence") == "strong":
+                            w_["confidence"] = "plausible"
+                        w_["fails"] = list(w_.get("fails") or [])
+                    more.notes.append(f"Found in search round {rounds + 1}, after {tested_before:,} earlier ideas also came up empty, so treat it as a lead and not a verdict.")
+                known = {(x["family"], str(x["params"])) for x in more.near_misses + more.winners}
+                more.near_misses = more.winners[:0] + more.near_misses + [x for x in res.near_misses if (x["family"], str(x["params"])) not in known]
+                more.near_misses = more.near_misses[:8]
+                more.tested += tested_before
+                more.train_pass += res.train_pass
+                more.val_pass += res.val_pass
+                more.expected_by_luck += res.expected_by_luck
+                more.elapsed += res.elapsed
+                more.proven += res.proven
+                res = more
+        finally:
+            if verifier is not None:
+                try:
+                    verifier.cleanup()
+                except Exception:  # noqa: BLE001
+                    pass
         out = res.to_dict()
         out["bar_note"] = note
         out["bar_minutes"] = minutes
@@ -486,7 +533,7 @@ def _save_lab(job, lab, n):
     c = rows[n]
     inst = str(job.get("instrument", "")).split("/")[-1].replace(".csv", "")
     base = safe_filename_stem(f"{_family_title(c['family'])} {inst} lab {c['id'][-4:]}", "lab_strategy")
-    text = render(c, inst, int(lab.get("bar_minutes") or 0) or 0, base)
+    text = render(c, inst, int(c.get("bar_minutes") or lab.get("bar_minutes") or 0) or 0, base)
     for k in range(0, 50):
         fn = f"{base}{'' if k == 0 else '_' + str(k + 1)}.py"
         try:
