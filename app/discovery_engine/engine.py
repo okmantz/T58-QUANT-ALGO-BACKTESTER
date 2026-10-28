@@ -54,6 +54,7 @@ class EngineRequest:
     promotion: PromotionConfig | None = None
     max_promote: int | None = None
     max_candidates: int | None = None            # override the preset's candidate budget
+    use_memory: bool = True                      # searched-variant ledger: skip known variants, breed from past leaders, record this run
     register_retests: bool = True                # record champions / near-misses for the automatic out-of-sample retest
     promote: bool = True
     progress_cb: Callable | None = None
@@ -218,6 +219,16 @@ class DiscoveryEngine:
         result = EngineResult(run_id=run_id, preset=preset.name, backend=preset.backend, objective=obj.EDGE_OBJECTIVE, families_run=families,
                               gated_out=gated, n_evaluations=int(out.evaluations), trial_inputs=ti.to_dict(), champions=champs, promotions=promotions,
                               provenance=run_prov, notes=notes, elapsed_seconds=time.time() - t0, native=out.native)
+        led, scope = _engine_ledger(req)
+        if led is not None and out.champions:
+            try:
+                from app.search.ledger_search import engine_key
+                for c, pr in zip(champs, promotions):
+                    if c.get("candidate_id") and c.get("family"):
+                        led.mark(scope, engine_key(req.timeframe, c["family"], c["candidate_id"]), "winner" if (pr or {}).get("passed") else "near_miss")
+                led.flush()
+            except Exception:  # noqa: BLE001
+                pass
         if req.register_retests:
             try:                                    # champions and near-misses are re-tested on newer data later; the lab is ranked by that record
                 from app.discovery_engine.retest import register_run
@@ -269,17 +280,71 @@ def _work_dir(req: EngineRequest) -> Path:
     return d
 
 
+def _engine_ledger(req: EngineRequest):
+    """(ledger, scope) when the request wants search memory and it can be opened, else (None, '')."""
+    if not getattr(req, "use_memory", True):
+        return None, ""
+    try:
+        from app.search.ledger_search import scope_for
+        from app.search.variant_ledger import get_ledger
+        return get_ledger(), scope_for(req.instrument)
+    except Exception:  # noqa: BLE001 -- memory is a bonus
+        return None, ""
+
+
 def _search_backend(req: EngineRequest, preset: Preset, families: list, df) -> BackendOutput:
     from app.search.batch_runner import SearchStageConfig, run_search
     from app.search.strategy_space import generate_search_space
     wd = _work_dir(req)
-    space = generate_search_space(mode="family", family="all", only_families=list(families), max_candidates=int(req.max_candidates or preset.max_candidates),
-                                  seed=req.seed, has_pair_data=bool(req.overrides.get("has_pair_data")),
+    want = int(req.max_candidates or preset.max_candidates)
+    led, scope = _engine_ledger(req)
+    notes: list = []
+    seed = req.seed
+    draw = want
+    if led is not None:
+        led.begin_run(source="engine:" + preset.name, scope=scope, effort=preset.name, seed=req.seed)
+        # a different sample every run (same seed + same grid would re-draw the same strategies), over-drawn so known variants can be dropped
+        seed = int(req.seed) + 7919 * led.run_count(scope)
+        draw = min(want * 4, want + 20000)
+    space = generate_search_space(mode="family", family="all", only_families=list(families), max_candidates=draw,
+                                  seed=seed, has_pair_data=bool(req.overrides.get("has_pair_data")),
                                   has_calendar_data=bool(req.overrides.get("has_calendar_data")))
+    if led is not None:
+        try:
+            from app.search.ledger_search import fresh_space
+            info = fresh_space(space, led, scope, req.timeframe, want)
+        except Exception as exc:  # noqa: BLE001
+            led.finish_run()
+            raise
+        if not space.candidates:
+            led.finish_run()
+            raise ValueError(f"Every variant these strategy types can produce on {scope} has already been searched ({led.count_known(scope):,} on record). "
+                             "Pick other strategy types, or tick 'Start fresh' to repeat the search.")
+        notes.append(f"Search memory: skipped {info['skipped_known']:,} variants already tested on {scope}"
+                     + (f"; added {info['warm_neighbours']} neighbours of the best past variants" if info["warm_neighbours"] else "")
+                     + f"; testing {info['kept']:,} new ones.")
     cfg = apply_overrides(SearchStageConfig(random_seed=req.seed), preset, {k: v for k, v in req.overrides.items() if not k.startswith("has_")})
-    summary = run_search(df, req.risk, req.prop_rules, space, cfg, db_path=str(wd / "search.db"), instrument=req.instrument,
-                         timeframe=req.timeframe, progress_cb=req.progress_cb, cancel_event=req.cancel_event)
-    return BackendOutput(native=summary, champions=_champions_from_db(wd / "search.db", summary.run_id), evaluations=int(summary.total_candidates))
+    try:
+        summary = run_search(df, req.risk, req.prop_rules, space, cfg, db_path=str(wd / "search.db"), instrument=req.instrument,
+                             timeframe=req.timeframe, progress_cb=req.progress_cb, cancel_event=req.cancel_event)
+    finally:
+        if led is not None:
+            try:
+                from app.search.ledger_search import record_outcomes
+                rid = None
+                try:
+                    from app.search.results_db import ResultsDB
+                    with ResultsDB(wd / "search.db") as _db:
+                        runs = _db.list_runs(limit=1)
+                        rid = runs[0]["run_id"] if runs else None
+                except Exception:  # noqa: BLE001
+                    rid = None
+                n = record_outcomes(led, scope, req.timeframe, wd / "search.db", rid, space) if rid else 0
+                led.finish_run(tested=n)
+            except Exception:  # noqa: BLE001
+                pass
+    return BackendOutput(native=summary, champions=_champions_from_db(wd / "search.db", summary.run_id), evaluations=int(summary.total_candidates),
+                         notes=notes)
 
 
 def _champions_from_db(db_path, run_id, top_n: int = 25) -> list:
