@@ -100,5 +100,5 @@ def test_verdict_cap_advisory_off_and_not_tested():
     assert 'NO CROSS-INSTRUMENT TRANSFER' in src and 'transfer_mode: str = "cap"' in src
     # behavioural check of the verdict branch through the wrapper's own helper signature
     import inspect
-    sig = inspect.signature(fp._make_verdict)
+    sig = inspect.signature(fp._make_verdict_inner)
     assert "transfer" in sig.parameters and "transfer_mode" in sig.parameters

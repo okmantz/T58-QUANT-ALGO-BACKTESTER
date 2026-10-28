@@ -14,8 +14,9 @@ def client(tmp_path, monkeypatch):
     (base / "reports").mkdir(parents=True)
     (base / "reports" / "a.json").write_text("{}")
     monkeypatch.setattr(vault, "_base", lambda: base)
-    monkeypatch.setattr(vault, "_credentials", lambda: ("", "", ""))
-    monkeypatch.setattr(vault, "account_email", lambda: "")
+    # v10: nothing is filed until someone has signed in (the license key is the vault's identity)
+    monkeypatch.setattr(vault, "_credentials", lambda: ("owen@example.com", "T58-KEY", "dev1"))
+    monkeypatch.setattr(vault, "account_email", lambda: "owen@example.com")
     from app.web import server
     server._license_ok_cached = True
     server.app.config["TESTING"] = True

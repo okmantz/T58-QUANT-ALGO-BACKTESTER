@@ -82,6 +82,7 @@ def test_accounts_are_separate(env, monkeypatch):
     _seed(cur["base"])
     vault.backup_local()
     monkeypatch.setattr(vault, "account_email", lambda: "someone@else.com")
+    monkeypatch.setattr(vault, "_credentials", lambda: ("someone@else.com", "T58-OTHER", "dev1"))   # v10: the key is the identity
     assert vault.local_summary()["files"] == 0
 
 
@@ -161,3 +162,146 @@ def test_cloud_roundtrip_through_license_server(env, tmp_path, monkeypatch):
             sys.modules["db"] = saved_db
         else:
             sys.modules.pop("db", None)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# v10: master-key reinstall, profile files, sealed secrets
+# ---------------------------------------------------------------------------------------------------------------------
+def _seed_profile(base: Path):
+    (base / "account_settings.json").write_text('{"display_name": "Owen", "username": "owen", "password_hash": "pbkdf2$x"}')
+    (base / "data/config").mkdir(parents=True, exist_ok=True)
+    (base / "data/config/profile_picture.png").write_bytes(b"\x89PNG-pretend")
+    (base / "data/ui_prefs.json").write_text('{"t58-bg": "midnight-ocean", "t58-accent": "violet"}')
+    (base / "data/achievements.json").write_text('{"first_run": 1}')
+    (base / "data/run_history.json").write_text('[{"id": 1}, {"id": 2}]')
+
+
+def test_profile_files_and_run_history_survive_a_reinstall(env):
+    tmp, cur = env
+    _seed_profile(cur["base"])
+    vault.backup_local()
+    fresh = tmp / "install2"
+    fresh.mkdir()
+    cur["base"] = fresh
+    out = vault.restore_local()
+    assert out["restored"] >= 5
+    assert "Owen" in (fresh / "account_settings.json").read_text()
+    assert (fresh / "data/config/profile_picture.png").read_bytes() == b"\x89PNG-pretend"
+    assert "midnight-ocean" in (fresh / "data/ui_prefs.json").read_text()
+    assert (fresh / "data/run_history.json").exists()
+    assert (fresh / "data/achievements.json").exists()
+
+
+def test_vault_is_filed_by_license_key_so_a_master_key_with_a_new_email_still_finds_it(env, monkeypatch):
+    tmp, cur = env
+    _seed_profile(cur["base"])
+    vault.backup_local()
+    fresh = tmp / "install2"
+    fresh.mkdir()
+    cur["base"] = fresh
+    # same key, but the person typed a different email this time
+    monkeypatch.setattr(vault, "_credentials", lambda: ("other@example.com", "T58-AAAA", "dev9"))
+    monkeypatch.setattr(vault, "account_email", lambda: "other@example.com")
+    assert vault.restore_local()["restored"] >= 5
+    # a DIFFERENT key never sees this vault
+    other = tmp / "install3"
+    other.mkdir()
+    cur["base"] = other
+    monkeypatch.setattr(vault, "_credentials", lambda: ("x@example.com", "T58-ZZZZ", "dev9"))
+    monkeypatch.setattr(vault, "account_email", lambda: "x@example.com")
+    assert vault.restore_local()["restored"] == 0
+
+
+def test_legacy_email_keyed_vault_is_still_found(env, monkeypatch):
+    tmp, cur = env
+    _seed_profile(cur["base"])
+    legacy = vault.vault_root() / vault._email_id("owen@example.com") / "files"
+    (legacy / "data").mkdir(parents=True)
+    (legacy / "data/run_history.json").write_text('[{"id": 1}]')
+    fresh = tmp / "install2"
+    fresh.mkdir()
+    cur["base"] = fresh
+    assert vault.restore_local()["restored"] == 1
+    assert (fresh / "data/run_history.json").exists()
+
+
+def test_nothing_is_filed_before_sign_in(env, monkeypatch):
+    tmp, cur = env
+    _seed_profile(cur["base"])
+    monkeypatch.setattr(vault, "_credentials", lambda: ("", "", ""))
+    monkeypatch.setattr(vault, "account_email", lambda: "")
+    assert vault.backup_local()["files"] == 0
+    assert not (vault.vault_root() / "anonymous").exists()
+    assert vault.on_startup() == {"waiting_for_sign_in": True}
+
+
+def test_sealed_secrets_roundtrip_and_wrong_key_fails():
+    blob = vault.seal(b'{"api_keys": {"fred_api_key": "abc"}}', "T58-AAAA")
+    assert b"fred_api_key" not in blob and b"abc" not in blob
+    assert vault.unseal(blob, "T58-AAAA") == b'{"api_keys": {"fred_api_key": "abc"}}'
+    assert vault.unseal(blob, "T58-BBBB") is None
+    assert vault.unseal(blob[:-1] + bytes([blob[-1] ^ 1]), "T58-AAAA") is None     # tampered
+    assert vault.unseal(b"garbage", "T58-AAAA") is None
+
+
+def test_api_keys_are_sealed_not_plain_and_restore_only_into_blank_fields(env, monkeypatch, tmp_path):
+    tmp, cur = env
+    from app.accounts import api_keys as ak
+    monkeypatch.setattr(ak, "_config_dir", lambda: cur["base"] / "data" / "config")
+    monkeypatch.setattr(ak, "_try_keyring", lambda: None)
+    (cur["base"] / "data/config").mkdir(parents=True, exist_ok=True)
+    ak.save_settings(ak.ApiKeysSettings(fred_api_key="FRED-123", openai_api_key="OPENAI-456"))
+    vault.backup_local()
+    for p in vault.account_dir().rglob("*"):
+        if p.is_file():
+            assert b"FRED-123" not in p.read_bytes() and b"OPENAI-456" not in p.read_bytes()
+    assert (vault.account_dir() / vault.SECRETS_NAME).is_file()
+
+    fresh = tmp / "install2"
+    (fresh / "data/config").mkdir(parents=True)
+    cur["base"] = fresh
+    monkeypatch.setattr(ak, "_config_dir", lambda: fresh / "data" / "config")
+    assert ak.load_settings().fred_api_key == ""
+    out = vault.restore_local()
+    assert "api_keys" in out["secrets"]
+    got = ak.load_settings()
+    assert got.fred_api_key == "FRED-123" and got.openai_api_key == "OPENAI-456"
+    # a value the person already set on the new install is never overwritten
+    ak.save_settings(ak.ApiKeysSettings(fred_api_key="NEWER", openai_api_key="OPENAI-456"))
+    vault.restore_local()
+    assert ak.load_settings().fred_api_key == "NEWER"
+
+
+def test_zip_carries_sealed_secrets_and_restores_them(env, monkeypatch):
+    tmp, cur = env
+    from app.accounts import api_keys as ak
+    monkeypatch.setattr(ak, "_config_dir", lambda: cur["base"] / "data" / "config")
+    monkeypatch.setattr(ak, "_try_keyring", lambda: None)
+    (cur["base"] / "data/config").mkdir(parents=True, exist_ok=True)
+    ak.save_settings(ak.ApiKeysSettings(claude_api_key="CLAUDE-789"))
+    _seed_profile(cur["base"])
+    buf, _ = vault.build_zip()
+    raw = buf.getvalue()
+    assert b"CLAUDE-789" not in raw
+    fresh = tmp / "install2"
+    (fresh / "data/config").mkdir(parents=True)
+    cur["base"] = fresh
+    monkeypatch.setattr(ak, "_config_dir", lambda: fresh / "data" / "config")
+    res = vault.restore_zip(io.BytesIO(raw))
+    assert res["ok"] and "api_keys" in res["secrets"]
+    assert ak.load_settings().claude_api_key == "CLAUDE-789"
+
+
+def test_activate_with_the_master_key_triggers_the_restore(tmp_path, monkeypatch):
+    """The bug behind 'I reinstalled and nothing saved': only the license-server path ever called on_activated()."""
+    from app.licensing import client
+    calls = []
+    monkeypatch.setattr(vault, "on_activated", lambda: calls.append(1))
+    monkeypatch.setattr(client, "_is_master_key", lambda k: True)
+    monkeypatch.setattr(client, "save_state", lambda st: None)
+    monkeypatch.setattr(client, "device_id", lambda: "dev")
+    ok, _msg = client.activate("owen@example.com", "ANYKEY")
+    assert ok and calls == [1]
+    calls.clear()
+    ok, _ = client.activate("", "")
+    assert not ok and calls == []

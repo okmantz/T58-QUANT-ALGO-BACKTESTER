@@ -255,13 +255,13 @@ def test_count_all_trials_includes_ga_inner_loop():
 
 
 def test_dsr_gate_rejects_overfit_champion():
-    # A modest Sharpe selected from hundreds of trials: after deflation it
+    # A Sharpe of 0.2 per trade over 200 trades, selected from 500 trials: after deflation (null spread 1/sqrt(T-1), 2026-10-27 audit) it
     # is indistinguishable from the best-by-chance -> REJECT.
     import numpy as np
     rng = np.random.default_rng(7)
     trial_sharpes = list(rng.normal(0.0, 0.6, 500))
     gate = deflated_sharpe_gate(
-        observed_sharpe=0.9,
+        observed_sharpe=0.2,
         trial_sharpes=trial_sharpes,
         n_trials=count_all_trials(baseline_count=1, ga_total_evaluations=499),
         n_trade_returns=200,
@@ -291,7 +291,7 @@ def test_dsr_gate_failure_rejects_in_verdict():
     import numpy as np
     rng = np.random.default_rng(7)
     gate = deflated_sharpe_gate(
-        observed_sharpe=0.9,
+        observed_sharpe=0.2,
         trial_sharpes=list(rng.normal(0.0, 0.6, 500)),
         n_trials=500,
         n_trade_returns=200,
