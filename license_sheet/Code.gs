@@ -45,6 +45,20 @@ var MONO = 'Roboto Mono';
 function norm_(s) { return String(s == null ? '' : s).trim().toUpperCase(); }
 function lower_(s) { return String(s == null ? '' : s).trim().toLowerCase(); }
 
+// Emails are compared tolerantly: case, surrounding spaces, non-breaking/zero-width characters pasted from
+// email clients, a leading "mailto:", and cells holding several addresses (separated by , ; or whitespace).
+function cleanEmail_(s) {
+  return String(s == null ? '' : s).replace(/[\u00a0\u200b-\u200d\ufeff]/g, '').replace(/^mailto:/i, '').trim().toLowerCase();
+}
+
+function emailAllowed_(cell, email) {
+  var parts = String(cell == null ? '' : cell).split(/[,;\s]+/);
+  for (var k = 0; k < parts.length; k++) {
+    if (cleanEmail_(parts[k]) === email) return true;
+  }
+  return false;
+}
+
 function findRow_(rows, key) {
   var k = norm_(key);
   if (!k) return -1;
@@ -85,9 +99,9 @@ function evaluate_(rows, req, now) {
     return { res: { ok: false, error: 'expired' }, row: i, patch: null };
   }
 
-  var email = lower_(req.email);
-  var rowEmail = lower_(r[COL.EMAIL]);
-  if (rowEmail && email && rowEmail !== email) {
+  var email = cleanEmail_(req.email);
+  var rowEmail = cleanEmail_(r[COL.EMAIL]);
+  if (rowEmail && email && !emailAllowed_(r[COL.EMAIL], email)) {
     return { res: { ok: false, error: 'email_mismatch' }, row: i, patch: null };
   }
 

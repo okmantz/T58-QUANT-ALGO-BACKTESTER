@@ -69,3 +69,6 @@ the product description) or tell buyers their key comes from you, and send them 
 
 ## Plan in the app
 The app's Account page shows the PLAN column of this sheet for the activated key (Pro Monthly, Pro Annual, Lifetime, Trial, Complimentary) and users cannot change it. After editing `Code.gs`, redeploy: Deploy > Manage deployments > Edit > New version. The master key always shows Lifetime.
+
+## No URL baked into a build?
+If a build was made without the `T58_LICENSE_SHEET_URL` secret, the Activate window shows a **License connection (owner setup)** box. Paste the `/exec` URL there once; the app remembers it (`license_sheet_url.txt`). Email matching is forgiving (case, spaces, several addresses in one cell), but you must redeploy `Code.gs` as a **New version** after pulling this update.
