@@ -46,7 +46,8 @@
     <label style="font-size:12.5px;color:var(--text-muted);"><input type="checkbox" id="mem-ollama" checked> also unload the local Ollama model</label>
     <span id="mem-msg" style="font-size:12.5px;color:var(--text-muted);"></span>
   </div>
-  <p class="empty" style="padding:8px 0 0;">Closes idle worker processes, clears caches and finished-job logs, and returns freed memory to the OS. It is refused while a heavy job is running.
+  <div id="mem-report" style="margin-top:8px;"></div>
+  <p class="empty" style="padding:8px 0 0;">Closes idle worker processes, drops temporary caches, clears finished runs that are already saved, and returns freed memory to the OS. Your strategies, reports, datasets and search memory are never deleted, and runs whose results are not saved yet are kept. It is refused while a heavy job is running.
     If &ldquo;app memory&rdquo; keeps climbing while nothing is running, the page flags a possible leak.</p>
 </div>
 </div>
@@ -66,11 +67,25 @@
       line.textContent = t;
     }).catch(function () { line.textContent = 'Could not read memory status.'; });
   }
+  function showReport(d) {
+    var box = document.getElementById('mem-report'); box.textContent = '';
+    if (!d.ok) { msg.textContent = d.error || 'Could not free memory.'; return; }
+    msg.textContent = '';
+    function add(tag, text, style) { var e = document.createElement(tag); e.textContent = text; if (style) e.style.cssText = style; box.appendChild(e); return e; }
+    add('div', d.headline, 'font-weight:700;color:var(--teal);margin-bottom:4px;');
+    if (d.before && d.after && d.before.app_with_workers != null)
+      add('div', 'App memory (with workers): ' + mb(d.before.app_with_workers) + ' → ' + mb(d.after.app_with_workers) + ' · free RAM ' + mb(d.before.available) + ' → ' + mb(d.after.available), 'font-size:12.5px;color:var(--text-muted);');
+    var ul = add('ul', '', 'margin:6px 0 0 18px;padding:0;font-size:12.5px;');
+    (d.steps || []).forEach(function (t) { var li = document.createElement('li'); li.textContent = t; ul.appendChild(li); });
+    (d.kept || []).forEach(function (t) { var li = document.createElement('li'); li.textContent = '✔ ' + t; ul.appendChild(li); });
+    if (d.advice) add('div', d.advice, 'margin-top:6px;font-size:12.5px;color:var(--amber, #d9a400);');
+  }
   document.getElementById('mem-free').addEventListener('click', function () {
     var tok = card.getAttribute('data-csrf'); msg.textContent = 'Working…';
     fetch('/api/memory/free', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': tok },
       body: JSON.stringify({ unload_ollama: document.getElementById('mem-ollama').checked, _csrf_token: tok }) })
-      .then(function (r) { return r.json(); }).then(function (d) { msg.textContent = d.ok ? 'Done.' : d.error; refresh(); });
+      .then(function (r) { return r.json(); }).then(function (d) { showReport(d); refresh(); })
+      .catch(function () { msg.textContent = 'Could not reach the app.'; });
   });
   refresh(); setInterval(refresh, 15000);
 })();

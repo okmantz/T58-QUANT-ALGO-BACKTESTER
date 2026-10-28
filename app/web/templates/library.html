@@ -88,6 +88,33 @@
   .delete-btn { border: 1px solid var(--err-bd); background: transparent; color: var(--err-fg2); padding: 10px 16px; border-radius: 8px; font-size: 13px; cursor: pointer; }
   input[type=text], select, textarea { width: 100%; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 13px; margin-bottom: 8px; }
   .notice { background: rgba(var(--teal-rgb), 0.1); border: 1px solid var(--teal); color: var(--teal); padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; font-size: 13px; }
+  /* ---- Saved-results tabs ---- */
+  .dl-strip { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0 0; font-size: 12.5px; }
+  .dl-strip .dl-label { color: var(--t-faint); }
+  a.dl-btn, a.go-btn { display: inline-block; text-decoration: none; padding: 6px 11px; border-radius: 8px; border: 1px solid var(--teal); color: var(--teal); font-size: 12.5px; font-weight: 600; background: transparent; }
+  a.dl-btn:hover, a.go-btn:hover { background: var(--teal); color: var(--on-teal); }
+  a.dl-btn.off { opacity: .4; pointer-events: none; border-color: var(--border-light); color: var(--t-faint); }
+  a.go-btn.primary { background: var(--teal); color: var(--on-teal); }
+  .vbadge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; border: 1px solid var(--border-light); }
+  .vbadge.good { color: var(--teal); border-color: var(--teal); }
+  .vbadge.warn { color: #f0b429; border-color: #f0b429; }
+  .vbadge.bad { color: var(--err-fg2, #ff8a8a); border-color: var(--err-bd, #ff8a8a); }
+  .stat-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; margin: 12px 0; }
+  .stat-tile { background: var(--panel-3); border: 1px solid var(--border-light); border-radius: 8px; padding: 8px 10px; }
+  .stat-tile span { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--t-faint); }
+  .stat-tile b { font-size: 16px; font-variant-numeric: tabular-nums; }
+  .stat-tile b.pos { color: var(--teal); } .stat-tile b.neg { color: var(--err-fg2, #ff8a8a); }
+  .eq-chart { width: 100%; height: 150px; display: block; background: var(--panel-3); border: 1px solid var(--border-light); border-radius: 8px; }
+  .hm { display: grid; grid-template-columns: 34px repeat(24, 1fr); gap: 1px; font-size: 9px; margin-top: 6px; }
+  .hm div { aspect-ratio: 1.3; border-radius: 2px; }
+  .hm .lbl { aspect-ratio: auto; color: var(--t-faint); display: flex; align-items: center; }
+  .chk-row { display: flex; gap: 10px; align-items: flex-start; padding: 9px 10px; border: 1px solid var(--border-light); border-radius: 8px; margin-bottom: 6px; background: var(--panel-3); font-size: 13px; }
+  .chk-row .st { flex: 0 0 82px; }
+  .chk-row .hl { color: var(--t-soft); font-size: 12.5px; }
+  .focus-card { border: 1px solid var(--border-light); border-radius: 10px; padding: 11px 13px; margin-bottom: 8px; background: var(--panel-3); }
+  .focus-card.first { border-color: var(--teal); }
+  .focus-card h4 { margin: 0 0 3px; font-size: 14px; } .focus-card p { margin: 0; font-size: 12.5px; color: var(--t-soft); line-height: 1.45; }
+  .empty-state { border: 1px dashed var(--border-light); border-radius: 10px; padding: 16px; text-align: center; color: var(--t-soft); font-size: 13px; }
   .result-block { background: var(--panel-3); border-radius: 8px; padding: 10px; font-family: ui-monospace, monospace; font-size: 11.5px; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
 </style>
 </head>
@@ -146,6 +173,7 @@
   <div id="d-stage-bar" style="margin: 8px 0 4px;"></div>
   <div class="stage-labels"><span>Create</span><span>Test</span><span>Optimize</span><span>Validate</span><span>Champion</span><span>Ready</span></div>
   <p style="font-size:12px;color:var(--teal);margin:6px 0 0;" id="d-next-step"></p>
+  <div class="dl-strip" id="d-downloads"></div>
   <div id="d-nextcard" style="margin:12px 0 4px;padding:14px 16px;border:1px solid var(--teal);border-radius:10px;background:rgba(0,200,170,.07);">
     <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);">Your next step</div>
     <div id="d-nc-head" style="font-size:16px;font-weight:600;margin:4px 0;">Loading...</div>
@@ -159,6 +187,7 @@
   <div class="detail-tabs">
     <button data-tab="code" onclick="showDetailTab('code')" class="active">Code</button>
     <button data-tab="backtest" onclick="showDetailTab('backtest')">Backtest</button>
+    <button data-tab="validation" onclick="showDetailTab('validation')">Validation</button>
     <button data-tab="optimize" onclick="showDetailTab('optimize')">Optimize</button>
     <button data-tab="results" onclick="showDetailTab('results')">Results</button>
     <button data-tab="deployments" onclick="showDetailTab('deployments')">Deployments</button>
@@ -171,21 +200,20 @@
     <p id="code-save-note" style="font-size:12.5px;margin-top:6px;"></p>
   </div>
 
-  <div class="detail-section" data-section="backtest">
-    <p style="font-size:13px;color:var(--t-soft);">Opens Full Pipeline with this strategy already loaded -- pick a dataset there and run. (A dataset is always required and has no sensible default, so this is one step short of a blind one-click run.)</p>
-    <button class="submit-btn" onclick="goToTool('/full-pipeline')">Open in Full Pipeline &rarr;</button>
-  </div>
+  <div class="detail-section" data-section="backtest"><div id="d-backtest"><div class="empty-state">Loading saved results&hellip;</div></div></div>
 
-  <div class="detail-section" data-section="optimize">
-    <p style="font-size:13px;color:var(--t-soft);">Opens Quick Optimize with this strategy already loaded -- pick a dataset there and run.</p>
-    <button class="submit-btn" onclick="goToTool('/quick-optimize')">Open in Quick Optimize &rarr;</button>
-  </div>
+  <div class="detail-section" data-section="validation"><div id="d-validation"><div class="empty-state">Loading saved results&hellip;</div></div></div>
+
+  <div class="detail-section" data-section="optimize"><div id="d-optimize"><div class="empty-state">Loading&hellip;</div></div></div>
 
   <div class="detail-section" data-section="results">
-    <h3 style="font-size:13px;color:var(--t-faint2);">Last Full Pipeline run</h3>
-    <div class="result-block" id="d-last-run">No recorded run yet.</div>
-    <h3 style="font-size:13px;color:var(--t-faint2);margin-top:14px;">Last search result</h3>
-    <div class="result-block" id="d-last-search">No recorded search yet.</div>
+    <div id="d-results"><div class="empty-state">Loading saved results&hellip;</div></div>
+    <details style="margin-top:14px;"><summary style="font-size:12.5px;color:var(--t-faint);cursor:pointer;">Raw saved records</summary>
+      <h3 style="font-size:13px;color:var(--t-faint2);">Last run</h3>
+      <div class="result-block" id="d-last-run">No recorded run yet.</div>
+      <h3 style="font-size:13px;color:var(--t-faint2);margin-top:14px;">Last search result</h3>
+      <div class="result-block" id="d-last-search">No recorded search yet.</div>
+    </details>
   </div>
 
   <div class="detail-section" data-section="deployments">
@@ -405,6 +433,7 @@
     document.getElementById('set-type-4').value = s.type; document.getElementById('set-filename-4').value = s.name;
     document.getElementById('set-type-5').value = s.type; document.getElementById('set-filename-5').value = s.name;
     loadNextCard(s);
+    loadSavedResults(s);
     document.getElementById('set-description').value = s.description || '';
     document.getElementById('set-market').value = s.market || '';
     document.getElementById('set-tags').value = (s.tags || []).join(', ');
@@ -423,6 +452,163 @@
     document.getElementById('detail-overlay').style.display = 'block';
     document.getElementById('detail-panel').style.display = 'block';
     showDetailTab('code');
+  }
+
+
+  // ---------------- saved-results tabs (data from /api/library/detail, nothing is re-run) ----------------
+  let DETAIL = null;
+  const money = v => (v === null || v === undefined || isNaN(v)) ? '--' : (v < 0 ? '-$' : '$') + Math.abs(Number(v)).toLocaleString(undefined, {maximumFractionDigits: 0});
+  const pct = (v, d) => (v === null || v === undefined || isNaN(v)) ? '--' : Number(v).toFixed(d === undefined ? 1 : d) + '%';
+  const num = (v, d) => (v === null || v === undefined || isNaN(v)) ? '--' : Number(v).toFixed(d === undefined ? 2 : d);
+  const tile = (label, val, cls) => `<div class="stat-tile"><span>${escapeHtml(label)}</span><b class="${cls || ''}">${val}</b></div>`;
+  const emptyState = (msg, href, label) => `<div class="empty-state"><p style="margin:0 0 10px;">${msg}</p>${href ? `<a class="go-btn primary" href="${escapeHtml(href)}">${escapeHtml(label)} &rarr;</a>` : ''}</div>`;
+  function verdictBadge(v) {
+    if (!v) return '';
+    const cls = v === 'READY' ? 'good' : (v === 'MARGINAL' ? 'warn' : 'bad');
+    return `<span class="vbadge ${cls}">${escapeHtml(v)}</span>`;
+  }
+  function statusBadge(st) {
+    const map = {pass: ['PASS', 'good'], caution: ['BORDERLINE', 'warn'], fail: ['FAIL', 'bad'], error: ['DID NOT RUN', 'bad'], info: ['RAN', '']};
+    const m = map[st] || [(st || 'RAN').toString().toUpperCase(), ''];
+    return `<span class="vbadge ${m[1]}">${m[0]}</span>`;
+  }
+  function equityChart(vals) {
+    if (!vals || vals.length < 2) return '';
+    const W = 700, H = 150, P = 6, lo = Math.min(...vals), hi = Math.max(...vals), rng = (hi - lo) || 1;
+    const pts = vals.map((v, i) => [P + i * (W - 2 * P) / (vals.length - 1), H - P - (v - lo) / rng * (H - 2 * P)]);
+    const line = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+    const up = vals[vals.length - 1] >= vals[0], col = up ? 'var(--teal)' : '#ff6b6b';
+    return `<svg class="eq-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Equity curve">
+      <path d="${line} L${pts[pts.length - 1][0].toFixed(1)} ${H} L${P} ${H} Z" fill="${col}" opacity=".12"/>
+      <path d="${line}" fill="none" stroke="${col}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--t-faint);margin-top:3px;"><span>Start ${money(vals[0])}</span><span>End ${money(vals[vals.length - 1])}</span></div>`;
+  }
+  function heatmap(grid) {
+    if (!grid) return '';
+    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const mx = Math.max(1, ...grid.flat().map(Math.abs));
+    let h = '<div class="hm"><div class="lbl"></div>' + Array.from({length: 24}, (_, i) => `<div class="lbl" style="justify-content:center;">${i % 3 === 0 ? i : ''}</div>`).join('');
+    grid.forEach((row, d) => {
+      if (d > 4 && row.every(v => v === 0)) return;
+      h += `<div class="lbl">${days[d]}</div>` + row.map((v, hr) => {
+        const a = Math.min(1, Math.abs(v) / mx), c = v < 0 ? '255,107,107' : '0,200,170';
+        return `<div title="${days[d]} ${String(hr).padStart(2, '0')}:00 &mdash; ${money(v)}" style="background:${v === 0 ? 'var(--panel-1)' : `rgba(${c},${(0.15 + 0.85 * a).toFixed(2)})`}"></div>`;
+      }).join('');
+    });
+    return h + '</div><div style="font-size:11px;color:var(--t-faint);margin-top:4px;">Net P&amp;L by day and hour of entry (red = losing, green = winning). Hover a cell for the amount.</div>';
+  }
+
+  function renderDownloads(d) {
+    const box = document.getElementById('d-downloads'), dl = d.downloads || {};
+    const fp = dl.full_pipeline || {}, va = dl.validation || {};
+    const btn = (label, href) => href ? `<a class="dl-btn" href="${escapeHtml(href)}" download>${label}</a>` : `<a class="dl-btn off" title="Not run yet">${label}</a>`;
+    box.innerHTML = `<span class="dl-label">Download:</span>` +
+      btn('Full Pipeline report', fp.html) + (fp.json ? btn('data (.json)', fp.json) : '') +
+      btn('Validation report', va.html) + (va.json ? btn('data (.json)', va.json) : '') +
+      (dl.all_zip ? btn('Everything (.zip)', dl.all_zip) : '');
+  }
+
+  function renderBacktestTab(d) {
+    const b = d.backtest, el = document.getElementById('d-backtest');
+    if (!b || !b.has) {
+      el.innerHTML = emptyState('This strategy has not been through the Full Pipeline yet. Run it once and its equity curve, stats and report show up here.', d.full_pipeline_href, 'Run Full Pipeline');
+      return;
+    }
+    const st = b.stats || {};
+    const np = st.net_profit;
+    el.innerHTML = `
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">${verdictBadge(b.verdict)}
+        ${b.t58_score !== null && b.t58_score !== undefined ? `<span style="font-size:12.5px;color:var(--t-soft);">T58 score <b>${num(b.t58_score, 0)}</b>${b.t58_tier ? ' (' + escapeHtml(b.t58_tier) + ')' : ''}</span>` : ''}
+        <span style="font-size:12px;color:var(--t-faint);">${escapeHtml(b.instrument || '')}${b.period ? ' &middot; ' + escapeHtml(b.period.join(' to ')) : ''}${b.recorded_display ? ' &middot; run ' + escapeHtml(b.recorded_display) : ''}</span></div>
+      ${b.equity && b.equity.length > 1 ? `<div style="margin-top:10px;">${equityChart(b.equity)}</div>` : (b.note ? `<p class="empty-state" style="margin-top:10px;">${escapeHtml(b.note)}</p>` : '')}
+      <div class="stat-tiles">
+        ${tile('Net profit', money(np), np > 0 ? 'pos' : (np < 0 ? 'neg' : ''))}
+        ${tile('Trades', st.total_trades === null || st.total_trades === undefined ? '--' : Number(st.total_trades).toLocaleString())}
+        ${tile('Win rate', pct(st.win_rate))}
+        ${tile('Profit factor', num(st.profit_factor))}
+        ${tile('Max drawdown', pct(st.max_drawdown_pct))}
+        ${tile('Sharpe', num(st.sharpe_ratio))}
+        ${tile('Eval pass chance', pct(b.eval_pass_probability, 0))}
+        ${tile('Payout chance', pct(b.first_payout_probability, 0))}
+        ${tile('Risk of ruin', pct(b.risk_of_ruin_pct))}
+      </div>
+      ${(b.reasons || []).length ? `<ul style="margin:0 0 10px 18px;padding:0;font-size:12.5px;color:var(--t-soft);line-height:1.5;">${b.reasons.slice(0, 5).map(r => '<li>' + escapeHtml(r) + '</li>').join('')}</ul>` : ''}
+      ${b.heatmap ? '<h3 style="font-size:13px;color:var(--t-faint2);margin:14px 0 0;">When it makes and loses money</h3>' + heatmap(b.heatmap) : ''}
+      <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
+        <a class="go-btn primary" href="${escapeHtml(d.full_pipeline_href)}">Re-run Full Pipeline &rarr;</a>
+        ${(d.downloads.full_pipeline || {}).html ? `<a class="go-btn" href="${escapeHtml(d.downloads.full_pipeline.html)}" download>Download full report</a>` : ''}
+      </div>`;
+  }
+
+  function renderValidationTab(d) {
+    const v = d.validation, el = document.getElementById('d-validation');
+    if (!v || !v.has) {
+      el.innerHTML = emptyState('No validation checks have been run on this strategy yet (walk-forward, CPCV, sensitivity, regime matrix). They test whether the edge survives data it has not seen.', d.validate_href, 'Open Validate');
+      return;
+    }
+    const l = v.latest;
+    el.innerHTML = `
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+        ${l && l.overall ? `<span class="vbadge ${/pass|robust|good/i.test(l.overall) ? 'good' : (/fail|not/i.test(l.overall) ? 'bad' : 'warn')}">${escapeHtml(l.overall)}</span>` : ''}
+        <span style="font-size:12.5px;color:var(--t-soft);">${v.ran_count} of ${v.total} validation methods run</span></div>
+      ${l && l.summary ? `<p style="font-size:13px;color:var(--t-soft);margin:0 0 10px;">${escapeHtml(l.summary)}</p>` : ''}
+      ${v.checks.map(c => `<div class="chk-row"><div class="st">${statusBadge(c.status)}</div><div><b>${escapeHtml(c.label || c.check || '')}</b>
+        <div class="hl">${escapeHtml(c.headline || '')}</div>
+        ${(c.metrics || []).length ? `<div class="hl" style="margin-top:3px;">${c.metrics.map(m => escapeHtml(m.label) + ': <b>' + escapeHtml(m.value) + '</b>').join(' &middot; ')}</div>` : ''}</div></div>`).join('')}
+      ${v.methods.filter(m => !m.ran).length ? `<p style="font-size:12px;color:var(--t-faint);">Not run yet: ${v.methods.filter(m => !m.ran).map(m => escapeHtml(m.label)).join(', ')}</p>` : ''}
+      ${l && l.next_step && l.next_step.title ? `<div class="focus-card first"><h4>Next: ${escapeHtml(l.next_step.title)}</h4><p>${escapeHtml(l.next_step.why || '')}</p></div>` : ''}
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+        <a class="go-btn primary" href="${escapeHtml(d.validate_href)}">Run more checks &rarr;</a>
+        ${(d.downloads.validation || {}).html ? `<a class="go-btn" href="${escapeHtml(d.downloads.validation.html)}" download>Download validation report</a>` : ''}
+        ${(d.downloads.validation || {}).txt ? `<a class="go-btn" href="${escapeHtml(d.downloads.validation.txt)}" download>.txt</a>` : ''}
+      </div>
+      ${(v.reports || []).length > 1 ? `<details style="margin-top:12px;"><summary style="font-size:12.5px;color:var(--t-faint);cursor:pointer;">Earlier validation reports (${v.reports.length - 1})</summary>
+        ${v.reports.slice(1).map(r => `<div style="font-size:12.5px;margin:6px 0;"><a class="dl-btn" href="/library/download/validation?type=${encodeURIComponent(d.type)}&filename=${encodeURIComponent(d.filename)}&fmt=html&id=${encodeURIComponent(r.report_id)}" download>${escapeHtml((r.generated_at || '').slice(0, 16).replace('T', ' ') || r.report_id)}</a> ${escapeHtml(r.overall || '')}</div>`).join('')}</details>` : ''}`;
+  }
+
+  function renderOptimizeTab(d) {
+    const o = d.optimize, el = document.getElementById('d-optimize');
+    const lo = o.last_optimize;
+    el.innerHTML = `
+      <p style="font-size:13px;color:var(--t-soft);margin:0 0 10px;">Based on this strategy's saved results, here is what is worth optimizing, most useful first.</p>
+      ${o.focus.map((f, i) => `<div class="focus-card ${i === 0 ? 'first' : ''}"><h4>${i + 1}. ${escapeHtml(f.title)}</h4><p>${escapeHtml(f.why)}</p>
+        ${f.slots ? `<p style="margin-top:5px;font-family:ui-monospace,monospace;">No entries: ${escapeHtml(f.slots.split('\n').join(', '))}</p>` : ''}</div>`).join('')}
+      ${o.active_slots ? `<div class="focus-card"><h4>Already blocked</h4><p style="font-family:ui-monospace,monospace;">${escapeHtml(o.active_slots.split('\n').join(', '))}</p><p>This strategy will not open trades in these slots, in any run.</p></div>` : ''}
+      ${lo ? `<p style="font-size:12px;color:var(--t-faint);">Last optimized: ${lo.improved === false ? 'no improvement found' : 'settings improved'}${lo.eval_pass_probability ? ' &middot; eval pass ' + num(lo.eval_pass_probability, 0) + '%' : ''}</p>` : ''}
+      <a class="go-btn primary" style="margin-top:6px;" href="${escapeHtml(o.href)}">Open Optimizer with these settings &rarr;</a>
+      <p style="font-size:11.5px;color:var(--t-faint);margin-top:8px;">The optimizer opens with this strategy, the top goal${o.focus[0].slots ? ', the blocked times' : ''} and your last dataset already filled in. You can change anything before you run it.</p>`;
+  }
+
+  function renderResultsTab(d) {
+    const r = d.results, el = document.getElementById('d-results');
+    if (!r || !r.has) { el.innerHTML = emptyState('Nothing recorded for this strategy yet.', d.full_pipeline_href, 'Run Full Pipeline'); return; }
+    const la = r.lookahead, ls = r.last_search, lo = r.last_optimize;
+    el.innerHTML = `
+      <div class="stat-tiles">
+        ${tile('Verdict', r.verdict ? verdictBadge(r.verdict) : '--')}
+        ${tile('T58 score', r.t58_score !== null && r.t58_score !== undefined ? num(r.t58_score, 0) + (r.t58_tier ? ' <small style="font-size:11px;font-weight:400;">' + escapeHtml(r.t58_tier) + '</small>' : '') : '--')}
+        ${tile('Status', escapeHtml(r.status || '--'))}
+        ${tile('Lookahead check', la ? (la.clean ? 'Clean' : 'Leak found') : 'Not run', la ? (la.clean ? 'pos' : 'neg') : '')}
+      </div>
+      ${(r.reasons || []).length ? '<h3 style="font-size:13px;color:var(--t-faint2);">Why this verdict</h3><ul style="margin:0 0 10px 18px;padding:0;font-size:12.5px;color:var(--t-soft);line-height:1.5;">' + r.reasons.slice(0, 8).map(x => '<li>' + escapeHtml(x) + '</li>').join('') + '</ul>' : ''}
+      ${ls ? `<div class="focus-card"><h4>Last search</h4><p>${ls.candidates_tested ? ls.candidates_tested + ' candidates tested' : ''}${ls.best_fitness !== undefined ? ' &middot; best fitness ' + num(ls.best_fitness) : ''}</p></div>` : ''}
+      ${lo ? `<div class="focus-card"><h4>Last optimization</h4><p>${lo.improved === false ? 'No improvement found.' : 'Settings were improved.'}${lo.eval_pass_probability ? ' Eval pass ' + num(lo.eval_pass_probability, 0) + '%.' : ''}</p></div>` : ''}`;
+  }
+
+  function loadSavedResults(s) {
+    DETAIL = null;
+    ['d-backtest', 'd-validation', 'd-results'].forEach(id => { document.getElementById(id).innerHTML = '<div class="empty-state">Loading saved results&hellip;</div>'; });
+    document.getElementById('d-optimize').innerHTML = '<div class="empty-state">Loading&hellip;</div>';
+    document.getElementById('d-downloads').innerHTML = '';
+    fetch('/api/library/detail?type=' + encodeURIComponent(s.type) + '&filename=' + encodeURIComponent(s.name))
+      .then(r => r.json()).then(d => {
+        if (!d.ok || !currentDetail || currentDetail.name !== s.name) throw new Error(d.error || 'stale');
+        DETAIL = d;
+        renderDownloads(d); renderBacktestTab(d); renderValidationTab(d); renderOptimizeTab(d); renderResultsTab(d);
+      }).catch(err => {
+        const msg = '<div class="empty-state">Could not load saved results (' + escapeHtml(err.message || 'error') + ').</div>';
+        ['d-backtest', 'd-validation', 'd-optimize', 'd-results'].forEach(id => { document.getElementById(id).innerHTML = msg; });
+      });
   }
 
   function loadNextCard(s) {

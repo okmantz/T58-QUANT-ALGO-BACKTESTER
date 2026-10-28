@@ -114,6 +114,16 @@
   </div>
 
   <div class="de-card">
+    <h2 style="margin:0 0 4px;font-size:15px;">Search memory</h2>
+    <p class="de-note" style="margin:0 0 8px;">
+      {% if memory.variants %}<b>{{ '{:,}'.format(memory.variants) }}</b> variants tested over {{ memory.runs }} run{{ '' if memory.runs == 1 else 's' }} are on record in the
+      <a href="/graveyard">Strategy Graveyard</a>. This run skips every one of them, leans toward the strategy types that have paid off, and breeds new variants from the best past ones,
+      so it explores new ground instead of finding the same strategy again.
+      {% else %}Nothing on record yet. Every variant this run tests is saved to the <a href="/graveyard">Strategy Graveyard</a>, and the next run skips them and builds on the best.{% endif %}</p>
+    <label class="de-note" style="display:block;"><input type="checkbox" name="fresh_start"> Start fresh: ignore the memory this time (repeat the same search, record nothing)</label>
+  </div>
+
+  <div class="de-card">
     <div class="de-go">
       <button type="submit" class="de-btn" id="de-start">Start searching &rarr;</button>
       <p class="de-note" style="flex:1;min-width:220px;">Runs in the background. The engine only keeps a strategy that survives every check below, and anything it keeps still needs a forward test before you trade it.</p>

@@ -96,12 +96,21 @@
         <input class="lc-check-input" type="radio" name="goal" value="{{ key }}" {{ 'checked' if want_goal == key else '' }}>
         <div class="cname"><span class="cbox"></span>{{ g.title }}</div>
         <div class="cdesc">{{ g.desc }}</div>
-        <div class="cdesc" style="margin-top:4px;opacity:.8;">Tunes: {% if 'quick_optimize' in g.engines %}settings{% endif %}{% if 'quick_optimize' in g.engines and 'risk_sweep' in g.engines %} + {% endif %}{% if 'risk_sweep' in g.engines %}risk size{% endif %}</div>
+        <div class="cdesc" style="margin-top:4px;opacity:.8;">Tunes: {% if 'quick_optimize' in g.engines %}settings{% endif %}{% if 'quick_optimize' in g.engines and 'risk_sweep' in g.engines %} + {% endif %}{% if 'risk_sweep' in g.engines %}risk size{% endif %}{% if 'time_filter' in g.engines %}days &amp; times it may trade{% endif %}</div>
       </label>
       {% endfor %}
     </div>
     <label class="checkbox-row" style="display:block; margin-top:14px;"><input type="checkbox" name="save_as_copy"> Save the result as a <b>separate copy</b> instead of updating the strategy</label>
     <div class="lc-hint" style="margin-top:4px;">Off by default: the strategy you picked is updated in place (its previous version is archived, never deleted). If nothing better is found, it is left untouched.</div>
+  </div>
+
+  <div class="lc-card">
+    <h3>Don&rsquo;t trade at these times <span class="lc-hint">optional</span></h3>
+    <p class="lc-hint" style="margin-bottom:8px;">One per line: <code>THU 11</code> (Thursday, 11:00&ndash;11:59), <code>MON 9-10</code>, <code>FRI *</code> (all Friday), <code>* 15</code> (3pm every day).
+      Uses the same clock as the Full Pipeline heatmap, so you can copy its worst slots straight in. Applied to every test this run does.
+      With the &ldquo;Cut the worst days/times&rdquo; goal, leave it blank and the optimizer picks the slots for you.</p>
+    <textarea name="blocked_slots" rows="3" style="width:100%;font-family:monospace;" placeholder="THU 11&#10;FRI 09">{{ request.values.get('blocked_slots', '') }}</textarea>
+    <label class="checkbox-row" style="display:block; margin-top:8px;"><input type="checkbox" name="save_blocked_slots" checked> Save these on the library strategy so it never enters then (any run, any page)</label>
   </div>
 
   <details class="lc-adv">

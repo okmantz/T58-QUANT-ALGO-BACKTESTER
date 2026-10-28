@@ -111,6 +111,20 @@ function renderSummary(summary){
       html += '<p style="font-size:13px;">This engine keeps its own page: <a href="' + esc(r.url) + '" style="color:var(--lc-acc);">' + esc(r.label) + '</a></p><p class="lc-hint">' + esc(r.note || '') + '</p></div>';
       continue;
     }
+    if (engine === 'time_filter') {
+      const money = v => (v == null ? 'n/a' : (v < 0 ? '-$' : '$') + Math.abs(v).toLocaleString(undefined, {maximumFractionDigits: 0}));
+      if (!r.slots) { html += '<p style="font-size:13px;">' + esc(r.note || 'Nothing restricted.') + '</p></div>'; continue; }
+      html += '<p style="font-size:13px;">No new entries at: <b>' + esc(r.slots.split('\n').join(', ')) + '</b></p>';
+      (r.items || []).forEach(it => { html += '<p class="lc-hint">• ' + esc(it.why || it.slot) + '</p>'; });
+      if (r.baseline && r.filtered) {
+        html += '<div class="lc-kv"><span class="k">Net profit</span><span class="v">' + money(r.baseline.net_profit) + ' → <b>' + money(r.filtered.net_profit) + '</b></span></div>' +
+                '<div class="lc-kv"><span class="k">Trades</span><span class="v">' + r.baseline.trades + ' → ' + r.filtered.trades + '</span></div>' +
+                '<div class="lc-kv"><span class="k">Max drawdown</span><span class="v">' + r.baseline.max_drawdown_pct + '% → ' + r.filtered.max_drawdown_pct + '%</span></div>';
+      }
+      html += '<p class="lc-hint" style="margin-top:8px;">' + (r.improved ? (r.saved ? '✓ Saved on the library strategy: it will not enter at these times anywhere it runs.' : 'Helps, but not saved (strategy is not in the library or saving was off).') : 'It did not improve profit, so nothing was saved.') + '</p>' +
+              '<p class="lc-hint">' + esc(r.caveat || '') + '</p></div>';
+      continue;
+    }
     for (const [k, v] of Object.entries(r)) {
       if (k === 'results_url') { html += '<div class="lc-kv"><span class="k">results</span><span class="v"><a href="' + esc(v) + '" style="color:var(--lc-acc);">Open the Deep search results table →</a></span></div>'; continue; }
       if (k === 'rows' || k === 'formula') continue;

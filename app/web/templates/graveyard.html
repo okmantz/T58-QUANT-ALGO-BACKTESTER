@@ -38,6 +38,12 @@
   details.gy-adv[open] > summary::after { content: " \25B4 hide"; }
   .more-link { display: inline-block; margin-top: 10px; color: var(--teal); font-size: 13px; }
 
+  .mem-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .mem-stat { background: var(--panel-3); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .mem-stat b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+  .mem-stat span { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
+  .mem-bar { height: 6px; border-radius: 4px; background: var(--border); overflow: hidden; min-width: 70px; }
+  .mem-bar i { display: block; height: 100%; background: var(--teal); }
   /* side panel */
   .gy-scrim { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 900; opacity: 0; pointer-events: none; transition: opacity .18s ease; }
   .gy-scrim.on { opacity: 1; pointer-events: auto; }
@@ -85,6 +91,69 @@
   <h1>Strategy Graveyard</h1>
   <p>Every strategy that was tested hard and then rejected, with the reason. Click any row to see its scores and an equity curve.
      Forge Strategy reads this same file before a new run, so settings already proven dead here are skipped instead of re-tested.</p>
+</div>
+
+<div class="card" id="searched-variants">
+  <h2>Variants searched &mdash; the Discovery memory</h2>
+  {% if not memory.ok or not memory.summary.variants %}
+  <p class="help" style="margin:0;">Nothing recorded yet. Every variant the Discovery Engine tests from now on is saved here (not just the ones that die late), and the next run skips them, leans toward the strategy types that paid off, and breeds new variants from the best past ones. <a href="/discovery-engine">Start a search &rarr;</a></p>
+  {% else %}
+  <p class="help">Every variant any Discovery run has tested, kept per market. The next run <b>skips all of these</b>, spends more of its budget on the strategy types with the best record, and starts evolution from the best past variants &mdash; so it explores new ground instead of landing on the same strategy twice.</p>
+  <form method="get" action="/graveyard" style="margin-bottom:10px;">
+    {% if selected_path %}<input type="hidden" name="path" value="{{ selected_path }}">{% endif %}
+    <label style="font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);">Market
+      <select name="market" onchange="this.form.submit()"><option value="">All markets</option>
+        {% for sc in memory.scopes %}<option value="{{ sc.scope }}" {{ 'selected' if memory.scope == sc.scope else '' }}>{{ sc.scope }} ({{ '{:,}'.format(sc.variants) }})</option>{% endfor %}</select></label>
+  </form>
+  <div class="mem-grid">
+    <div class="mem-stat"><b>{{ '{:,}'.format(memory.summary.variants) }}</b><span>Variants searched</span></div>
+    <div class="mem-stat"><b>{{ memory.summary.runs }}</b><span>Discovery runs</span></div>
+    <div class="mem-stat"><b>{{ '{:,}'.format(memory.summary.train_pass) }}</b><span>Looked good in training</span></div>
+    <div class="mem-stat"><b>{{ '{:,}'.format(memory.summary.validated) }}</b><span>Held up on fresh data</span></div>
+    <div class="mem-stat"><b>{{ memory.summary.near_misses }}</b><span>Near-misses</span></div>
+    <div class="mem-stat"><b>{{ memory.summary.winners }}</b><span>Passed every check</span></div>
+  </div>
+  {% if memory.families %}
+  <details open><summary style="cursor:pointer;font-size:13px;color:var(--teal);margin-bottom:6px;">By strategy type (what the next run learns from)</summary>
+  <table>
+    <thead><tr><th>Strategy type</th><th>Tried</th><th>Looked good</th><th class="gy-hide-sm">Hit rate</th><th class="gy-hide-sm">Held up</th></tr></thead>
+    <tbody>
+    {% for f in memory.families %}
+      {% set rate = (100.0 * f.train_pass / f.tested) if f.tested else 0 %}
+      <tr><td>{{ f.title }}</td><td>{{ '{:,}'.format(f.tested) }}</td><td>{{ '{:,}'.format(f.train_pass or 0) }}</td>
+        <td class="gy-hide-sm"><div class="mem-bar" title="{{ '%.1f'|format(rate) }}%"><i style="width:{{ [rate * 4, 100]|min }}%"></i></div></td>
+        <td class="gy-hide-sm">{{ '{:,}'.format(f.validated or 0) }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></details>
+  {% endif %}
+  {% if memory.top %}
+  <details style="margin-top:10px;"><summary style="cursor:pointer;font-size:13px;color:var(--teal);margin-bottom:6px;">Best variants found so far (the next run breeds from these)</summary>
+  <table>
+    <thead><tr><th>Variant</th><th>Market</th><th>Reached</th><th class="gy-hide-sm">Fitness</th></tr></thead>
+    <tbody>
+    {% for t in memory.top %}
+      <tr><td><div class="gy-sub" style="margin:0;">{{ t.label or t.family }}</div></td><td>{{ t.scope }}</td>
+        <td><span class="tag">{{ {'searched':'Searched','train_pass':'Looked good','validated':'Held up','near_miss':'Near-miss','winner':'Passed all checks'}.get(t.stage, t.stage) }}</span></td>
+        <td class="gy-hide-sm">{{ '%.2f'|format(t.fit) if t.fit is not none else '--' }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></details>
+  {% endif %}
+  {% if memory.runs %}
+  <details style="margin-top:10px;"><summary style="cursor:pointer;font-size:13px;color:var(--teal);margin-bottom:6px;">Recent runs</summary>
+  <table>
+    <thead><tr><th>When</th><th>Market</th><th>Method</th><th>Tested</th><th class="gy-hide-sm">New</th><th class="gy-hide-sm">Skipped (known)</th><th class="gy-hide-sm">Bred from</th></tr></thead>
+    <tbody>
+    {% for r in memory.runs %}
+      <tr><td>{{ r.when }}</td><td>{{ r.scope }}</td><td>{{ r.source }}{% if r.effort %} &middot; {{ r.effort }}{% endif %}</td><td>{{ '{:,}'.format(r.tested or 0) }}</td>
+        <td class="gy-hide-sm">{{ '{:,}'.format(r.new_variants or 0) }}</td><td class="gy-hide-sm">{{ '{:,}'.format(r.skipped_known or 0) }}</td><td class="gy-hide-sm">{{ r.warm_started or 0 }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></details>
+  {% endif %}
+  <p style="margin:12px 0 0;"><a class="more-link" href="/discovery-engine">Run another search that skips all of these &rarr;</a></p>
+  {% endif %}
 </div>
 
 {% if not files %}
