@@ -52,6 +52,27 @@ class Indicators:
         self.ts = ts
         self.hour = ts.dt.hour.to_numpy() if hasattr(ts, "dt") else np.zeros(self.n, int)
         self.day = (ts.dt.normalize().astype("int64").to_numpy() if hasattr(ts, "dt") else np.arange(self.n))
+        # Exchange clock (US Central for CME data) when the frame carries it: session windows and "hour of day" effects must follow
+        # the exchange's day, not UTC. Falls back to the timestamp's own clock.
+        xt = None
+        if "exchange_time" in df.columns:
+            try:
+                xt = pd.to_datetime(df["exchange_time"])
+            except Exception:  # noqa: BLE001
+                xt = None
+        if xt is not None and hasattr(xt, "dt"):
+            self.xhour = xt.dt.hour.to_numpy()
+            self.xdow = xt.dt.dayofweek.to_numpy()
+        else:
+            self.xhour = self.hour
+            self.xdow = ts.dt.day_of_week.to_numpy() if hasattr(ts, "dt") else np.zeros(self.n, int)
+        if "trading_day" in df.columns:
+            try:
+                self.tday = pd.to_datetime(df["trading_day"]).astype("int64").to_numpy()
+            except Exception:  # noqa: BLE001
+                self.tday = self.day
+        else:
+            self.tday = self.day
         self._m: dict = {}
 
     def memo(self, key, fn):
@@ -146,13 +167,43 @@ class Indicators:
 
     def roc(self, n): return self.memo(("roc", n), lambda: self.c / _shift(self.c, n) - 1.0)
 
+    def day_pos(self):
+        """Bar number within its trading day (0 = first bar) and that day's first open."""
+        def f():
+            s_ = pd.DataFrame({"d": self.tday, "o": self.o})
+            pos = s_.groupby("d").cumcount().to_numpy()
+            dopen = s_.groupby("d")["o"].transform("first").to_numpy()
+            return pos, dopen
+        return self.memo("daypos", f)
+
+    def prev_day_close(self):
+        """Close of the previous trading day, known from the first bar of the new day onward."""
+        def f():
+            s_ = pd.DataFrame({"d": self.tday, "c": self.c})
+            last = s_.groupby("d")["c"].transform("last").to_numpy()
+            first_idx = s_.groupby("d").cumcount().to_numpy() == 0
+            prev = np.full(self.n, np.nan)
+            cur = np.nan
+            lastc = np.nan
+            for i in range(self.n):
+                if first_idx[i]:
+                    cur = lastc
+                prev[i] = cur
+                lastc = self.c[i]
+            return prev
+        return self.memo("pdc", f)
+
+    def atr_ratio(self, n=200):
+        return self.memo(("atrr", n), lambda: self.atr(14) / np.where(_sma(np.nan_to_num(self.atr(14)), n) == 0, np.nan, _sma(np.nan_to_num(self.atr(14)), n)))
+
     def opening_range(self, k):
         """High/low of each day's first k bars, valid only AFTER those k bars have closed (NaN before)."""
         def f():
             s = pd.DataFrame({"d": self.day, "h": self.h, "l": self.l})
             pos = s.groupby("d").cumcount().to_numpy()
-            hi = s.where(pos < k).groupby("d")["h"].transform("max").to_numpy()
-            lo = s.where(pos < k).groupby("d")["l"].transform("min").to_numpy()
+            cond = pd.Series(pos < k, index=s.index)
+            hi = s["h"].where(cond).groupby(s["d"]).transform("max").to_numpy()
+            lo = s["l"].where(cond).groupby(s["d"]).transform("min").to_numpy()
             hi, lo = np.where(pos >= k, hi, np.nan), np.where(pos >= k, lo, np.nan)
             return hi, lo, pos
         return self.memo(("or", k), f)
@@ -176,6 +227,7 @@ class Family:
     about: str
     grid: dict
     build: Callable
+    source: str = ""       # which paper in the Library / which known effect this family is drawn from
 
 
 def _f_ema_cross(I, p):
@@ -246,7 +298,7 @@ def _f_keltner(I, p):
 
 def _f_supertrend(I, p):
     d = I.supertrend(p["n"], p["m"])
-    pd_ = _shift(d.astype(float)).astype(int)
+    pd_ = np.nan_to_num(_shift(d.astype(float)), nan=0.0).astype(int)
     return (d == 1) & (pd_ == -1), (d == -1) & (pd_ == 1)
 
 
@@ -315,17 +367,157 @@ def _f_wpr(I, p):
     return _cross_up(w, np.full(I.n, -100 + p["lo"])) & ok, _cross_dn(w, np.full(I.n, -p["lo"])) & ok
 
 
+def _f_ibs(I, p):
+    rng = np.where(I.h - I.l == 0, np.nan, I.h - I.l)
+    ibs = (I.c - I.l) / rng
+    t = I.ema(p["trend"]) if p["trend"] else None
+    ok = _ok(ibs)
+    lg, sh = (ibs < p["lo"]) & ok, (ibs > 1 - p["lo"]) & ok
+    if t is not None:
+        lg &= I.c > t
+        sh &= I.c < t
+    return lg, sh
+
+
+def _f_streak(I, p):
+    d = np.sign(np.diff(I.c, prepend=I.c[0]))
+    dn = pd.Series((d < 0).astype(float)).rolling(p["n"], min_periods=p["n"]).sum().to_numpy() == p["n"]
+    up = pd.Series((d > 0).astype(float)).rolling(p["n"], min_periods=p["n"]).sum().to_numpy() == p["n"]
+    if p["trend"]:
+        t = I.ema(p["trend"])
+        dn &= I.c > t
+        up &= I.c < t
+    return dn, up
+
+
+def _f_tod(I, p):
+    hit = (I.xhour == p["hour"])
+    if p["dow"] >= 0:
+        hit &= (I.xdow == p["dow"])
+    return (hit if p["dir"] == 1 else np.zeros(I.n, bool)), (hit if p["dir"] == -1 else np.zeros(I.n, bool))
+
+
+def _f_gap(I, p):
+    pos, dopen = I.day_pos()
+    pdc = I.prev_day_close()
+    gap = (dopen - pdc) / np.where(I.atr(14) == 0, np.nan, I.atr(14))
+    ok = _ok(gap) & (pos == 0)
+    big_up, big_dn = (gap > p["k"]) & ok, (gap < -p["k"]) & ok
+    return (big_up, big_dn) if p["mode"] == 1 else (big_dn, big_up)           # go with the gap, or fade it
+
+
+def _f_sess_mom(I, p):
+    pos, dopen = I.day_pos()
+    mv = (I.c - dopen) / np.where(I.atr(14) == 0, np.nan, I.atr(14))
+    hit = (I.xhour == p["hour"]) & _ok(mv)
+    up, dn = hit & (mv > p["thr"]), hit & (mv < -p["thr"])
+    return (up, dn) if p["dir"] == 1 else (dn, up)                              # follow the session's move, or fade it
+
+
+def _f_price_ma(I, p):
+    m = I.ema(p["n"])
+    ok = _ok(m)
+    return _cross_up(I.c, m) & ok, _cross_dn(I.c, m) & ok
+
+
+def _f_nr(I, p):
+    rng = I.h - I.l
+    nr = rng == pd.Series(rng).rolling(p["n"], min_periods=p["n"]).min().to_numpy()
+    prev_nr = _shift(nr.astype(float)).astype(bool)
+    return prev_nr & (I.c > _shift(I.h)), prev_nr & (I.c < _shift(I.l))
+
+
+def _f_body(I, p):
+    rng = np.where(I.h - I.l == 0, np.nan, I.h - I.l)
+    body = (I.c - I.o) / rng
+    ok = _ok(body)
+    big_dn, big_up = (body < -p["thr"]) & ok, (body > p["thr"]) & ok
+    lg, sh = (big_dn, big_up) if p["mode"] == 1 else (big_up, big_dn)           # fade the big bar, or ride it
+    if p["trend"]:
+        t = I.ema(p["trend"])
+        lg &= I.c > t
+        sh &= I.c < t
+    return lg, sh
+
+
+def _f_distma(I, p):
+    d = (I.c - I.ema(p["n"])) / np.where(I.atr(14) == 0, np.nan, I.atr(14))
+    ok = _ok(d)
+    return _cross_up(d, np.full(I.n, -p["k"])) & ok, _cross_dn(d, np.full(I.n, p["k"])) & ok
+
+
+def _f_volexp(I, p):
+    fast = I.atr(5)
+    slow = I.atr(p["slow"])
+    ratio = fast / np.where(slow == 0, np.nan, slow)
+    ok = _ok(ratio) & (ratio > p["thr"])
+    return ok & (I.c > I.o), ok & (I.c < I.o)
+
+
+def _f_lowrev(I, p):
+    lo = pd.Series(I.c).rolling(p["n"], min_periods=p["n"]).min().to_numpy()
+    hi = pd.Series(I.c).rolling(p["n"], min_periods=p["n"]).max().to_numpy()
+    ok = _ok(lo, hi)
+    lg, sh = (I.c <= lo) & ok, (I.c >= hi) & ok
+    if p["trend"]:
+        t = I.ema(p["trend"])
+        lg &= I.c > t
+        sh &= I.c < t
+    return lg, sh
+
+
+# ---------------------------------------------------------------------------------------------------------------- filters
+HOUR_WINDOWS = {"all": None, "rth": (8, 15), "morning": (8, 11), "afternoon": (11, 15), "overnight": (17, 8), "us_open": (8, 10)}
+FILTER_GRID = {
+    "side": ["both", "long", "short"],
+    "trend": [0, 50, 100, 200],
+    "hours": list(HOUR_WINDOWS),
+    "vol": ["all", "high", "low"],
+}
+
+
+def apply_filters(I, lg, sh, flt: dict | None):
+    """Optional regime filters, all causal (each looks only at information up to the signal bar's close):
+    side (long/short only), trend (long only above / short only below an EMA), hours (exchange-clock session window),
+    vol (ATR above/below its own 200-bar average -- the volatility regime idea from the Library's regime papers)."""
+    if not flt:
+        return lg, sh
+    side = flt.get("side", "both")
+    if side == "long":
+        sh = np.zeros_like(sh)
+    elif side == "short":
+        lg = np.zeros_like(lg)
+    tr = flt.get("trend", 0)
+    if tr:
+        t = I.ema(int(tr))
+        okt = ~np.isnan(t)
+        lg = lg & (I.c > t) & okt
+        sh = sh & (I.c < t) & okt
+    win = HOUR_WINDOWS.get(flt.get("hours", "all"))
+    if win:
+        a, b = win
+        m = ((I.xhour >= a) & (I.xhour < b)) if a < b else ((I.xhour >= a) | (I.xhour < b))
+        lg, sh = lg & m, sh & m
+    v = flt.get("vol", "all")
+    if v != "all":
+        r = I.atr_ratio(200)
+        m = (r > 1.1) if v == "high" else (r < 0.9)
+        m = m & ~np.isnan(r)
+        lg, sh = lg & m, sh & m
+    return lg, sh
+
+
 FAMILIES: dict[str, Family] = {f.name: f for f in (
     Family("ema_cross", "EMA cross", "trend", "Fast EMA crosses slow EMA, optionally only when ADX says the market is trending.",
-           {"fast": [8, 12, 20, 30], "slow": [40, 55, 80, 120], "adx_min": [0, 18, 25]}, _f_ema_cross),
+           {"fast": [8, 12, 20, 30], "slow": [40, 55, 80, 120], "adx_min": [0, 18, 25]}, _f_ema_cross, 'Momentum Strategies in Futures Markets and Trend-Following Funds'),
     Family("supertrend", "Supertrend flip", "trend", "ATR trailing band flips side: a clean trend-following trigger.",
-           {"n": [7, 10, 14, 20], "m": [2.0, 2.5, 3.0, 4.0]}, _f_supertrend),
+           {"n": [7, 10, 14, 20], "m": [2.0, 2.5, 3.0, 4.0]}, _f_supertrend, 'Trend Following, Risk Parity and Momentum in Commodity Futures'),
     Family("adx_di", "ADX / DI cross", "trend", "+DI crosses -DI while ADX confirms trend strength.",
            {"n": [10, 14, 20], "min": [15, 20, 25, 30]}, _f_adx_di),
     Family("macd", "MACD signal cross", "trend", "MACD line crosses its signal line; optional 'only from the far side of zero'.",
            {"a": [8, 12, 16], "b": [21, 26, 34], "s": [7, 9, 12], "zero": [0, 1]}, _f_macd),
     Family("donchian", "Donchian breakout", "breakout", "Close breaks the prior N-bar high/low, optionally with an EMA trend filter.",
-           {"n": [20, 30, 55, 80, 120], "trend": [0, 100, 200]}, _f_donchian),
+           {"n": [20, 30, 55, 80, 120], "trend": [0, 100, 200]}, _f_donchian, 'Comparative Study of Breakout and Mean-Reversion Strategies'),
     Family("keltner", "Keltner breakout", "breakout", "Close pushes outside an ATR channel around an EMA (volatility expansion).",
            {"n": [14, 20, 30, 50], "m": [1.5, 2.0, 2.5, 3.0]}, _f_keltner),
     Family("squeeze", "Bollinger squeeze breakout", "breakout", "Volatility was compressed (narrow bands), then price breaks out.",
@@ -335,9 +527,9 @@ FAMILIES: dict[str, Family] = {f.name: f for f in (
     Family("orb", "Opening-range breakout", "session", "First break of the day's opening range (first k bars). Intraday data only.",
            {"k": [2, 3, 4, 6, 8, 12]}, _f_orb),
     Family("rsi_rev", "RSI reversal", "reversion", "RSI leaves oversold/overbought; optional 'only with the long-term trend'.",
-           {"n": [2, 3, 5, 7, 14], "lo": [10, 20, 30], "trend": [0, 100, 200]}, _f_rsi_rev),
+           {"n": [2, 3, 5, 7, 14], "lo": [10, 20, 30], "trend": [0, 100, 200]}, _f_rsi_rev, 'Design and Development of Mean Reversion Strategies'),
     Family("boll_rev", "Bollinger reversion", "reversion", "Close re-enters the bands after an excursion outside them.",
-           {"n": [14, 20, 30, 50], "k": [1.5, 2.0, 2.5, 3.0]}, _f_boll_rev),
+           {"n": [14, 20, 30, 50], "k": [1.5, 2.0, 2.5, 3.0]}, _f_boll_rev, 'Analysis of the Bollinger Bands and Mean Reversion Trading Strategy in the S&P 500'),
     Family("zscore_rev", "Z-score reversion", "reversion", "Price stretched N sigma from its mean starts to snap back.",
            {"n": [20, 30, 50, 100], "z": [1.5, 2.0, 2.5, 3.0]}, _f_zrev),
     Family("stoch_rev", "Stochastic reversal", "reversion", "Stochastic leaves an extreme zone.",
@@ -348,10 +540,32 @@ FAMILIES: dict[str, Family] = {f.name: f for f in (
            {"n": [10, 14, 21], "lo": [10, 15, 20]}, _f_wpr),
     Family("failed_break", "Failed-breakout sweep", "reversion", "Price sweeps the N-bar extreme then closes back inside (stop-run reversal).",
            {"n": [10, 20, 40, 60]}, _f_failbreak),
+    Family("ibs_rev", "Internal-bar-strength reversion", "reversion", "Close near the bar's low (or high) tends to bounce -- the classic index 'IBS' effect, long-biased in an uptrend.",
+           {"lo": [0.05, 0.1, 0.15, 0.2, 0.3], "trend": [0, 50, 100, 200]}, _f_ibs, "101 Formulaic Alphas; Mean-reversion papers (S&P 500)"),
+    Family("streak_rev", "Consecutive-close reversal", "reversion", "N lower closes in a row inside an uptrend (or N higher in a downtrend) -- short-term exhaustion.",
+           {"n": [2, 3, 4, 5, 6], "trend": [0, 100, 200]}, _f_streak, "Mean Reversion Trading Strategies and the Black Swan Events"),
+    Family("low_rev", "N-bar extreme reversion", "reversion", "Close at the lowest (highest) close of the last N bars while the bigger trend is intact.",
+           {"n": [5, 10, 20, 40, 60], "trend": [0, 100, 200]}, _f_lowrev, "Comparative Study of Breakout and Mean-Reversion Strategies"),
+    Family("dist_ma_rev", "Stretch-from-average reversion", "reversion", "Price stretched k ATR below (above) its EMA snaps back across the threshold.",
+           {"n": [20, 50, 100], "k": [1.0, 1.5, 2.0, 3.0, 4.0]}, _f_distma, "Bollinger/mean-reversion papers"),
+    Family("body_bar", "Big-bar fade or follow", "momentum", "A bar whose body fills most of its range is faded (mode 1) or ridden (mode -1).",
+           {"thr": [0.6, 0.75, 0.9], "mode": [1, -1], "trend": [0, 100, 200]}, _f_body, "101 Formulaic Alphas (body / range alphas)"),
+    Family("vol_expansion", "Volatility-expansion thrust", "momentum", "Short-term ATR jumps well above its longer average and the bar closes with direction -- ride the expansion.",
+           {"thr": [1.3, 1.6, 2.0, 2.5], "slow": [50, 100]}, _f_volexp, "Volatility-Volume-Gap regime classifier; Structural Limits of OHLCV Signals"),
+    Family("price_ma", "Price crosses long average", "trend", "Close crosses a long EMA: slow trend-following in the spirit of the century-long trend evidence.",
+           {"n": [50, 100, 150, 200, 300, 500]}, _f_price_ma, "A Century of Evidence on Trend-Following Investing"),
+    Family("nr_break", "Narrow-range breakout", "breakout", "The narrowest bar of the last N is followed by a break of its high/low.",
+           {"n": [4, 7, 10, 14]}, _f_nr, "Breakout vs mean-reversion study"),
+    Family("tod_hold", "Time-of-day entry", "session", "Enter at a fixed exchange-clock hour (optionally one weekday) and let the exit rules decide -- tests intraday/overnight drift.",
+           {"hour": list(range(0, 24)), "dir": [1, -1], "dow": [-1]}, _f_tod, "Intraday momentum / overnight drift literature; Day Trading: Adapting to Change"),
+    Family("gap_play", "Opening gap go-or-fade", "session", "A gap of k ATR at the new session's first bar is followed (mode 1) or faded (mode -1).",
+           {"k": [0.25, 0.5, 0.75, 1.0, 1.5], "mode": [1, -1]}, _f_gap, "Volatility-Volume-Gap classifier (MNQ)"),
+    Family("session_mom", "Session momentum / fade", "session", "At a chosen hour, if the session has moved more than k ATR from its open, follow it (or fade it).",
+           {"hour": [9, 10, 11, 12, 13, 14], "thr": [0.25, 0.5, 1.0, 1.5], "dir": [1, -1]}, _f_sess_mom, "Intraday momentum (first part of the day predicts the last)"),
     Family("pullback", "Trend pullback", "trend", "In an EMA trend, RSI dips then turns back with the trend.",
            {"trend": [50, 100, 200], "n": [3, 5, 14], "dip": [30, 40, 50]}, _f_pullback),
     Family("momentum", "Time-series momentum", "momentum", "N-bar return beats a volatility-scaled threshold; ride it.",
-           {"n": [10, 20, 40, 80], "thr_atr": [0.5, 1.0, 1.5]}, _f_momo),
+           {"n": [10, 20, 40, 80], "thr_atr": [0.5, 1.0, 1.5]}, _f_momo, 'Do Momentum and Reversal Strategies Work in Commodity Futures'),
 )}
 
 EXIT_GRID = {"stop_atr": [1.5, 2.0, 2.5, 3.0, 4.0], "target_r": [1.0, 1.5, 2.0, 3.0, 5.0]}
