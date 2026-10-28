@@ -112,6 +112,9 @@
     if (!form) return;
     var pip = form.querySelector('[name="pip_size"]');
     if (!pip) return;                       // nothing to auto-fill on this page
+    // One instrument picker per form: pages that already ship their own (a *_instrument_select with the
+    // "Detect pip size" button) keep that one and do not get a second.
+    if (form.querySelector('select[id$="instrument_select"]:not(#lc-instrument-select)')) return;
     select._lcInstr = true;
     var contract = form.querySelector('[name="contract_size"]');
     var comm = form.querySelector('[name="commission"]');
@@ -122,14 +125,14 @@
     var nx = anchor.nextElementSibling;
     if (nx && nx.classList && nx.classList.contains('lc-hint')) anchor = nx;
     var lab = document.createElement('label');
-    lab.className = 'flabel'; lab.style.marginTop = '12px'; lab.setAttribute('for', 'lc-instrument-select');
+    lab.className = 'flabel lc-instr-part'; lab.style.marginTop = '12px'; lab.setAttribute('for', 'lc-instrument-select');
     lab.textContent = 'Or pick a known instrument (auto-fills pip size + $/point)';
     var sel = document.createElement('select');
     sel.id = 'lc-instrument-select'; sel.className = 'inp';
     var none = document.createElement('option'); none.value = ''; none.textContent = '(none -- set manually)';
     sel.appendChild(none);
     var status = document.createElement('p');
-    status.id = 'lc_pip_detect_status'; status.className = 'lc-hint'; status.style.marginTop = '6px';
+    status.id = 'lc_pip_detect_status'; status.className = 'lc-hint lc-instr-part'; status.style.marginTop = '6px';
     anchor.parentNode.insertBefore(lab, anchor.nextSibling);
     lab.parentNode.insertBefore(sel, lab.nextSibling);
     sel.parentNode.insertBefore(status, sel.nextSibling);

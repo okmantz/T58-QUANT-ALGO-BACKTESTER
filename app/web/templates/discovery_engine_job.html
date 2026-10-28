@@ -81,7 +81,7 @@
   <h2><span class="dj-spin" id="dj-spin"></span><span id="dj-title">Searching&hellip;</span></h2>
   <p class="dj-meta" id="dj-meta"></p>
   <div id="lv" style="display:none;">
-    <div class="lv-phase" id="lv-phase"><span data-p="search">1 &middot; Search</span><span data-p="validate">2 &middot; Fresh data</span><span data-p="verify">3 &middot; Stress test</span><span data-p="done">4 &middot; Done</span></div>
+    <div class="lv-phase" id="lv-phase"><span data-p="search">1 &middot; Search</span><span data-p="validate">2 &middot; Fresh data</span><span data-p="verify">3 &middot; Stress test</span><span data-p="prove">4 &middot; Real-engine proof</span><span data-p="done">5 &middot; Done</span></div>
     <div class="lv-bar"><i id="lv-fill"></i></div>
     <div class="lv-stats">
       <div class="lv-stat"><b id="lv-tested">0</b><span>ideas tried</span></div>
@@ -149,7 +149,7 @@
   }
   function renderLive(ev) {
     $('lv').style.display = '';
-    var order = ['search', 'validate', 'verify', 'done'], at = order.indexOf(ev.phase);
+    var order = ['search', 'validate', 'verify', 'prove', 'done'], at = order.indexOf(ev.phase);
     [].forEach.call($('lv-phase').children, function (el) {
       var i = order.indexOf(el.getAttribute('data-p'));
       el.className = i < at ? 'done' : (i === at ? 'on' + (ev.phase !== 'done' ? ' lv-pulse' : '') : '');
@@ -180,7 +180,14 @@
       '<div>Net (all data)<b>' + (c.net_pct >= 0 ? '+' : '') + c.net_pct + '%</b></div>' +
       '<div>Worst drawdown<b>' + c.dd_pct + '% ' + (c.fits_firm_dd ? '<span class="tag ok">fits firm</span>' : '<span class="tag bad">over firm limit</span>') + '</b></div>' +
       '<div>Neighbours profitable<b>' + Math.round((c.robust || 0) * 100) + '%</b></div>' +
-      '<div>Cost per trade<b>' + (c.cost_r * 100).toFixed(0) + '% of R</b></div></div>';
+      '<div>Cost per trade<b>' + (c.cost_r * 100).toFixed(0) + '% of R</b></div>' +
+      '<div>Bar size<b>' + (c.bar_minutes >= 60 ? (c.bar_minutes / 60) + '-hour' : c.bar_minutes + '-minute') + '</b></div>' +
+      (c.pass_prob != null ? '<div>Evaluation pass chance<b>~' + c.pass_prob + '% at ' + c.suggested_risk_pct + '% risk</b></div>' : '') +
+      (c.trades_per_week != null ? '<div>Trades per week<b>' + c.trades_per_week + '</b></div>' : '') +
+      (c.confidence ? '<div>Confidence<b>' + esc(c.confidence) + '</b></div>' : '') +
+      ((c.engine && c.engine.trades != null) ? '<div>Real-engine check<b>' + (c.engine.lookahead_bug ? 'FAILED lookahead' : 'no lookahead') + ' &middot; ' + c.engine.trades + ' trades, PF ' + c.engine.profit_factor + '</b></div>' : '') +
+      '</div>';
+    if (c.family_source) h += '<p class="dj-meta" style="margin:6px 0 0;">Drawn from: ' + esc(c.family_source) + '</p>';
     if (c.fails && c.fails.length) h += '<ul class="lab-fails">' + c.fails.map(function (f) { return '<li>' + esc(f) + '</li>'; }).join('') + '</ul>';
     h += '<div class="dj-actions"><button type="button" class="dj-btn ' + (win ? 'pri' : '') + '" data-save="' + idx + '">Save &amp; test it</button><span class="dj-meta" style="margin:0" data-msg="' + idx + '"></span></div></div>';
     return h;

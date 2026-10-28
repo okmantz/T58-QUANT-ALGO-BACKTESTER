@@ -35,7 +35,7 @@
   <div id="running"><div class="empty">Loading&hellip;</div></div>
 </div>
 <div class="runs-card">
-  <h2>Finished in the last 6 hours</h2>
+  <h2>Finished runs <span style="text-transform:none;letter-spacing:0;">(saved -- they stay here after a restart)</span></h2>
   <div id="recent"><div class="empty">Loading&hellip;</div></div>
 </div>
 <div class="runs-card" id="mem-card" data-csrf="{{ csrf_token() }}">
@@ -79,10 +79,10 @@
 (function () {
   function fmt(sec) { if (sec == null) return ''; sec = Math.floor(sec); if (sec < 60) return sec + 's'; if (sec < 3600) return Math.floor(sec/60) + 'm ' + (sec%60) + 's'; return Math.floor(sec/3600) + 'h ' + Math.floor((sec%3600)/60) + 'm'; }
   function row(j) {
-    var a = document.createElement('a'); a.className = 'run-row'; a.href = j.page_url; a.setAttribute('data-job', j.job_id);
+    var a = document.createElement('a'); a.className = 'run-row'; a.href = (j.saved_only && j.report_html) ? j.report_html : j.page_url; a.setAttribute('data-job', j.job_id);
     var m = document.createElement('div'); m.className = 'run-main';
     var t = document.createElement('div'); t.className = 'run-tool'; t.textContent = j.tool; m.appendChild(t);
-    var s = document.createElement('div'); s.className = 'run-sub'; s.textContent = (j.instrument || 'no instrument') + (j.error ? ' — ' + j.error : ''); m.appendChild(s);
+    var s = document.createElement('div'); s.className = 'run-sub'; s.textContent = (j.instrument || 'no instrument') + (j.started_at ? ' · ' + new Date(j.started_at * 1000).toLocaleString() : '') + (j.error ? ' — ' + j.error : ''); m.appendChild(s);
     var st = document.createElement('div'); st.className = 'run-state ' + (j.done ? (j.error ? 'err' : 'done') : 'live');
     st.textContent = j.done ? ((j.error ? 'Failed' : 'Finished') + ' · ' + fmt(j.elapsed_seconds)) : '● Running · ' + fmt(j.elapsed_seconds);
     if (!j.done && j.progress != null) { var b = document.createElement('div'); b.className = 'bar'; var i = document.createElement('i'); i.style.width = Math.max(2, Math.min(100, j.progress)) + '%'; b.appendChild(i); st.appendChild(b); }
@@ -96,7 +96,7 @@
   function load() {
     fetch('/api/running-jobs.json').then(function (r) { return r.json(); }).then(function (d) {
       fill('running', d.running || [], 'Nothing is running. Start a run from Create, Optimize, Validate or the Evolution Lab.');
-      fill('recent', d.recent || [], 'No finished runs yet in this session.');
+      fill('recent', d.recent || [], 'No finished runs yet.');
       document.getElementById('n-running').textContent = (d.running || []).length ? '(' + d.running.length + ')' : '';
     }).catch(function () {});
   }

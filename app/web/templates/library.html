@@ -146,6 +146,15 @@
   <div id="d-stage-bar" style="margin: 8px 0 4px;"></div>
   <div class="stage-labels"><span>Create</span><span>Test</span><span>Optimize</span><span>Validate</span><span>Champion</span><span>Ready</span></div>
   <p style="font-size:12px;color:var(--teal);margin:6px 0 0;" id="d-next-step"></p>
+  <div id="d-nextcard" style="margin:12px 0 4px;padding:14px 16px;border:1px solid var(--teal);border-radius:10px;background:rgba(0,200,170,.07);">
+    <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);">Your next step</div>
+    <div id="d-nc-head" style="font-size:16px;font-weight:600;margin:4px 0;">Loading...</div>
+    <div id="d-nc-why" style="font-size:13px;color:var(--t-soft);margin-bottom:8px;"></div>
+    <ol id="d-nc-steps" style="margin:0 0 10px 18px;padding:0;font-size:13px;color:var(--t-soft);line-height:1.5;"></ol>
+    <div id="d-nc-actions" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
+  </div>
+  <div style="margin:8px 0 0;"><button class="delete-btn" type="button" onclick="retireCurrent()">Retire to graveyard</button>
+    <span id="retire-note" style="font-size:12.5px;margin-left:8px;"></span></div>
 
   <div class="detail-tabs">
     <button data-tab="code" onclick="showDetailTab('code')" class="active">Code</button>
@@ -219,6 +228,15 @@
       <label style="font-size:13px;color:var(--t-soft);">Rename to</label>
       <input type="text" name="new_filename" id="set-new-filename">
       <button class="submit-btn" type="submit">Rename</button>
+    </form>
+
+    <form method="POST" action="/strategies/retire" style="margin-top:14px;" onsubmit="return confirm('Retire this strategy to the graveyard? A copy of its source is kept.')">
+      <input type="hidden" name="strategy_type" id="set-type-5">
+      <input type="hidden" name="filename" id="set-filename-5">
+      <input type="hidden" name="return_to" value="library">
+      <label style="font-size:13px;color:var(--t-soft);">Why retire it? (optional -- helps the discovery tools avoid this idea)</label>
+      <input type="text" name="reason" placeholder="e.g. edge disappears after costs">
+      <button class="delete-btn" type="submit">Retire to graveyard</button>
     </form>
 
     <form method="POST" action="/strategies/delete" style="margin-top:14px;" onsubmit="return confirm('Delete this strategy permanently?')">
@@ -365,6 +383,7 @@
         </div>
         ${sparkSvg(c.curve)}
         <div class="cc-foot"><span>${c.validated_on ? 'Validated ' + escapeHtml(c.validated_on) : 'Not validated'}</span><span>${(c.trades !== null && c.trades !== undefined) ? c.trades + ' trades' : ''}</span></div>
+        <div style="margin-top:8px;text-align:right;"><button type="button" class="delete-btn" style="padding:4px 10px;font-size:12px;" title="Retire this strategy to the Strategy Graveyard" onclick='event.stopPropagation(); retireStrategy(${JSON.stringify(JSON.stringify({type: s.type, name: s.name}))})'>Retire to graveyard</button></div>
       </div>`;
     }).join('');
 
@@ -384,6 +403,8 @@
     document.getElementById('set-type-2').value = s.type; document.getElementById('set-filename-2').value = s.name;
     document.getElementById('set-type-3').value = s.type; document.getElementById('set-old-filename').value = s.name;
     document.getElementById('set-type-4').value = s.type; document.getElementById('set-filename-4').value = s.name;
+    document.getElementById('set-type-5').value = s.type; document.getElementById('set-filename-5').value = s.name;
+    loadNextCard(s);
     document.getElementById('set-description').value = s.description || '';
     document.getElementById('set-market').value = s.market || '';
     document.getElementById('set-tags').value = (s.tags || []).join(', ');
@@ -402,6 +423,44 @@
     document.getElementById('detail-overlay').style.display = 'block';
     document.getElementById('detail-panel').style.display = 'block';
     showDetailTab('code');
+  }
+
+  function loadNextCard(s) {
+    const H = document.getElementById('d-nc-head'), W = document.getElementById('d-nc-why'),
+          L = document.getElementById('d-nc-steps'), A = document.getElementById('d-nc-actions');
+    H.textContent = 'Working out your next step...'; W.textContent = ''; L.innerHTML = ''; A.innerHTML = '';
+    document.getElementById('retire-note').textContent = '';
+    const pick = s.type + '::' + s.name;
+    const link = (label, href, primary) => `<a class="submit-btn" style="display:inline-block;text-decoration:none;${primary ? '' : 'background:transparent;color:var(--teal);'}" href="${escapeHtml(href)}">${escapeHtml(label)}</a>`;
+    const fallback = () => {
+      const t = nextStepText(s.pipeline_progress);
+      H.textContent = t.replace(/^Next step: /, '');
+      W.textContent = 'Pick a dataset on the next page and run it -- the strategy is already loaded for you.';
+      A.innerHTML = link('Open in Full Pipeline', '/full-pipeline?load_strategy_type=' + encodeURIComponent(s.type) + '&load_strategy_name=' + encodeURIComponent(s.name), true);
+    };
+    fetch('/api/next-step?pick=' + encodeURIComponent(pick)).then(r => r.json()).then(d => {
+      if (!d || d.none || !d.headline) { fallback(); return; }
+      H.textContent = d.headline; W.textContent = d.why || '';
+      L.innerHTML = (d.steps || []).map(x => '<li>' + escapeHtml(String(x).replace(/^\d+\.\s*/, '')) + '</li>').join('');
+      A.innerHTML = (d.primary ? link(d.primary.label, d.primary.href, true) : '') +
+                    (d.secondary || []).map(b => link(b.label, b.href, false)).join('');
+    }).catch(fallback);
+  }
+
+  function retireStrategy(jsonStr) {
+    const s = JSON.parse(jsonStr);
+    const reason = prompt('Retire "' + s.name + '" to the Strategy Graveyard?\nOptional: why? (a copy of its source is kept)', '');
+    if (reason === null) return;
+    fetch('/strategies/retire', {method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'fetch'},
+      body: new URLSearchParams({strategy_type: s.type, filename: s.name, reason: reason})})
+      .then(r => r.json()).then(d => {
+        if (d.ok) { window.location.href = '/library?strategy_notice=' + encodeURIComponent(d.notice); }
+        else { alert(d.error || 'Could not retire that strategy.'); }
+      }).catch(() => alert('Could not retire that strategy.'));
+  }
+
+  function retireCurrent() {
+    if (currentDetail) retireStrategy(JSON.stringify({type: currentDetail.type, name: currentDetail.name}));
   }
 
   function closeDetail() {

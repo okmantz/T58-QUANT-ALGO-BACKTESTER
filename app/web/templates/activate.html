@@ -47,6 +47,13 @@
       <span>Remember this license on this device</span>
     </label>
     <p class="hint" style="margin:0 0 14px;">Unchecked: this license works for today's session only -- you'll be asked to activate again next time you open the app.</p>
+    {% if needs_url %}
+    <details open style="margin:0 0 14px;">
+      <summary style="cursor:pointer;color:var(--teal);font-size:12.5px;">License connection (owner setup, one time)</summary>
+      <p class="hint" style="text-align:left;margin:8px 0;">This copy isn't linked to your license sheet. Paste the Web App URL from Apps Script (Deploy &rarr; Manage deployments; it ends in <code>/exec</code>). It is saved on this computer and used for every activation after.</p>
+      <input type="text" id="sheet_url" name="sheet_url" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="off">
+    </details>
+    {% endif %}
     <input type="hidden" name="next" value="{{ next }}">
     <button class="submit-btn" type="submit">Activate</button>
     {% if error %}<p class="error-note">{{ error }}</p>{% endif %}

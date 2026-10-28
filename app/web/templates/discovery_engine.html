@@ -135,7 +135,7 @@
           <input type="number" name="risk_pct" min="0.05" max="5" step="0.05" value="{{ form.get('risk_pct') or '0.5' }}">
         </label>
         <label>Most recent bars to use
-          <input type="number" name="max_bars" min="1000" step="1000" placeholder="Fast Lab: up to 400,000" value="{{ form.get('max_bars') or '' }}">
+          <input type="number" name="max_bars" min="1000" step="1000" placeholder="Fast Lab: leave blank to use all the data" value="{{ form.get('max_bars') or '' }}">
         </label>
         <label>Bar size
           <select name="bar_size"><option value="auto">Auto (bigger bars when costs are heavy)</option><option value="native" {{ 'selected' if form.get('bar_size') == 'native' else '' }}>Use the file as it is</option></select>
@@ -153,7 +153,7 @@
   <p class="de-note">Fast, and strict about luck. A winner has to survive every step; near-misses are shown with the exact step they failed.</p>
   <div class="de-how">
     <div><b>1 &middot; Pick bar size</b>If trading costs would eat a small-bar strategy alive, it moves up to bigger bars automatically.</div>
-    <div><b>2 &middot; Search</b>18 strategy types, thousands of settings, stops sized in ATR so costs stay small compared with the risk taken.</div>
+    <div><b>2 &middot; Search</b>29 strategy types (trend, reversion, breakout, session, momentum), thousands of settings, evolved and refined, stops sized in ATR so costs stay small compared with the risk taken.</div>
     <div><b>3 &middot; Fresh data</b>The best ideas must also work on bars they never trained on.</div>
     <div><b>4 &middot; Nudge test</b>Neighbouring settings must be profitable too. A real edge is a plateau, not a spike.</div>
     <div><b>5 &middot; Sealed test</b>The last 20% of data is read once, with double costs. This is the lie detector.</div>
