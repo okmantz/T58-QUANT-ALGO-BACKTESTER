@@ -24,3 +24,12 @@ Requires `numba` for speed (pure-Python fallback is ~100x slower for the HMM/ana
 - Pooled test needs >= 8 markets and fails closed with fewer.
 - Blocked families: 6, 95 (scale-in), 18 (calendar spread), 39 (closing imbalance), 45 (roll calendar), 56, 57, 59 (tick/book).
 - No Johansen test (PC-spread + AR(1) gate instead); family 29 uses OLS lines, not Theil-Sen.
+
+## Fast Lab v2 (the default method)
+
+- **Budgets:** Quick 3,000 / Standard 5,800 / Deep 11,500 ideas (always at least 2,500 / 5,000 / 10,000 distinct ideas). Standard and Deep keep hunting with fresh random starts (up to 2 / 3 extra rounds) when nothing clears every check; winners from later rounds are never labelled "strong".
+- **Search:** 29 strategy families (trend, reversion, breakout, session, momentum), each with optional side / trend / hours / volatility filters, stop, target and hold-time variants. Random search, then evolution, then local refinement - all scored on the training slice only.
+- **Splits:** train 60% / validate 20% / sealed test 20%, then neighbour robustness and a 2x-cost stress test. Confidence labels deflate by the number of distinct ideas tried.
+- **No leaks:** saved strategies are causal (the position is carried bar by bar; an unresolved trade stays open at the end of data). Every finalist is re-run in the real backtester, including the same lookahead test Full Pipeline uses, before it can be called a winner.
+- **Full history:** the Lab uses all loaded bars (resampled to the bar sizes where costs are small versus risk) instead of a 400k-bar tail.
+- A winner is still a lead: run it through Full Pipeline and Validate.

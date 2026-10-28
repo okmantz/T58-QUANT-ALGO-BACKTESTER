@@ -29,7 +29,11 @@ Customers' keys live in a Google Sheet that you edit by hand; a small Apps Scrip
 - Setup walk-through: [`license_sheet/SETUP.md`](../license_sheet/SETUP.md). After editing `Code.gs`, redeploy
   (Deploy > Manage deployments > Edit > New version).
 - Point the app at it with the `T58_LICENSE_SHEET_URL` environment variable, or bake `LICENSE_SHEET_URL` into
-  `app/licensing/build_config.py` at build time.
+  `app/licensing/build_config.py` at build time (the GitHub Actions secret `T58_LICENSE_SHEET_URL` does this for released builds).
+  If a build has no URL, the Activate window shows a **License connection (owner setup)** box: paste the `/exec` URL once and it is
+  saved to `license_sheet_url.txt` next to the app's data. Order: env var > that saved file > baked-in URL.
+- **Customer emails:** put the buyer's email in the EMAIL column. Matching ignores case, stray spaces, `mailto:` and invisible
+  characters, and the cell may hold several addresses separated by commas, semicolons or spaces. Redeploy `Code.gs` after updating it.
 - The Account page shows the sheet's PLAN column for the activated key (Pro Monthly, Pro Annual, Lifetime, Trial,
   Complimentary). Users cannot change it.
 - **Revoking** a key = changing its row in the sheet; the app notices on its next check.
