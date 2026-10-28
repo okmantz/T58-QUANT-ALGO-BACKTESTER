@@ -1059,6 +1059,25 @@ def record_validation_result(strategy_type: str, filename: str, result: dict[str
     return save_strategy_metadata(strategy_type, filename, update, merge=True)
 
 
+def get_blocked_entry_slots(strategy_type: str, filename: str) -> str:
+    """The strategy's saved "don't enter in these weekday/hours" filter ('' = none). Lives in the metadata sidecar so it
+    works identically for Python / Pine / MQL5 / manual strategies and survives code edits and optimizer saves."""
+    try:
+        return str(load_strategy_metadata(strategy_type, filename).get("blocked_entry_slots") or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def set_blocked_entry_slots(strategy_type: str, filename: str, slots_text: str, *, merge: bool = True) -> str:
+    """Save (union-merge by default, or replace) the strategy's blocked weekday/hour slots. Returns the stored text.
+    Raises ValueError on a malformed slot so a typo is never silently saved."""
+    from app.backtest.time_slots import merge_slot_text, parse_slots, format_slots
+    new_text = format_slots(parse_slots(slots_text))  # validates
+    final = merge_slot_text(get_blocked_entry_slots(strategy_type, filename), new_text) if merge else new_text
+    save_strategy_metadata(strategy_type, filename, {"blocked_entry_slots": final}, merge=True)
+    return final
+
+
 def record_champion_check_result(strategy_type: str, filename: str, result: dict[str, Any]) -> Path:
     """Convenience wrapper for stamping the final READY/MARGINAL/NOT READY
     champion-check verdict (Full Pipeline's own _make_verdict, or a
