@@ -63,6 +63,13 @@ class LabConfig:
     target_cost_r: float = 0.12
     budget: Optional[int] = None            # override the effort's idea count (tests)
     prove_in_engine: bool = True            # run finalists through the real backtester + lookahead test
+    # Searched-variant memory (app.search.variant_ledger). None = off (tests, one-off calls). With a ledger the Lab (1) skips variants any
+    # earlier run on this market already tested, (2) varies its random seed per run so it does not walk the same path, (3) breeds new
+    # variants from the best past ones (warm start) and (4) spends more random samples on the strategy types that have produced the most.
+    ledger: object = None
+    ledger_scope: str = ""                  # the market being searched, e.g. "ES1!"
+    vary_seed: bool = True
+    warm_start: bool = True
 
 
 @dataclass
@@ -82,12 +89,13 @@ class LabResult:
     bounds: tuple = (0, 0, 0)
     bar_sizes: list = field(default_factory=list)
     proven: int = 0
+    ledger_info: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {"winners": self.winners, "near_misses": self.near_misses, "tested": self.tested, "train_pass": self.train_pass,
                 "val_pass": self.val_pass, "robust_pass": self.robust_pass, "expected_by_luck": self.expected_by_luck, "families_tried": self.families_tried,
                 "cost_r_typical": self.cost_r_typical, "bars": self.bars, "notes": self.notes, "elapsed": round(self.elapsed, 1),
-                "bounds": list(self.bounds), "bar_sizes": self.bar_sizes, "proven": self.proven}
+                "bounds": list(self.bounds), "bar_sizes": self.bar_sizes, "proven": self.proven, "ledger": self.ledger_info}
 
 
 # ---------------------------------------------------------------------------------------------------------------- simulation core
@@ -229,6 +237,45 @@ def label_of(c: dict) -> str:
 
 def _fkey(c): return (c["family"], tuple(sorted(c["params"].items())), tuple(sorted((c.get("flt") or {}).items())))
 def _key(c): return _fkey(c) + (c["stop_atr"], c["target_r"], c.get("hold", MAX_HOLD))
+
+
+def _lkey(c: dict, minutes: int) -> str:
+    """Process-stable key of one variant (bar size + signal set + exits) for the searched-variant ledger."""
+    from app.search.variant_ledger import stable_key
+    return stable_key("lab", int(minutes), c["family"], sorted(c["params"].items()), sorted((c.get("flt") or {}).items()),
+                      c["stop_atr"], c["target_r"], c.get("hold", MAX_HOLD))
+
+
+def _lsig(c: dict, minutes: int) -> str:
+    from app.search.variant_ledger import stable_key
+    return stable_key("labsig", int(minutes), c["family"], sorted(c["params"].items()), sorted((c.get("flt") or {}).items()))
+
+
+_SPEC_KEYS = ("family", "params", "flt", "stop_atr", "target_r", "hold")
+
+
+def _warm_candidates(cfg: "LabConfig", minutes: int, fams: list, limit: int = 24) -> list:
+    """Past top variants on this market/bar size, as candidate dicts the evolution phase can breed from. Anything that no longer fits the
+    current family grids is dropped (families get edited between releases)."""
+    led = cfg.ledger
+    if led is None or not cfg.warm_start or not cfg.ledger_scope:
+        return []
+    out = []
+    for row in led.top_performers(cfg.ledger_scope, bar_minutes=minutes, families=fams, limit=limit):
+        sp = row.get("spec") or {}
+        try:
+            fam = F.FAMILIES[sp["family"]]
+            if set(sp["params"]) != set(fam.grid) or not _valid_params(sp["family"], sp["params"]):
+                continue
+            c = {k: sp[k] for k in _SPEC_KEYS if k in sp}
+            c.setdefault("hold", MAX_HOLD)
+            c.setdefault("flt", {})
+            c["fit"] = float(row.get("fit") or 0.0)
+            c["_warm"] = True
+            out.append(c)
+        except Exception:  # noqa: BLE001
+            continue
+    return out
 
 
 def _valid_params(fn: str, p: dict) -> bool:
@@ -457,18 +504,35 @@ def _search_one_size(ctx: _Ctx, fams: list, cfg: LabConfig, budget: int, rng: ra
         if k in seen:
             return None
         seen.add(k)
+        led, scope = cfg.ledger, cfg.ledger_scope
+        lk = None
+        if led is not None and scope:
+            lk = _lkey(c, ctx.minutes)
+            if led.is_known(scope, lk):                 # tested in an earlier run: do not spend a simulation on it again
+                led.skipped_known += 1
+                tally["skipped_known"] = tally.get("skipped_known", 0) + 1
+                return None
         tally["tested"] += 1
         tally["distinct"].add((ctx.minutes,) + _fkey(c))
         res = ctx.run(c)
+        spec = {kk: c[kk] for kk in _SPEC_KEYS if kk in c}
+
+        def _book(stage, fit_=None, st_=None):
+            if lk is not None:
+                led.record(scope, lk, source="lab", family=c["family"], bar_minutes=ctx.minutes, spec=spec, label=label_of(c), stage=stage,
+                           fit=fit_, train_t=(st_ or {}).get("t"), train_n=(st_ or {}).get("n"), sig=_lsig(c, ctx.minutes))
         if res is None:
+            _book("searched")
             return None
         ent, ex, r = res
         fit = _train_fitness(ent, r, ctx.a1, cfg.min_trades)
         if fit is None:
+            _book("searched")
             return None
         score, st = fit
         dof = len(c["params"]) + len(c.get("flt") or {})
         score = score / (1.0 + 0.06 * dof)               # every extra knob is another way to fit noise
+        _book("train_pass", score, st)
         c = {**c, "fit": score, "train": st, "_trades": (ent, ex, r), "bar_minutes": ctx.minutes}
         archive[k] = c
         tally["train_pass"] += 1
@@ -485,18 +549,30 @@ def _search_one_size(ctx: _Ctx, fams: list, cfg: LabConfig, budget: int, rng: ra
     def stopped() -> bool:
         return cancel is not None and cancel.is_set()
 
+    # --- 0. what earlier runs on this market learned: which strategy types pay, and which past variants are worth breeding from
+    sample_fams = fams
+    warm = []
+    if cfg.ledger is not None and cfg.ledger_scope:
+        try:
+            wts = cfg.ledger.family_weights(cfg.ledger_scope, fams, bar_minutes=ctx.minutes)
+            if any(w > 1 for w in wts.values()):
+                sample_fams = [f for f in fams for _ in range(wts.get(f, 1))]
+            warm = _warm_candidates(cfg, ctx.minutes, fams)
+            cfg.ledger.warm_started += len(warm)
+        except Exception as exc:  # noqa: BLE001 -- the memory is a bonus, never a reason to fail a search
+            notes.append(f"Search memory could not be read ({type(exc).__name__}); searching without it.")
     # --- 1. random search
     guard = 0
     while tally["tested"] - start_tested < n_sample and guard < n_sample * 6 and not stopped():
         guard += 1
-        evaluate(_sample(rng, fams, ctx))
+        evaluate(_sample(rng, sample_fams if (sample_fams is not fams and rng.random() < 0.6) else fams, ctx))
         if guard % 160 == 0:
             live()
     # --- 2. evolution
     pop_size = 48
     gens = 0
     while tally["tested"] - start_tested < n_sample + n_evolve and not stopped():
-        pool = sorted(archive.values(), key=lambda x: -x["fit"])[:pop_size]
+        pool = sorted(list(archive.values()) + warm, key=lambda x: -x["fit"])[:pop_size]
         if len(pool) < 4:                              # nothing to breed from: keep sampling, but around the best-scoring families
             for _ in range(160):
                 evaluate(_sample(rng, fams, ctx))
@@ -557,12 +633,51 @@ def _robust(ctx: _Ctx, c: dict, cfg: LabConfig) -> tuple:
 
 def run_lab(df: pd.DataFrame, cost_price: float, cfg: Optional[LabConfig] = None, progress: Optional[Callable] = None,
             cancel=None, frames: Optional[list] = None, verify: Optional[Callable] = None) -> LabResult:
+    """Run the Lab. With ``cfg.ledger`` set, every variant tested is remembered (and known ones skipped) -- see ``_run_lab_impl``."""
+    cfg = cfg or LabConfig()
+    led = cfg.ledger if (cfg.ledger is not None and cfg.ledger_scope) else None
+    try:
+        res = _run_lab_impl(df, cost_price, cfg, progress, cancel, frames, verify)
+    except BaseException:
+        if led is not None:
+            try:
+                led.finish_run(tested=0)
+            except Exception:  # noqa: BLE001
+                pass
+        raise
+    if led is not None:
+        try:
+            skipped, warm, new = led.skipped_known, led.warm_started, led.new_variants
+            led.finish_run(tested=res.tested, winners=len(res.winners), near_misses=len(res.near_misses))
+            new = led.new_variants
+            s = led.summary(cfg.ledger_scope)
+            res.ledger_info = {"scope": cfg.ledger_scope, "run_number": led.run_id, "new_variants": new, "skipped_known": skipped,
+                               "warm_started": warm, "total_variants_on_market": s["variants"], "runs_on_market": s["runs"]}
+            if skipped or warm:
+                res.notes.insert(0, f"Search memory: skipped {skipped:,} variants already tested in earlier runs on {cfg.ledger_scope}"
+                                    + (f" and started evolution from {warm} of the best past variants" if warm else "")
+                                    + f". {s['variants']:,} variants are now on record for this market.")
+            elif s["variants"]:
+                res.notes.insert(0, f"Search memory: {new:,} new variants recorded ({s['variants']:,} on record for {cfg.ledger_scope}). "
+                                    "Next run skips these and explores new ground.")
+        except Exception:  # noqa: BLE001 -- bookkeeping never fails a search
+            pass
+    return res
+
+
+def _run_lab_impl(df: pd.DataFrame, cost_price: float, cfg: LabConfig, progress: Optional[Callable] = None,
+                  cancel=None, frames: Optional[list] = None, verify: Optional[Callable] = None) -> LabResult:
     """``df`` is the primary frame (one bar size). Pass ``frames=[(minutes, df, cost_price), ...]`` to search several bar sizes in one run;
     ``verify(candidate, minutes) -> dict`` is the real-engine proof (see app.discovery_lab.verify) applied to each finalist."""
-    cfg = cfg or LabConfig()
     emit = progress or (lambda ev: None)
     t0 = time.time()
-    rng = random.Random(cfg.seed)
+    led = cfg.ledger if (cfg.ledger is not None and cfg.ledger_scope) else None
+    run_no = 0
+    if led is not None:
+        run_no = led.begin_run(source="lab", scope=cfg.ledger_scope, effort=cfg.effort, seed=cfg.seed)
+    # Same seed + same data would walk the same path every time (and land on the same strategy). With a memory the seed also depends on
+    # how many runs this market has had, so each run explores a different region; without one it is exactly the old behaviour.
+    rng = random.Random(f"{cfg.seed}:{led.run_count(cfg.ledger_scope)}" if (led is not None and cfg.vary_seed) else cfg.seed)
     if not frames:
         frames = [(int(round(native_minutes(df))), df, cost_price)]
     notes: list = []
@@ -580,7 +695,7 @@ def run_lab(df: pd.DataFrame, cost_price: float, cfg: Optional[LabConfig] = None
             notes.append(f"Costs are heavy on {cx.minutes}-minute bars ({cx.cost / cx.atr_med:.2f} ATR round-trip); stops were widened to keep cost per trade near "
                          f"{cfg.target_cost_r * 100:.0f}% of R. A larger bar size would work better.")
     budget = cfg.budget or EFFORT_BUDGET.get(cfg.effort, EFFORT_BUDGET["standard"])
-    tally = {"tested": 0, "train_pass": 0, "total": budget, "distinct": set()}
+    tally = {"tested": 0, "train_pass": 0, "total": budget, "distinct": set(), "skipped_known": 0}
 
     # ---- search every bar size (the budget is split by how many bars each one has, with a floor so none is starved)
     weights = [max(0.6, math.log10(max(cx.n, 10))) for cx in ctxs]
@@ -624,6 +739,9 @@ def run_lab(df: pd.DataFrame, cost_price: float, cfg: Optional[LabConfig] = None
             survivors.append(c)
     survivors.sort(key=lambda c: -(c["train"]["t"] + 1.4 * c["val"]["t"]))
     survivors = survivors[: cfg.max_finalists]
+    if led is not None:
+        for c in survivors:
+            led.mark(cfg.ledger_scope, _lkey(c, c["bar_minutes"]), "validated")
 
     # ---- robustness + sealed test + cost stress
     winners, near = [], []
@@ -633,6 +751,14 @@ def run_lab(df: pd.DataFrame, cost_price: float, cfg: Optional[LabConfig] = None
     # The best of N unrelated no-edge ideas is expected to reach t ~ sqrt(2 ln N); a winner has to clear a bar that high before it is
     # called "strong". N counts every distinct signal set tried (not just the ones that scored well).
     distinct = len(tally["distinct"]) or 1
+    if led is not None:
+        try:                       # every signal set EVER tried on this market counts toward the luck bar, not just this run's
+            lifetime = led.lifetime_signal_sets(cfg.ledger_scope)
+            if lifetime > distinct:
+                notes.append(f"The luck bar counts all {lifetime:,} signal sets ever searched on {cfg.ledger_scope}, not just this run's {distinct:,}.")
+                distinct = lifetime
+        except Exception:  # noqa: BLE001
+            pass
     deflated_t = math.sqrt(2.0 * math.log(max(distinct, 3)))
     for c in survivors:
         if cancel is not None and cancel.is_set():
@@ -705,6 +831,11 @@ def run_lab(df: pd.DataFrame, cost_price: float, cfg: Optional[LabConfig] = None
                 near.append(c)
         winners = keep
 
+    if led is not None:
+        for c in near:
+            led.mark(cfg.ledger_scope, _lkey(c, c["bar_minutes"]), "near_miss")
+        for c in winners:
+            led.mark(cfg.ledger_scope, _lkey(c, c["bar_minutes"]), "winner")
     rank = {"strong": 0, "plausible": 1, "weak": 2}
     winners.sort(key=lambda c: (rank[c["confidence"]], -(c["pass_prob"]), -c["pooled_t"]))
     near.sort(key=lambda c: (len(c["fails"]), -(c["train"]["t"] + c["val"]["t"])))
