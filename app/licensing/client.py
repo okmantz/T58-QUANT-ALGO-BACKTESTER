@@ -76,11 +76,11 @@ def resolve_license_server_url() -> str | None:
 
 
 _NO_LICENSE_SERVER_URL_MESSAGE = (
-    "This T58 build has no license server URL configured, so it cannot activate "
-    "or validate a server license. Set the T58_LICENSE_SERVER_URL environment "
-    "variable, or rebuild with the URL baked in (see license_server/DEPLOY.md "
-    "step 7). A master key still activates fully offline -- enter it in the "
-    "activation window if you have one."
+    "This copy of T58 isn't connected to the license sheet yet, so it can't check a license key. "
+    "Owner: paste your license sheet's Web App URL (the one ending in /exec) into the \"License connection\" "
+    "box on this window, or create a file named license_sheet_url.txt next to the app containing that URL, or "
+    "set the T58_LICENSE_SHEET_URL secret and rebuild. Customers: please contact support. "
+    "A master key still activates fully offline."
 )
 
 
@@ -120,12 +120,68 @@ def _baked_sheet_url() -> str:
     return str(getattr(build_config, "LICENSE_SHEET_URL", "") or "").strip()
 
 
+SHEET_URL_FILENAME = "license_sheet_url.txt"
+
+
+def _sheet_url_files() -> list:
+    """Where a runtime-configured sheet URL may live: next to the app (so it can ship in the release zip or be
+    dropped in by the owner) or in the app's data folder (where the Activate window saves it)."""
+    from pathlib import Path
+    out = []
+    try:
+        from app.data.storage import get_app_base_dir
+        base = Path(get_app_base_dir())
+        out += [base / SHEET_URL_FILENAME, base / "data" / SHEET_URL_FILENAME]
+    except Exception:  # noqa: BLE001 -- config lookup must never break licensing
+        pass
+    return out
+
+
+def _valid_sheet_url(url: str) -> bool:
+    u = (url or "").strip()
+    return u.startswith("https://") and "." in u[8:] and " " not in u
+
+
+def _runtime_sheet_url() -> str:
+    for f in _sheet_url_files():
+        try:
+            if f.is_file():
+                for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        return line if _valid_sheet_url(line) else ""
+        except OSError:
+            continue
+    return ""
+
+
+def save_sheet_url(url: str) -> tuple[bool, str]:
+    """Persist the license sheet Web App URL for this install. Refuses to replace a URL that is already configured
+    by the environment or baked into the build (those win in resolve_sheet_url anyway)."""
+    url = (url or "").strip()
+    if not _valid_sheet_url(url):
+        return False, "That doesn't look like a Web App URL. It should start with https:// and end with /exec."
+    if os.environ.get("T58_LICENSE_SHEET_URL", "").strip() or _baked_sheet_url():
+        return False, "This build already has a license connection configured."
+    files = _sheet_url_files()
+    if not files:
+        return False, "Couldn't find a place to save the license connection."
+    target = files[-1]
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(url + "\n", encoding="utf-8")
+    except OSError as exc:
+        return False, f"Couldn't save the license connection: {exc}"
+    return True, "License connection saved."
+
+
 def resolve_sheet_url() -> str | None:
-    """The effective Google Sheet web-app URL, or None when sheet mode is off."""
+    """The effective Google Sheet web-app URL, or None when sheet mode is off.
+    Order: T58_LICENSE_SHEET_URL env var > license_sheet_url.txt (runtime) > baked build_config."""
     env_value = os.environ.get("T58_LICENSE_SHEET_URL", "").strip()
     if env_value:
         return env_value
-    return _baked_sheet_url() or None
+    return _runtime_sheet_url() or _baked_sheet_url() or None
 
 
 def _sheet_get(path: str, payload: dict, timeout: float) -> tuple[bool, dict, str | None]:
@@ -609,8 +665,8 @@ def _post(path: str, payload: dict, timeout: float = 10.0) -> tuple[bool, dict, 
 
 
 _ERROR_MESSAGES = {
-    "not_found": "That license key wasn't found. Double-check it and try again.",
-    "email_mismatch": "That license key is registered to a different email address.",
+    "not_found": "That license key wasn't found. Double-check it (keys look like T58-XXXXX-XXXXX-XXXXX-XXXXX) and try again.",
+    "email_mismatch": "That license key is registered to a different email address. Enter the exact email that is on the key in the license sheet (capitalisation doesn't matter), or ask support to update it.",
     "device_mismatch": "That license is already active on a different device. Deactivate it there first (Account \u2192 License \u2192 Deactivate this device), or contact support.",
     "expired": "This license has expired. Renew your subscription to keep using T58.",
     "revoked": "This license has been revoked.",
