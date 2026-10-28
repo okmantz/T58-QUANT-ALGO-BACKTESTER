@@ -87,6 +87,12 @@ CODE_EXTENSIONS = {"python": ".py", "pinescript": ".pine", "mql5": ".mq5"}
 # full test period, full stop.
 FITNESS_METRICS: dict[str, str] = {
     "eval_pass_probability": "Eval Pass Probability -- reach target before hitting a limit (recommended for prop firms)",
+    # 2026-10-28: per-attempt pass probability PLUS a small smooth edge term (Sharpe / profit factor). Plain
+    # eval_pass_probability is 0.0 for every candidate of a strategy that is not yet close to passing, so the search had
+    # no gradient and always returned the original settings ("no optimized parameter found"). The smooth term only
+    # separates candidates when pass odds are tied/near zero; it adds at most 8 points, so it never outranks a real
+    # difference in pass odds.
+    "pass_gradient": "Pass odds with edge gradient -- eval-pass probability, tie-broken by Sharpe / profit factor so the search always has a slope to climb (recommended)",
     "prop_guide_score": "Prop-Oriented Guide Score",
     "composite_prop_score": "Composite Prop Score",
     "first_payout_probability": "First Payout Probability",
@@ -690,6 +696,18 @@ def compute_fitness(
         # (identical when reset_on_breach is off).
         _per = getattr(mc, "per_attempt_pass_probability", None)
         fitness = float(_per if _per is not None else mc.evaluation_pass_probability)
+    elif metric == "pass_gradient":
+        _per = getattr(mc, "per_attempt_pass_probability", None)
+        _base = float(_per if _per is not None else mc.evaluation_pass_probability)
+        _sh = stats.get("sharpe_ratio", 0.0)
+        _pf = stats.get("profit_factor", 0.0)
+        _sh = float(_sh) if isinstance(_sh, (int, float)) and math.isfinite(_sh) else 0.0
+        _pf = 3.0 if _pf == float("inf") else (float(_pf) if isinstance(_pf, (int, float)) and math.isfinite(_pf) else 0.0)
+        _grad = 4.0 * math.tanh(_sh / 3.0) + 4.0 * math.tanh(_pf - 1.0)
+        _net = stats.get("net_profit", 0.0)
+        if isinstance(_net, (int, float)) and _net <= 0:
+            _grad = min(_grad, 0.0)
+        fitness = _base + _grad
     elif metric == "first_payout_probability":
         # P0-1: same swap for the payout leg of the ranking.
         _per = getattr(mc, "per_attempt_payout_probability", None)
@@ -731,7 +749,7 @@ def compute_fitness(
     _n_src = getattr(mc, "n_source_trades", 0)
     if (
         isinstance(_n_src, (int, float)) and 0 < _n_src < 15
-        and metric in ("eval_pass_probability", "first_payout_probability", "composite_prop_score",
+        and metric in ("eval_pass_probability", "pass_gradient", "first_payout_probability", "composite_prop_score",
                        "payout_30d", "fastest_payout", "expected_payout", "prop_guide_score")
         and math.isfinite(fitness) and fitness > 0
     ):
