@@ -384,6 +384,49 @@ class JobManager:
                 del self._jobs[jid]
             return len(stale)
 
+    # Keys whose presence means "this finished job's result lives ONLY in memory" -- evicting such a job loses work the person may not
+    # have saved yet (Discovery winners, Optimize summaries, Validate checks). report_html / report_json mean a copy is on disk.
+    _VALUABLE_KEYS = ("lab_result", "engine_result", "summary", "outcomes", "sweep_timeframes", "partial", "report", "results")
+
+    def compact(self, min_age_seconds: float = 1800.0, keep_log_lines: int = 300) -> dict[str, Any]:
+        """Memory-safe replacement for prune() in the 'free memory' paths. Unlike prune() it NEVER evicts a finished job whose result
+        exists only in memory, and never one younger than ``min_age_seconds``.
+
+          * evicted  -- finished, older than the cutoff, AND saved on disk (has report_html/report_json) or ended with nothing to lose
+                        (cancelled / failed with no result payload). The Runs page still lists it from the saved job history and opens
+                        the saved report.
+          * slimmed  -- every other finished job older than the cutoff keeps its result but drops bulk that is only needed while it ran
+                        (the baseline trade payload, all but the last ``keep_log_lines`` log lines).
+          * protected -- finished jobs kept whole because their only copy is in memory; returned by name so the UI can say so.
+        Running jobs are never touched."""
+        cutoff = time.time() - float(min_age_seconds)
+        evicted: list[str] = []
+        slimmed = 0
+        protected: list[dict[str, Any]] = []
+        with self._lock:
+            for jid, job in list(self._jobs.items()):
+                if not job.get("done") or job.get("started_at", time.time()) >= cutoff:
+                    continue
+                saved = bool(job.get("report_html") or job.get("report_json"))
+                has_value = any(job.get(k) not in (None, [], {}, "") for k in self._VALUABLE_KEYS) or job.get("result") is not None
+                if saved or not has_value:
+                    del self._jobs[jid]
+                    evicted.append(jid)
+                    continue
+                changed = False
+                if job.get("baseline_trades"):
+                    job["baseline_trades"] = None
+                    job["baseline_trades_compacted"] = True
+                    changed = True
+                lg = job.get("log")
+                if isinstance(lg, list) and len(lg) > keep_log_lines:
+                    job["log_dropped"] = int(job.get("log_dropped", 0)) + len(lg) - keep_log_lines
+                    del lg[: len(lg) - keep_log_lines]
+                    changed = True
+                slimmed += int(changed)
+                protected.append({"job_id": jid, "tool": job.get("tool") or "Job", "instrument": job.get("instrument") or ""})
+        return {"evicted": len(evicted), "slimmed": slimmed, "protected": protected, "evicted_ids": evicted}
+
     def count(self) -> int:
         with self._lock:
             return len(self._jobs)

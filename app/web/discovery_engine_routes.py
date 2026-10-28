@@ -164,8 +164,13 @@ def _page_context(**extra) -> dict:
         groups = list_datasets_grouped_for_picker()
     except Exception:  # noqa: BLE001
         groups = []
+    try:
+        from app.search.variant_ledger import get_ledger
+        memory = get_ledger().summary()
+    except Exception:  # noqa: BLE001
+        memory = {"variants": 0, "runs": 0}
     ctx = dict(active_page="discovery_engine", st=engine_status(), dataset_groups=groups, effort=EFFORT, methods=METHODS,
-               csrf=session.get("csrf_token", ""), error=None, form={})
+               csrf=session.get("csrf_token", ""), error=None, form={}, memory=memory)
     ctx.update(extra)
     return ctx
 
@@ -273,7 +278,8 @@ def start():
             engine_result=None, cancelled=False, settings={"dataset": label, "timeframe": tf, "effort": effort, "prop": prop_label, "risk_pct": risk_pct})
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         req = EngineRequest(preset=preset_name, df=df, risk=risk, prop_rules=rules, instrument=label, timeframe=tf, families=families, seed=seed,
-                            frames=frames, risks=risks, progress_cb=lambda m: JOB_MANAGER.log(job_id, str(m)), cancel_event=cancel)
+                            frames=frames, risks=risks, progress_cb=lambda m: JOB_MANAGER.log(job_id, str(m)), cancel_event=cancel,
+                            use_memory=(request.form.get("fresh_start") != "on"))
         threading.Thread(target=_run_engine_job, args=(job_id, req, JOB_DISCOVERY_ENGINE), daemon=True).start()
         return redirect(f"/discovery-engine/job/{job_id}")
     except Exception as exc:  # noqa: BLE001
@@ -315,7 +321,7 @@ def _start_lab(df, label, effort, form, back):
             settings={"dataset": label, "timeframe": tf, "effort": effort, "prop": prop_label, "risk_pct": risk_pct, "mode": "lab"})
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         threading.Thread(target=_run_lab_job, daemon=True, args=(job_id, df, risk, rules, label, effort, risk_pct, balance, seed, cancel,
-                                                                 (form.get("bar_size") or "auto"))).start()
+                                                                 (form.get("bar_size") or "auto"), form.get("fresh_start") != "on")).start()
         return redirect(f"/discovery-engine/job/{job_id}")
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_DISCOVERY_ENGINE)
@@ -352,7 +358,7 @@ def _bury_near_misses(res, label, minutes, risk_pct):
         record_rejections(ents, graveyard_path_for(inst_key.lower(), tf))
 
 
-def _run_lab_job(job_id, df, risk, rules, label, effort, risk_pct, balance, seed, cancel, bar_size):
+def _run_lab_job(job_id, df, risk, rules, label, effort, risk_pct, balance, seed, cancel, bar_size, use_memory=True):
     from app.orchestration.resource_guard import HEAVY_JOB_GUARD
     from app.reports.crash_log import log_crash
     from app.web.job_manager import JOB_MANAGER
@@ -399,6 +405,19 @@ def _run_lab_job(job_id, df, risk, rules, label, effort, risk_pct, balance, seed
                         max_dd_limit_pct=float(getattr(rules, "max_drawdown_pct", 10.0) or 10.0),
                         profit_target_pct=float(getattr(rules, "evaluation_profit_target_pct", 8.0) or 8.0),
                         trailing_dd=str(getattr(rules, "drawdown_type", "trailing")) == "trailing")
+        # Search memory (Strategy Graveyard): every variant tried is remembered per market; the next run skips them, learns which strategy
+        # types pay, and breeds from the best past variants -- so it explores new ground instead of re-finding the same strategy.
+        if use_memory:
+            try:
+                from app.search.variant_ledger import get_ledger
+                cfg.ledger, cfg.ledger_scope = get_ledger(), _symbol_for(label)
+                known = cfg.ledger.count_known(cfg.ledger_scope)
+                JOB_MANAGER.log(job_id, f"Search memory is on: {known:,} variants already tested on {cfg.ledger_scope} will be skipped, and the best of them will seed this run."
+                                if known else f"Search memory is on: this is the first run on {cfg.ledger_scope}; every variant tried will be remembered.")
+            except Exception as exc:  # noqa: BLE001 -- memory is a bonus; the search still runs
+                JOB_MANAGER.log(job_id, f"Search memory unavailable ({exc}); running without it.")
+        else:
+            JOB_MANAGER.log(job_id, "Fresh start: ignoring the search memory for this run (variants are not skipped or recorded).")
         verifier = None
         try:
             verifier = make_verifier(df, {m: f for m, f, _ in frames}, risk, _symbol_for(label))

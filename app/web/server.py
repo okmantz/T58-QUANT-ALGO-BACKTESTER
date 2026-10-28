@@ -1009,6 +1009,9 @@ app.register_blueprint(telemetry_bp)
 app.register_blueprint(evolution_lab_bp)
 # Strategy Discovery Engine (2026-10-25): the five labs as presets of one engine -- see app/web/discovery_engine_routes.py.
 app.register_blueprint(discovery_engine_bp)
+# Library detail panel: saved results for the tabs + per-strategy report downloads -- app/web/library_detail_routes.py.
+from app.web.library_detail_routes import library_detail_bp  # noqa: E402
+app.register_blueprint(library_detail_bp)
 from app.web.vault_routes import vault_bp  # noqa: E402
 app.register_blueprint(vault_bp)
 # TradingView webhook relay (Pine strategy alert -> T58 paper forward test,
@@ -1132,6 +1135,21 @@ def _try_acquire_heavy_job(job_name: str, template_name: str, **template_ctx):
 
 
 def _build_strategy(mode: str, form, files):
+    """_build_strategy_inner + the library strategy's saved blocked weekday/hour slots (set by the optimizer from the
+    Full Pipeline's worst-time findings) attached as `strategy.blocked_entry_slots`, which the engine honours."""
+    strategy, library_ref = _build_strategy_inner(mode, form, files)
+    if library_ref:
+        try:
+            from app.strategy.library import get_blocked_entry_slots
+            slots = get_blocked_entry_slots(library_ref[0], library_ref[1])
+            if slots and strategy is not None:
+                strategy.blocked_entry_slots = slots
+        except Exception:  # noqa: BLE001 -- a filter that cannot attach must not break the run
+            pass
+    return strategy, library_ref
+
+
+def _build_strategy_inner(mode: str, form, files):
     """Thin orchestrator over resolve_strategy_source / build_strategy_from_code
     / maybe_save_strategy_to_library -- kept as the one call /run and
     /search/start both use, but each piece is independently reusable (see
@@ -2053,14 +2071,15 @@ def api_memory_status():
 @app.route("/api/memory/free", methods=["POST"])
 def api_memory_free():
     """One-click 'free memory now': refuses while a heavy job is running (closing its worker pool would break it),
-    otherwise closes idle worker pools, prunes finished jobs, trims the heap and (optionally) unloads Ollama's models."""
-    from app.orchestration.memory_hygiene import idle_cleanup, memory_status
+    otherwise closes idle worker pools, drops rebuildable caches, evicts only finished runs that are already saved to disk (runs whose
+    result lives only in memory are kept), trims the heap and (optionally) unloads Ollama. Returns a before/after report."""
+    from app.orchestration.memory_hygiene import free_memory, memory_status
 
     if HEAVY_JOB_GUARD.active_name is not None:
         return jsonify({"ok": False, "error": f"'{HEAVY_JOB_GUARD.active_name}' is running; wait for it to finish or stop it first."}), 409
     body = request.get_json(silent=True) or {}
-    done = idle_cleanup(idle_unload_ollama=bool(body.get("unload_ollama", True)))
-    return jsonify({"ok": True, "done": done, "status": memory_status()})
+    report = free_memory(unload_ollama_model=bool(body.get("unload_ollama", True)))
+    return jsonify({"ok": True, **report, "status": memory_status()})
 
 
 try:  # keeps an idle app small and records an RSS history so a real leak is visible, not guessed at
@@ -2692,6 +2711,12 @@ def _run_optimize_simple_job(job_id: str, df, strategy, risk, rules, engines, fo
                                     "ready_gate_passed": getattr(res, "ready_gate_passed", None),
                                     "ready_gate_reasons": " | ".join(getattr(res, "ready_gate_reasons", None) or []) or None,
                                     "saved": getattr(res, "saved_library_note", None)}
+                elif eng == "time_filter":
+                    from app.optimize.time_filter import run_time_filter_optimization
+                    summary[eng] = run_time_filter_optimization(
+                        df, strategy, risk, slots_text=(form.get("blocked_slots") or ""), library_ref=library_ref,
+                        save=(form.get("save_blocked_slots", "on") == "on"),
+                        progress_cb=lambda m: JOB_MANAGER.log(job_id, m))
                 elif eng == "refine":
                     res = run_iterative_refinement(
                         df, strategy, risk, rules,
@@ -2748,6 +2773,8 @@ OPTIMIZE_GOALS = {
                "desc": "Targets stops and targets: minimises profit given back before exit. Best when winners turn into losers."},
     "risk":   {"title": "Just right-size my risk", "engines": ["risk_sweep"], "metric": "eval_pass_probability",
                "desc": "Leaves the strategy alone and finds the risk per trade that fits the firm's drawdown rules. Best for strategies with a good edge but a rough ride."},
+    "timefilter": {"title": "Cut the worst days/times", "engines": ["time_filter"], "metric": "net_profit",
+               "desc": "Finds the weekday/hour slots that lose the most (e.g. Thursday 11:00) and stops the strategy entering then. Re-tests with the filter and saves it on the strategy only if it helps."},
     "profit": {"title": "Maximise profit (no prop firm)", "engines": ["quick_optimize"], "metric": "net_profit",
                "desc": "For long-term accounts with no evaluation: the settings that earned the most."},
 }
@@ -2764,7 +2791,7 @@ def optimize_simple_start():
         for _e in _goal["engines"]:
             form[f"engine_{_e}"] = "on"
         form["fitness_metric"] = _goal["metric"]
-    engines = [e for e in ("quick_optimize", "refine", "risk_sweep", "search", "evolution", "multi_objective", "deep_search")
+    engines = [e for e in ("quick_optimize", "refine", "risk_sweep", "time_filter", "search", "evolution", "multi_objective", "deep_search")
                if form.get(f"engine_{e}") == "on"]
     ctx = lambda **kw: dict(active_page="optimize_simple", goals=OPTIMIZE_GOALS, want_goal=(form.get("goal") or "eval"), **_simple_pickers(), **kw)
     if not engines:
@@ -2783,9 +2810,30 @@ def optimize_simple_start():
             pass
         rules = _simple_prop_rules(form)
         risk = _simple_base_risk(form, rules)
+        # Day/time restrictions (from the Full Pipeline's worst-time findings): apply to every engine's backtests and, for
+        # a library strategy, save onto it so it stays in force everywhere that strategy runs.
+        _slot_note = ""
+        _slots_raw = (form.get("blocked_slots") or "").strip()
+        if _slots_raw:
+            from dataclasses import replace as _dc_replace
+            from app.backtest.time_slots import merge_slot_text, parse_slots, format_slots
+            try:
+                _slots_text = format_slots(parse_slots(_slots_raw))
+            except ValueError as _se:
+                return render_template("optimize_simple.html", **ctx(error=f"Blocked times: {_se}. Use e.g. 'THU 11' or 'FRI *'.")), 400
+            risk = _dc_replace(risk, blocked_entry_slots=merge_slot_text(getattr(risk, "blocked_entry_slots", None), _slots_text))
+            strategy.blocked_entry_slots = _slots_text
+            _slot_note = "No new entries: " + ", ".join(_slots_text.splitlines()) + "."
+            if library_ref and form.get("save_blocked_slots", "on") == "on":
+                try:
+                    from app.strategy.library import set_blocked_entry_slots
+                    set_blocked_entry_slots(library_ref[0], library_ref[1], _slots_text)
+                    _slot_note += " Saved on the library strategy."
+                except Exception as _sx:  # noqa: BLE001
+                    _slot_note += f" (could not save to library: {_sx})"
         cancel_event = threading.Event()
         job_id = JOB_MANAGER.create(tool="Optimize (pick engines)", page_template="/optimize-simple/job/{job_id}",
-                                    log=[f"Loaded {len(df)} bars from {active_label}."] + ([tf_note] if tf_note else []) + [f"Engines: {', '.join(engines)}."],
+                                    log=[f"Loaded {len(df)} bars from {active_label}."] + ([tf_note] if tf_note else []) + [f"Engines: {', '.join(engines)}."] + ([_slot_note] if _slot_note else []),
                                     instrument=active_label, cancel_event=cancel_event, cancelled=False,
                                     opt_ctx={"pick": (form.get("strategy_pick") or "").strip(), "dataset": (form.get("existing_dataset") or "").strip(),
                                              "timeframe": (form.get("timeframe") or "").strip(), "prop": (form.get("prop_preset") or "").strip(),
@@ -6132,6 +6180,16 @@ def _run_fullpipeline_job(
             report_html=f"/full_pipeline_reports/{Path(result.report_paths['html']).name}",
             report_json=f"/full_pipeline_reports/{Path(result.report_paths['json']).name}",
         )
+        # Keep the strategy's own quick-look record (equity, stats, worst times) + report copies in its library folder.
+        try:
+            from app.reports.library_snapshot import stamp_pipeline_snapshot
+            stamp_pipeline_snapshot(
+                getattr(cfg, "library_ref", None), result, instrument=active_label,
+                strategy_name=strategy_label(strategy, library_ref=getattr(cfg, "library_ref", None)),
+                report_urls={"html": f"/full_pipeline_reports/{Path(result.report_paths['html']).name}",
+                             "json": f"/full_pipeline_reports/{Path(result.report_paths['json']).name}"})
+        except Exception:  # noqa: BLE001 -- a convenience record must never fail the run
+            pass
         notify_job_finished(
             notify_webhook_url, "Full Pipeline",
             f"verdict={getattr(result, 'verdict', '?')}, instrument={active_label}",
@@ -6217,9 +6275,15 @@ def _load_library_strategy_for_batch(mode: str, name: str):
     source code, so build_strategy_from_code doesn't handle it), matching
     how the desktop's Strategy Library batch queue loads items."""
     code = load_strategy_text(mode, name)
-    if mode == "manual":
-        return ManualStrategy(json.loads(code))
-    return build_strategy_from_code(mode, code)
+    strat = ManualStrategy(json.loads(code)) if mode == "manual" else build_strategy_from_code(mode, code)
+    try:
+        from app.strategy.library import get_blocked_entry_slots
+        _slots = get_blocked_entry_slots(mode, name)
+        if _slots:
+            strat.blocked_entry_slots = _slots
+    except Exception:  # noqa: BLE001
+        pass
+    return strat
 
 
 def _run_fullpipeline_batch_job(
@@ -12146,13 +12210,53 @@ def graveyard_view():
         "trades": r.get("n_trades"),
         "score": r.get("fitness_score"),
     } for r in shown[:limit]]
+    memory = _graveyard_memory_context()
     return render_template(
-        "graveyard.html",
+        "graveyard.html", memory=memory,
         files=files, selected_path=selected_path, clusters=clusters,
         total_rows=len(rows), family_filter=family_filter, why_filter=why_filter, sort=sort,
         all_families=all_families, why_options=why_options, items=items, n_shown=len(shown), limit=limit,
         active_page="graveyard",
     )
+
+
+def _graveyard_memory_context() -> dict:
+    """The searched-variant ledger for the Graveyard page: how many variants every Discovery run has tried (per market, per strategy type),
+    the recent runs, and the best past variants -- the same memory the next Discovery run skips and breeds from."""
+    try:
+        from app.search.variant_ledger import get_ledger
+        led = get_ledger()
+        scope = (request.args.get("market") or "").strip()
+        scopes = led.scopes()
+        if scope and scope not in {x["scope"] for x in scopes}:
+            scope = ""
+        fams = led.family_table(scope or None)
+        try:
+            from app.search import graveyard_detail as gd
+            for f in fams:
+                f["title"] = gd.family_title(f["family"]) if f.get("family") else "?"
+        except Exception:  # noqa: BLE001
+            for f in fams:
+                f["title"] = f.get("family") or "?"
+        runs = led.recent_runs(10)
+        for r in runs:
+            r["when"] = time.strftime("%b %d %H:%M", time.localtime(r.get("started_at") or 0))
+        return {"ok": True, "summary": led.summary(scope or None), "scopes": scopes, "scope": scope, "families": fams,
+                "runs": runs, "top": led.top_table(scope or None, 12)}
+    except Exception as exc:  # noqa: BLE001 -- the page must still render without the memory
+        return {"ok": False, "error": str(exc), "summary": {"variants": 0, "runs": 0}}
+
+
+@app.route("/graveyard/memory/compact", methods=["POST"])
+def graveyard_memory_compact():
+    """Housekeeping for the variant ledger: trims the stored text of OLD un-scored variants on an oversized market. Never removes a variant
+    (its key stays, so it is still never re-tested) and never touches a scored or promoted one."""
+    try:
+        from app.search.variant_ledger import get_ledger
+        n = get_ledger().compact()
+        return jsonify({"ok": True, "trimmed": n})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 def _graveyard_row_from_request():
