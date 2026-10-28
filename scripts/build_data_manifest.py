@@ -112,7 +112,16 @@ def main() -> None:
         files = sorted(p for p in raw.rglob("*") if p.suffix.lower() in (".csv", ".parquet"))
         m = {"schema": 1, "min_years_for_ready": MIN_YEARS_FOR_READY, "files": [_scan_file(p, raw) for p in files]}
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(m, indent=1), encoding="utf-8")
+    def _clean(o):
+        # strict JSON: NaN/Infinity are not valid JSON and break non-Python readers
+        if isinstance(o, float) and (o != o or o in (float("inf"), float("-inf"))):
+            return None
+        if isinstance(o, dict):
+            return {k: _clean(v) for k, v in o.items()}
+        if isinstance(o, (list, tuple)):
+            return [_clean(v) for v in o]
+        return o
+    out.write_text(json.dumps(_clean(m), indent=1, allow_nan=False), encoding="utf-8")
     print(f"wrote {out} ({len(m['files'])} files)")
 
 
