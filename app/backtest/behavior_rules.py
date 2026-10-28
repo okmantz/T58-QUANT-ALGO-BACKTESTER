@@ -81,6 +81,36 @@ def resolve_behavior(strategy) -> dict:
     return out
 
 
+def resolve_blocked_slots(strategy) -> str:
+    """Weekday/hour slots the strategy refuses to enter in (see app.backtest.time_slots), as normalised text ('' = none).
+    Declared as ``BLOCKED_ENTRY_SLOTS = "THU 11\\nFRI *"`` (Python), ``"blocked_entry_slots": "THU 11"`` (Manual config,
+    top level or inside "behavior"), or set on any strategy object as ``.blocked_entry_slots`` (how the library loader
+    carries it for Pine / MQL5 strategies from their .meta.json)."""
+    from app.backtest.time_slots import merge_slot_text
+    raw = []
+    attr = getattr(strategy, "blocked_entry_slots", None)
+    if isinstance(attr, (str, list, tuple)):
+        raw.append(attr)
+    st = getattr(strategy, "source_type", None)
+    if st == "python":
+        ma = getattr(strategy, "module_attr", None)
+        if ma is not None:
+            v = ma("BLOCKED_ENTRY_SLOTS", None)
+            if isinstance(v, (str, list, tuple)):
+                raw.append(v)
+    elif st == "manual":
+        cfg = getattr(strategy, "config", None)
+        if isinstance(cfg, dict):
+            for src in (cfg, cfg.get("behavior") if isinstance(cfg.get("behavior"), dict) else {}):
+                v = src.get("blocked_entry_slots") or src.get("BLOCKED_ENTRY_SLOTS")
+                if isinstance(v, (str, list, tuple)):
+                    raw.append(v)
+    try:
+        return merge_slot_text(*raw)
+    except ValueError:
+        return ""
+
+
 def any_active(b: dict) -> bool:
     return bool(b.get("BEHAVIOR_STOP_AFTER_LOSSES", 0) >= 1 or b.get("BEHAVIOR_SIZE_DOWN_PROGRESS_PCT", 0) > 0
                 or b.get("BEHAVIOR_NEWS_BLOCK_MIN", 0) >= 1 or b.get("BEHAVIOR_FLATTEN_BEFORE_CLOSE_MIN", 0) >= 1)
@@ -157,6 +187,10 @@ def apply_strategy_behavior(risk, adaptive_risk, strategy):
     """(risk, adaptive_risk) with the strategy's declared behaviour rules layered on. Unchanged objects when the strategy
     declares nothing (byte-identical to before). Rules only ever ADD restrictions to what the caller passed in."""
     b = resolve_behavior(strategy)
+    slots = resolve_blocked_slots(strategy)
+    if slots:
+        from app.backtest.time_slots import merge_slot_text
+        risk = replace(risk, blocked_entry_slots=merge_slot_text(getattr(risk, "blocked_entry_slots", None), slots))
     if not any_active(b):
         return risk, adaptive_risk
     from app.backtest.adaptive_risk import AdaptiveRiskConfig, AdaptiveRiskRule

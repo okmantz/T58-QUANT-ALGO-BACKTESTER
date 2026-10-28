@@ -340,6 +340,7 @@ def run_execution(
     blocked_max_trades_count = 0
     blocked_halted_count = 0
     blocked_adaptive_zero_count = 0
+    blocked_time_slot_count = 0  # optimizer time filter: entries refused in a blocked weekday/hour slot
     blocked_news_blackout_count = 0  # P2-6: entries refused on a news-blackout date
     blocked_weekend_hold_count = 0   # P2-6: entries refused while the weekend-hold block is latched
     weekend_close_count = 0          # P2-6: positions force-closed on a week's last bar
@@ -554,6 +555,18 @@ def run_execution(
         except Exception as _e:  # noqa: BLE001
             import warnings
             warnings.warn(f"news_blackout_windows could not be applied ({_e}); window blackout is DISABLED for this run.", RuntimeWarning)
+
+    # Blocked weekday/hour slots (optimizer time filter). Evaluated on the data's own wall clock at the FILL bar,
+    # which is exactly how the Full Pipeline heatmap buckets a trade (by entry_time), so "THU 11" here == "THU 11" there.
+    _slot_blocked_bar = np.zeros(n, dtype=bool)
+    _bes = getattr(risk, "blocked_entry_slots", None)
+    if _bes and n:
+        try:
+            from app.backtest.time_slots import slot_mask_for_timestamps
+            _slot_blocked_bar = slot_mask_for_timestamps(df["timestamp"], _bes)
+        except Exception as _e:  # noqa: BLE001
+            import warnings
+            warnings.warn(f"blocked_entry_slots could not be applied ({_e}); time filter is DISABLED for this run.", RuntimeWarning)
 
     # P2-6 (weekend hold): bar_dates above is wall-clock (see the P2-3
     # fix), so day-of-week here is the calendar day the data was recorded
@@ -1383,7 +1396,9 @@ def run_execution(
         # or the latch set by a week-end force-close, until Monday).
         news_blackout_today = bool(_news_blackout_bar[i])
         weekend_blocked_today = (_weekend_hold and (_dow[i] >= 5 or weekend_entry_block)) or bool(_flat_zone[i])
-        if open_trade is None and sig[i] != 0 and not daily_limit_breached and not account_blown and not cooldown_active and not news_blackout_today and not weekend_blocked_today:
+        _fi_slot = i + fill_lag_bars
+        slot_blocked_today = bool(_slot_blocked_bar[_fi_slot]) if _fi_slot < n else False
+        if open_trade is None and sig[i] != 0 and not daily_limit_breached and not account_blown and not cooldown_active and not news_blackout_today and not weekend_blocked_today and not slot_blocked_today:
             # B2-2: a market entry fills at open[i + fill_lag_bars], not at
             # the signal bar's close. No future bar to fill on (signal on
             # the last bar(s)) means no entry -- an honest engine cannot
@@ -1468,6 +1483,8 @@ def run_execution(
                 blocked_news_blackout_count += 1
             elif weekend_blocked_today:
                 blocked_weekend_hold_count += 1
+            elif slot_blocked_today:
+                blocked_time_slot_count += 1
 
     # close any still-open trade at final bar close
     if open_trade is not None:
@@ -1535,6 +1552,7 @@ def run_execution(
         "adaptive_risk_zero_size": blocked_adaptive_zero_count,
         "news_blackout": blocked_news_blackout_count,
         "weekend_hold": blocked_weekend_hold_count,
+        "blocked_time_slot": blocked_time_slot_count,
     }
     equity_df.attrs["weekend_hold_close_count"] = weekend_close_count
     equity_df.attrs["session_flatten_close_count"] = flatten_close_count
