@@ -481,6 +481,8 @@ def list_reports(directory: Path | str, strategy: Optional[str] = None, limit: i
         if strategy and name != strategy:
             continue
         rows.append({
+            "library_type": (doc.get("strategy") or {}).get("library_type") or "",
+            "library_file": (doc.get("strategy") or {}).get("library_file") or "",
             "report_id": doc.get("report_id") or p.stem, "strategy": name,
             "generated_at": doc.get("generated_at"), "overall": (doc.get("overall") or {}).get("label"),
             "summary": (doc.get("overall") or {}).get("summary"), "dataset": doc.get("dataset"),
