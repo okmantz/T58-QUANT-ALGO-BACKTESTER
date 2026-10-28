@@ -178,9 +178,73 @@ def _heavy_job_active() -> bool:
         return False
 
 
-def idle_cleanup(*, idle_unload_ollama: bool = False) -> dict[str, Any]:
-    """One idle sweep (also callable on demand): worker pools closed, finished jobs pruned, heap trimmed."""
+def _child_count() -> int:
+    if psutil is None:
+        return 0
+    try:
+        return len(psutil.Process(os.getpid()).children(recursive=True))
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _clear_pure_caches() -> list[str]:
+    """Drop in-memory caches that are rebuilt on demand. Touches NOTHING on disk: no strategies, reports, datasets, job history or search
+    memory. Returns the names of the caches that were actually cleared."""
+    cleared: list[str] = []
+
+    def attempt(name, fn):
+        try:
+            fn()
+            cleared.append(name)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _resample():
+        from app.data.timeframe_resample import clear_resample_cache
+        clear_resample_cache()
+
+    def _replay():
+        from app.web import live_market
+        live_market._replay_cache.clear()
+
+    def _indicators():
+        from app.strategy import indicator_cache
+        indicator_cache.clear()
+
+    def _v10():
+        from app.strategy import indicators_v10
+        indicators_v10._CACHE.clear()
+
+    def _modules():
+        from app.strategy.python import clear_module_cache
+        clear_module_cache()
+
+    def _macro():
+        from app.strategy import macro_filter
+        macro_filter._CACHE.clear()
+
+    def _market_intel():
+        from app.ai import market_intelligence
+        market_intelligence._LOCAL_DATASET_CACHE.clear()
+
+    attempt("resampled bars", _resample)
+    attempt("replay buffers", _replay)
+    attempt("indicator results", _indicators)
+    attempt("extra indicators", _v10)
+    attempt("compiled strategy modules", _modules)
+    attempt("macro filter data", _macro)
+    attempt("market-intelligence data", _market_intel)
+    return cleared
+
+
+def idle_cleanup(*, idle_unload_ollama: bool = False, min_job_age: float = 1800.0) -> dict[str, Any]:
+    """One idle sweep (also callable on demand): worker pools closed, finished jobs compacted, caches dropped, heap trimmed.
+
+    Safe by construction: it only releases memory the app can rebuild. A finished run whose result exists ONLY in memory (Discovery
+    winners not yet saved, Optimize summaries, Validate results) is kept; only runs already saved to disk are evicted, and only after
+    ``min_job_age`` seconds. Nothing on disk is ever deleted."""
     done: dict[str, Any] = {}
+    done["workers_before"] = _child_count()
     try:
         from app.orchestration import stage_pool
 
@@ -200,27 +264,89 @@ def idle_cleanup(*, idle_unload_ollama: bool = False) -> dict[str, Any]:
     try:
         from app.web.job_manager import JOB_MANAGER
 
-        done["jobs_pruned"] = JOB_MANAGER.prune(30 * 60)
+        comp = JOB_MANAGER.compact(min_job_age)
+        done["jobs_pruned"] = comp["evicted"]
+        done["jobs_slimmed"] = comp["slimmed"]
+        done["jobs_protected"] = comp["protected"]
     except Exception:  # noqa: BLE001
         pass
-    try:
-        from app.data.timeframe_resample import clear_resample_cache
-
-        clear_resample_cache()
-        done["resample_cache"] = "cleared"
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        from app.web import live_market
-
-        live_market._replay_cache.clear()
-        done["replay_cache"] = "cleared"
-    except Exception:  # noqa: BLE001
-        pass
+    done["caches_cleared"] = _clear_pure_caches()
     if idle_unload_ollama:
         done["ollama_unloaded"] = unload_ollama()
     done.update(release_memory("idle"))
+    time.sleep(0.4)  # let closed worker processes actually exit before the caller measures again
+    done["workers_after"] = _child_count()
     return done
+
+
+def _mb(b) -> str:
+    b = float(b or 0)
+    return f"{b / 1073741824:.1f} GB" if b >= 1073741824 else f"{b / 1048576:.0f} MB"
+
+
+def free_memory(*, unload_ollama_model: bool = True, min_job_age: float = 1800.0) -> dict[str, Any]:
+    """The Runs page 'Free memory now' button. Runs one safe cleanup and returns a plain-language report of what changed:
+
+        {"headline": "Freed 412 MB ...", "freed_bytes": int, "before": {...}, "after": {...}, "steps": [str], "kept": [str], "advice": str|None}
+
+    ``before``/``after`` are the numbers the Runs page shows (app memory incl. workers, free RAM, swap)."""
+    def snap() -> dict[str, Any]:
+        out = {"app": rss_bytes(), "app_with_workers": rss_bytes(True), "available": None, "swap_used": None}
+        if psutil is not None:
+            try:
+                out["available"] = int(psutil.virtual_memory().available)
+                out["swap_used"] = int(psutil.swap_memory().used)
+            except Exception:  # noqa: BLE001
+                pass
+        return out
+
+    before_ollama = ollama_status() if unload_ollama_model else []
+    before = snap()
+    done = idle_cleanup(idle_unload_ollama=unload_ollama_model, min_job_age=min_job_age)
+    after = snap()
+    freed = max(0, int(before["app_with_workers"]) - int(after["app_with_workers"]))
+    ollama_freed = 0
+    if unload_ollama_model and done.get("ollama_unloaded"):
+        ollama_freed = sum(int(m.get("size_bytes") or 0) for m in (before_ollama or []))
+    steps: list[str] = []
+    wb, wa = int(done.get("workers_before") or 0), int(done.get("workers_after") or 0)
+    if wb > wa:
+        steps.append(f"Closed {wb - wa} idle worker process{'es' if wb - wa != 1 else ''}.")
+    if done.get("jobs_pruned"):
+        steps.append(f"Cleared {done['jobs_pruned']} finished run{'s' if done['jobs_pruned'] != 1 else ''} from memory (their reports are saved and still open from the Runs list).")
+    if done.get("jobs_slimmed"):
+        steps.append(f"Trimmed bulky detail from {done['jobs_slimmed']} finished run{'s' if done['jobs_slimmed'] != 1 else ''} (results kept).")
+    if done.get("caches_cleared"):
+        steps.append("Dropped temporary caches: " + ", ".join(done["caches_cleared"]) + " (they rebuild on demand).")
+    if ollama_freed:
+        names = ", ".join(str(m.get("name")) for m in before_ollama)
+        steps.append(f"Unloaded the local AI model ({names}, about {_mb(ollama_freed)}); it reloads automatically the next time you use the assistant.")
+    steps.append("Returned unused memory to the operating system.")
+    kept = ["Your strategies, datasets, saved reports, run history and the Strategy Graveyard's search memory are never touched."]
+    prot = done.get("jobs_protected") or []
+    if prot:
+        kept.append(f"Kept {len(prot)} finished run{'s' if len(prot) != 1 else ''} whose results are only in memory (not saved yet): "
+                    + ", ".join(f"{p['tool']}" + (f" ({p['instrument']})" if p.get("instrument") else "") for p in prot[:5])
+                    + (" ..." if len(prot) > 5 else "") + ". Open and save what you want from them; they are released on the next sweep after you do.")
+    total_freed = freed + ollama_freed
+    if psutil is None:
+        headline, advice = "Cleanup ran, but memory figures are unavailable (install psutil to see them).", None
+    elif total_freed >= 20 * 1048576:
+        headline = f"Freed about {_mb(total_freed)}. The app now uses {_mb(after['app_with_workers'])}."
+        advice = None
+    else:
+        headline = f"Already lean: the app is using {_mb(after['app_with_workers'])}, so there was little to free."
+        advice = None
+        if after.get("available") is not None and before.get("available") is not None:
+            try:
+                vm = psutil.virtual_memory()
+                if vm.available < vm.total * _LOW_AVAILABLE_FRACTION:
+                    advice = (f"Your computer is still low on free RAM ({_mb(vm.available)} of {_mb(vm.total)}), but the app is not the main user: "
+                              "other programs (browser tabs, other apps) are. Closing some of them will help more than this button.")
+            except Exception:  # noqa: BLE001
+                pass
+    return {"headline": headline, "freed_bytes": total_freed, "before": before, "after": after, "steps": steps, "kept": kept,
+            "advice": advice, "detail": {k: v for k, v in done.items() if k != "jobs_protected"}}
 
 
 def start_idle_watchdog(interval: float = 60.0, idle_after: float = 180.0, ollama_idle_after: float = 900.0) -> None:
@@ -254,7 +380,7 @@ def start_idle_watchdog(interval: float = 60.0, idle_after: float = 180.0, ollam
                     idle_since = idle_since or now
                     idle_for = now - idle_since
                     if idle_for >= idle_after and now - cleaned_at >= 600:
-                        idle_cleanup()
+                        idle_cleanup(min_job_age=7200.0)
                         cleaned_at = now
                     if idle_for >= ollama_idle_after and not ollama_done:
                         unload_ollama()
