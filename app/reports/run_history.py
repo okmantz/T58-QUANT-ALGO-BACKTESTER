@@ -389,7 +389,8 @@ def _dashboard_data_uncached() -> dict:
             for hr in range(min(24, len(hm[wd]))):
                 combined_heatmap[wd][hr] += hm[wd][hr]
 
-    top_equity = sorted(latest_rows, key=lambda r: r["net_profit"], reverse=True)[:5]
+    # every strategy that has been run gets a curve (this used to be capped at the top 5)
+    top_equity = sorted(latest_rows, key=lambda r: r["net_profit"], reverse=True)
     equity_series = [
         {"name": r["strategy_name"], "passed": r["single_run_passed"], "values": r["equity_curve"]}
         for r in top_equity if r["equity_curve"]
