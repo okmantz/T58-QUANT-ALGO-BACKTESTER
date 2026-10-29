@@ -56,9 +56,7 @@ def test_sidebar_lifecycle_order_and_account_order(client):
     r = client.get("/")
     assert r.status_code == 200
     body = r.get_data(as_text=True)
-    labels = ["&#9312;</span> Create", "&#9313;</span> Test", "&#9314;</span> Optimize",
-              "&#9315;</span> Validate", "&#9316;</span> Champion", "&#9317;</span> Deploy",
-              "&#9318;</span> Strategy Graveyard"]
+    labels = [f'<span class="label">{n}</span>' for n in ("Create", "Test", "Optimize", "Validate", "Champion", "Deploy", "Strategy Graveyard")]
     positions = [body.index(lbl) for lbl in labels]
     assert positions == sorted(positions), list(zip(labels, positions))
     # Notification settings now live inside Account settings (no separate sidebar entry)

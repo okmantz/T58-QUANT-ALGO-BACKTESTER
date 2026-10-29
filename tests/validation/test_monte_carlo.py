@@ -118,23 +118,23 @@ def _enabled_adaptive_risk() -> AdaptiveRiskConfig:
 
 
 def test_none_adaptive_risk_uses_block_bootstrap_default():
-    assert default_method_for_adaptive_risk(None) == "block_bootstrap"
+    assert default_method_for_adaptive_risk(None) == "day_block_bootstrap"
 
 
 def test_disabled_adaptive_risk_uses_block_bootstrap_default():
     cfg = AdaptiveRiskConfig(enabled=False, rules=[])
-    assert default_method_for_adaptive_risk(cfg) == "block_bootstrap"
+    assert default_method_for_adaptive_risk(cfg) == "day_block_bootstrap"
 
 
 def test_enabled_adaptive_risk_switches_to_block_bootstrap():
-    assert default_method_for_adaptive_risk(_enabled_adaptive_risk()) == "block_bootstrap"
+    assert default_method_for_adaptive_risk(_enabled_adaptive_risk()) == "day_block_bootstrap"
 
 
 def test_object_without_enabled_attribute_is_safe():
     class NotAdaptiveRisk:
         pass
 
-    assert default_method_for_adaptive_risk(NotAdaptiveRisk()) == "block_bootstrap"
+    assert default_method_for_adaptive_risk(NotAdaptiveRisk()) == "day_block_bootstrap"
 
 
 # ---- from test_mc_objective_fixes.py ----

@@ -18,7 +18,7 @@ def _bars(n=6000, seed=3):
 
 
 def test_effort_budgets_meet_promises():
-    assert EFFORT_BUDGET["quick"] >= 2500 and EFFORT_BUDGET["standard"] >= 5000 and EFFORT_BUDGET["deep"] >= 10000
+    assert EFFORT_BUDGET["quick"] >= 5000 and EFFORT_BUDGET["standard"] >= 10000 and EFFORT_BUDGET["deep"] >= 15000
 
 
 def test_generated_strategy_is_causal(tmp_path):

@@ -89,3 +89,38 @@ def test_graveyard_curve_rebuilds_for_a_bundled_seed_row():
     row = next(json.loads(l) for l in seed.open(encoding="utf-8") if "EURUSD/EURUSD240.csv" in l)
     out = gd.rebuild_curve(row)
     assert out["ok"] and len(out["points"]) > 20 and out["stats"]["trades"] > 0
+
+
+def test_graveyard_all_markets_search_and_see_all(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.search.graveyard.get_app_base_dir", lambda: tmp_path)
+    record_rejections([GraveyardEntry(candidate_id="a1", family="fam_a", generation=None, stage_died="cpcv", reason="x", param_signature="fam_a|x=1.0")],
+                      path=graveyard_path_for("ES1!", "1m"))
+    record_rejections([GraveyardEntry(candidate_id="b1", family="fam_b", generation=None, stage_died="stress", reason="y", param_signature="fam_b|y=2.0")],
+                      path=graveyard_path_for("NQ1!", "5m"))
+    client = app.test_client()
+    body = client.get("/graveyard?path=ALL").get_data(as_text=True)
+    assert "All markets together" in body and 'data-id="a1"' in body and 'data-id="b1"' in body      # both markets in one list
+    only_b = client.get("/graveyard?path=ALL&q=fam_b").get_data(as_text=True)
+    assert 'data-id="b1"' in only_b and 'data-id="a1"' not in only_b                                   # free-text search
+    assert "See all" not in client.get("/graveyard?path=ALL").get_data(as_text=True)                  # nothing hidden -> no "See all"
+
+
+def test_graveyard_revive_rejects_unknown_market(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.search.graveyard.get_app_base_dir", lambda: tmp_path)
+    path = graveyard_path_for("ES1!", "1m")
+    record_rejections([GraveyardEntry(candidate_id="a1", family="fam_a", generation=None, stage_died="cpcv", reason="x", param_signature="fam_a|x=1.0")], path=path)
+    r = app.test_client().post(f"/graveyard/auto-optimize?path={path}&id=a1&dataset=NOPE/none.csv")
+    assert r.status_code == 400 and "not in your data library" in r.get_json()["error"]
+
+
+def test_trial_ledger_page_and_api(tmp_path, monkeypatch):
+    from app.validation import trial_ledger as tl
+    monkeypatch.setattr(tl, "_PATH", tmp_path / "trial_ledger.json")
+    tl.book_run("run-1", {"ema_cross": 1200, "donchian": 300}, kinds={"stage1": 1500})
+    tl.record("my_strategy", 40)
+    c = app.test_client()
+    j = c.get("/api/trial-ledger").get_json()
+    assert j["total_tried"] == 1500 and j["n_families"] == 2 and j["strategies"][0]["tried"] == 40
+    assert "1,500 ideas" in j["headline"]
+    page = c.get("/trial-ledger").get_data(as_text=True)
+    assert "Trial ledger" in page and "Ema cross" in page and "1,200" in page

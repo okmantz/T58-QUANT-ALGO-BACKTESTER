@@ -24,7 +24,7 @@ def test_library_has_retire_and_next_step(client):
 
 def test_discovery_page_promises_counts(client):
     t = client.get("/discovery-engine").get_data(as_text=True)
-    assert "2,500+" in t and "5,000+" in t and "10,000+" in t
+    assert "5,000+" in t and "10,000+" in t and "15,000+" in t
 
 
 def test_retire_route_unknown_strategy(client):
