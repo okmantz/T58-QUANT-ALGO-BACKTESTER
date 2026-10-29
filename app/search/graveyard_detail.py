@@ -162,6 +162,18 @@ def context_for(row: dict, path: str | None = None) -> dict | None:
     ds = _dataset_from_file_key(parts[1] if len(parts) > 1 else "")
     if not ds:
         return None
+    # A saved signature can be partial (older rows, hand-recorded rows). Only offer a rebuild when the parameters
+    # really can build the strategy -- otherwise the panel promises a curve and then fails with a bare KeyError.
+    fam_name = row.get("family")
+    if fam_name:
+        try:
+            from app.search.strategy_space import FAMILIES
+
+            fam = FAMILIES.get(fam_name)
+            if fam is not None:
+                fam.build(params)
+        except Exception:   # noqa: BLE001 -- incomplete or unusable parameters: no best-effort context
+            return None
     return {"dataset": ds, "timeframe": parts[2] if len(parts) > 2 else "", "start": None, "end": None, "split": None, "params": params,
             "assumed": True, **DEFAULT_COSTS}
 

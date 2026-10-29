@@ -210,7 +210,8 @@ def relay_tunnel_start():
     try:
         state = tunnel.start(_app_port(), relay_config.set_public_url, provider=provider)
     except tunnel.TunnelError as exc:
-        return jsonify({"ok": False, "error": str(exc), **tunnel.status()}), 400
+        # status() carries its own "error" key (the last tunnel error, often empty); the message for THIS failure must win.
+        return jsonify({**tunnel.status(), "ok": False, "error": str(exc)}), 400
     return jsonify({"ok": True, **state})
 
 
