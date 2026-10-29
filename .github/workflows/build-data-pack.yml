@@ -32,6 +32,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          lfs: true   # the 4 crypto .parquet files are Git LFS objects; the pack must carry the real data, not pointer stubs
 
       - name: Set up Python
         uses: actions/setup-python@v6
