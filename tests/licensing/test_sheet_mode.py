@@ -275,3 +275,34 @@ def test_normalize_plan_unit():
     assert n("Pro Monthly") == "Pro Monthly" and n("monthly") == "Pro Monthly" and n("PRO-ANNUAL") == "Pro Annual"
     assert n("  lifetime ") == "Lifetime" and n("trial") == "Trial" and n("comp") == "Complimentary"
     assert n("") == "" and n(None) == "" and n("Something New") == "Something New"
+
+
+def test_connection_test_reports_healthy_sheet(sim):
+    ok, msg = client.test_sheet_connection()
+    assert ok and "Connected" in msg
+    assert sim.rows()[0][1] == "Unused"  # the probe never changes the sheet
+
+
+def test_connection_test_rejects_bad_urls():
+    assert not client.test_sheet_connection("")[0]
+    assert not client.test_sheet_connection("not a url")[0]
+    ok, msg = client.test_sheet_connection("https://script.google.com/macros/s/ABC/dev")
+    assert not ok and "/exec" in msg
+
+
+def test_connection_test_unreachable():
+    ok, msg = client.test_sheet_connection("http://127.0.0.1:1/exec", timeout=2)
+    assert not ok
+
+
+def test_not_linked_message_when_no_sheet_url():
+    ok, msg = client.activate(EMAIL, KEY)
+    assert not ok and "isn't linked" in msg
+
+
+def test_saved_url_can_be_replaced(monkeypatch, tmp_path):
+    monkeypatch.setattr(client, "_sheet_url_files", lambda: [tmp_path / "a.txt", tmp_path / "b.txt"])
+    assert client.save_sheet_url("https://script.google.com/macros/s/OLD/exec")[0]
+    assert client.save_sheet_url(' "https://script.google.com/macros/s/NEW/exec" ')[0]
+    assert client.resolve_sheet_url().endswith("/NEW/exec")
+    assert (tmp_path / "a.txt").exists() and (tmp_path / "b.txt").exists()
