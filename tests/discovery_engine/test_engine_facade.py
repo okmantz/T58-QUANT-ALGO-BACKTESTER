@@ -395,7 +395,7 @@ def test_engine_job_flow_with_a_stub_engine(monkeypatch):
 
     monkeypatch.setattr("app.discovery_engine.engine.DiscoveryEngine", Stub)
     c = app.test_client()
-    r = c.post("/discovery-engine/start", data={"dataset": "EURUSD/EURUSD240.csv", "effort": "quick", "max_bars": "3000"})
+    r = c.post("/discovery-engine/start", data={"dataset": "EURUSD/EURUSD240.csv", "method": "gauntlet", "effort": "quick", "max_bars": "3000"})   # the default method is the Fast Lab; "gauntlet" is the engine
     assert r.status_code == 302, r.get_data(as_text=True)[:400]
     job_id = r.headers["Location"].rsplit("/", 1)[-1]
     data = {}

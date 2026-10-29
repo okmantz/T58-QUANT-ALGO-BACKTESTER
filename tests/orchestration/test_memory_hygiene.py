@@ -67,7 +67,7 @@ def test_batch_outcomes_do_not_retain_full_results_by_default():
 
 def test_idle_cleanup_closes_pools_and_clears_caches():
     done = mh.idle_cleanup()
-    assert done.get("stage_pool") == "closed" and done.get("resample_cache") == "cleared"
+    assert done.get("stage_pool") == "closed" and "resampled bars" in done.get("caches_cleared", [])
 
 
 def test_idle_watchdog_can_be_started_twice_and_stopped():

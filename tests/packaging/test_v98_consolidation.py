@@ -70,8 +70,9 @@ def test_sidebar_lifecycle_steps_are_single_links(client):
         assert href not in sidebar, href
     # Untouched groups
     assert 'href="/quant-lab"' in sidebar
-    assert 'href="/settings/notifications"' in sidebar
-    assert sidebar.index("/settings/notifications") < sidebar.index("/settings/api-keys")
+    # Notification settings live inside Account settings now (see tests/web/test_v96_web_nav.py): no separate sidebar entry.
+    assert 'href="/settings/notifications"' not in sidebar
+    assert sidebar.index('href="/settings/account"') < sidebar.index('href="/settings/api-keys"')
     assert 'href="/data-center"' in sidebar
     assert 'href="/support"' in sidebar
 

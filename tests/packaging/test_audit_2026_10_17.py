@@ -29,8 +29,9 @@ def _trades(n=157, seed=11, per_day=2):
 
 # ---- item 4: the interval must reflect the SOURCE sample, not the simulation count -----------------------------------
 def test_effective_attempts_are_capped_by_history_not_by_simulations():
-    assert eb.effective_independent_attempts(150, 240, n_simulated_attempts=10_000) == pytest.approx(7.5)   # min(240d/30d = 8, 150 trades/20 = 7.5)
-    assert eb.effective_independent_attempts(150, 4000, n_simulated_attempts=10_000) == pytest.approx(7.5)  # 150 trades / 20
+    # Default is 10 trades per attempt (was 20 before the 2026-10-27 audit -- see app/scoring/edge_bounds.py).
+    assert eb.effective_independent_attempts(150, 240, n_simulated_attempts=10_000) == pytest.approx(8.0)   # min(240d/30d = 8, 150 trades/10 = 15)
+    assert eb.effective_independent_attempts(150, 4000, n_simulated_attempts=10_000) == pytest.approx(15.0)  # 150 trades / 10
     assert eb.effective_independent_attempts(10_000, 4000, n_simulated_attempts=50) == 50.0
     assert eb.effective_independent_attempts(0, 0) == 1.0
 

@@ -37,8 +37,11 @@ DARK_HASH = {
     # Re-pinned 2026-10-23: the new seasonal artwork (scripts/generate_season_backdrops.py) needed per-scene night
     # opacities (the four night scenes differ a lot in brightness) plus the t58-bg-swap fade-in keyframes. Only the
     # seasonal-backdrop rules in theme.css changed; no dark token or any other rule did.
-    "theme.css": "9f860d020d0b1dcdd255bfb585f75ab5376261609024e024232c7eab61201f33",
-    "job-theme.css": "e2d34ce668ee4d455a26d41c40cc3a6396290e82135e41201f477b5c972181c2",
+    # Re-pinned 2026-10-28: the midnight-ocean backdrop's CSS swell animation was replaced by the canvas scene (.t58-scene-fx rules).
+    # No dark token moved (test_dark_token_values_pinned still passes).
+    "theme.css": "95aea7914a5c8c8f0500e1b38bb54a5b9ede67adaa24c627f11e39a75d88f104",
+    # Re-pinned 2026-10-28: .badge.pass now uses var(--ok) instead of var(--teal) (commit 8f643dd); in the dark scope both are #35e0b0.
+    "job-theme.css": "53b8a7a06c016000b090ac7cd44374a4a8f5e9a6f09cac8a24ebe02d7aaa1d01",
     # Re-pinned 2026-10-13: the lifecycle (Champion board) dark rules were extended after the
     # WS-E pin was taken; token values (DARK_TOKENS below) are still checked separately.
     # Re-pinned (repo cleanup): the pages' hard-coded colors became var(--token) references whose DARK
