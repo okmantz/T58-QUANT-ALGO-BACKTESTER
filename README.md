@@ -10,253 +10,112 @@
 
 <div align="center">
 
+
 # T58 Trading — Quant Algo Backtester
 
 </div>
 
 ---
 
-Full Tutorial:
-https://drive.google.com/file/d/1pO-jS8W7A2mh8HVCpxZ0Sd2h2AHaUeW_/view?usp=drivesdk
+Full tutorial: https://drive.google.com/file/d/1pO-jS8W7A2mh8HVCpxZ0Sd2h2AHaUeW_/view?usp=drivesdk
 
 ---
 
-The one-stop shop for taking a trading idea from "here's a script" to
-"here's a validated, prop-firm-ready strategy" — without leaving one app.
-Import or write a strategy in any of four formats, validate it against real
-prop-firm rules, search for a version that actually holds up out-of-sample,
-optionally let a local AI help along the way, and walk away with one report
-that answers the only question that actually matters:
+A prop-firm-first strategy lab. Bring a strategy (Manual Builder, Python, PineScript or MQL5), test it against real
+prop-firm rules, search for a version that holds up out-of-sample, and get one report that answers:
 
 > **"If I trade this strategy under these prop-firm rules, what is the probability that I pass the evaluation and reach my first payout?"**
 
-This is a prop-firm-first backtester, not a traditional long-term investment
-backtester. The core loop:
-
 ```
-Market Data + Strategy + Risk + Prop Rules
-        -> Historical Backtest
-        -> Prop-Firm Simulation
-        -> Monte Carlo Simulation (thousands of simulated accounts)
-        -> Probability of Success
-        -> Comprehensive Report
+Market data + Strategy + Risk + Prop rules
+  -> Backtest -> Prop-firm simulation -> Monte Carlo -> Probability of success -> Report
 ```
 
-Everything else builds on that loop, organized into workflow stages:
+It runs as a Windows desktop app (.exe), a local Python app on any OS, or a web app you can open from your phone.
+Everything stays on your computer.
 
-- **Create** — Speed Run, Generate Strategies (AI), Research Agent
-- **Test** — Run & Report, Payout Probability, Prop-Firm Recommender
-- **Optimize** — Search Lab, Iterative Refinement, Full Pipeline, Quick
-  Optimize, Multi-Objective Optimization, Evolution Lab
-- **Validate** — Walk-Forward Optimization, Walk-Forward-Aware GA, CPCV /
-  PBO, Parameter Sensitivity, Regime Survival Matrix
-- **Champion** — Multi-Asset Portfolio, Multi-Strategy Ensemble, Family
-  Diversity
-- **Deployment** — Forward Test (MT5 demo), Overnight Autopilot,
-  Auto-Retune, Deploy Live (connection management), Live Market monitor
+## Contents
 
-<p align="center">
-  <img src="assets/brand/feature-icons.png" alt="Strategy Research / Validation / Robustness / Prop Simulation" width="640" />
-</p>
+[Run it](#run-it) · [Workflow](#workflow) · [Discovery Engine](#discovery-engine) · [Verdicts and scoring](#verdicts-and-scoring) ·
+[Monte Carlo](#monte-carlo) · [Champion and Deployment](#champion-and-deployment) · [Library and research](#library-and-research) ·
+[Account, ranks and themes](#account-ranks-and-themes) · [Settings and defaults](#settings-and-defaults) · [Strategy formats](#strategy-formats) · [Tests](#tests)
 
+## Run it
 
-Plus **Quant Lab** (a dozen standalone analysis tools), **Options Outlook**,
-an **AI Assistant** dashboard (news + market scanner + chat), and a
-beginner-friendly **Resources** guide. An optional local **AI Assist**
-(Ollama) can participate in several of these — see below.
+**Windows `.exe` (no Python):** in GitHub go to **Actions → desktop-cross-platform → latest run** and download
+**T58-Quant-Algo-Backtester-Windows**. Extract the inner zip into a short folder such as `C:\T58\` and double-click
+`T58-Quant-Algo-Backtester.exe` (keep `_internal` beside it). Market data is a separate download (**Actions → build-data-pack →
+T58-Market-Data**); extract it next to the `.exe`. Tagged releases (`v*`) attach the app zip, data zip and `.sha256` files directly.
 
-Three ways to run it: a **Windows desktop app (.exe)**, a **local Python app**
-(any OS), or a **mobile-friendly web app** you open in a phone browser.
-Nearly every feature has full web/desktop parity — the exceptions (MT5-only
-Deployment tools, a couple of small picker UIs) are called out where they
-come up below.
-
-## Running it
-
-**Windows `.exe`, no Python needed:** push this repo to GitHub, then go to
-**Actions → desktop-cross-platform → (latest run)** and download the
-**T58-Quant-Algo-Backtester-Windows** artifact (macOS and Linux builds sit beside it; the web app is **web-cross-platform**). GitHub hands it to you as a
-zip that contains `T58-Quant-Algo-Backtester-Windows.zip` — extract that
-inner zip into a short folder such as `C:\T58\` and double-click
-`T58-Quant-Algo-Backtester.exe` (keep the `_internal` folder beside it).
-Market data is a **separate download** so the app stays small: take the
-**T58-Market-Data** artifact from **Actions → build-data-pack** and extract
-its `T58-Market-Data.zip` into the same folder as the `.exe`. Tagging a
-release (`v*`) attaches the app zip, the data zip and their `.sha256`
-checksums to a GitHub Release directly (no zip-inside-a-zip there).
-
-**Local Python app (Windows/macOS/Linux):**
-
-```bash
-git clone <this-repo-url>
-cd T58-Quant-Algo-Backtester
-python3 -m venv .venv                 # Windows: py -m venv .venv
-source .venv/bin/activate             # Windows: .venv\Scripts\activate.bat
-pip install -r config/requirements.txt
-python -m app.main                    # desktop GUI
-```
-
-Add `--cli --csv data/raw/EURUSD/EURUSD_5M_sample.csv --sims 10000` to run
-headless instead; see `python -m app.main --help` for the full flag list.
-Reports land in `reports/report.{json,html}` — `report.html` is
-self-contained and print-to-PDF friendly.
-
-**Mobile / web app:** Tkinter can't run on a phone, so mobile access is a
-lightweight Flask web app reusing the exact same engine. Easiest path:
-grab `T58-Web-App-Windows.zip` from [Releases](../../releases), run
-`T58-Web-App.exe`, and scan the QR code it shows with your phone (same
-Wi-Fi). From source instead: `python launchers/run_web.py`, which prints your LAN
-address and a QR code. Away from home, [Tailscale](https://tailscale.com)
-(free) lets your phone reach it from anywhere with no port forwarding —
-details on the app's own **Phone access** page. Full walkthrough:
-[`HOW TO OPEN ON YOUR PHONE.md`](HOW%20TO%20OPEN%20ON%20YOUR%20PHONE.md).
-
-**Web app on any operating system (Windows, macOS, Linux):** the web app is
-plain Python + Flask + a browser, so it runs anywhere Python 3.10+ does —
-no Tk, no Windows-only packages (MetaTrader5/pywebview are installed on
-Windows only, automatically). One command, same on every OS:
+**Web app, any OS (Python 3.10+):**
 
 | OS | Start it |
 | --- | --- |
 | Windows | double-click `launchers\run_web.bat` |
-| macOS | double-click `launchers/run_web.command` (first time: right-click → Open). If it won't open because the file lost its executable flag (happens when files are uploaded through the GitHub website), run `bash launchers/run_web.command` in Terminal once, or `chmod +x launchers/run_web.command launchers/run_web.sh` |
+| macOS | double-click `launchers/run_web.command` (first time: right-click, Open; if it will not run, `chmod +x launchers/run_web.command launchers/run_web.sh`) |
 | Linux | `bash launchers/run_web.sh` |
-| Any (manual) | `pip install -r config/requirements.txt` then `python launchers/run_web.py` |
+| Manual | `pip install -r config/requirements.txt` then `python launchers/run_web.py` |
 
-The first run creates a private `.venv` and installs the dependencies; later
-runs start immediately. If port 5000 is busy (macOS uses it for AirPlay
-Receiver) the app automatically picks the next free port and shows the right
-address and QR code. Where your data lives when the install folder is
-read-only: Windows `%LOCALAPPDATA%`, macOS `~/Library/Application Support`,
-Linux `~/.local/share` (folder `T58 Prop Algo Backtester`).
-`python scripts/web_smoke_test.py` starts the real server and checks every
-main page; the **web-cross-platform** GitHub Action runs the full test suite, that smoke
-test on Windows, macOS and Linux, and (on pushes to main, tags and manual runs)
-builds and smoke-tests one packaged web app per OS. **desktop-cross-platform**
-does the same for the desktop app.
+The first run creates a private `.venv`. If port 5000 is busy the app picks the next free one and prints the address and a QR code.
+For your phone, scan the QR code on the same Wi-Fi, or use [Tailscale](https://tailscale.com) away from home
+([`HOW TO OPEN ON YOUR PHONE.md`](HOW%20TO%20OPEN%20ON%20YOUR%20PHONE.md)). User data lives in `%LOCALAPPDATA%` (Windows),
+`~/Library/Application Support` (macOS) or `~/.local/share` (Linux) when the install folder is read-only.
 
-## Core workflow — Run & Report
+**Desktop GUI / headless:** `python -m app.main`, or `python -m app.main --cli --csv data/raw/EURUSD/EURUSD_5M_sample.csv --sims 10000`
+(`--help` lists every flag). Reports land in `reports/report.{json,html}`; the HTML is self-contained and prints to PDF.
 
-1. **Upload Market Data** — CSV/TSV/Parquet/`.zip`/`.7z`, auto column
-   mapping, gap/duplicate detection. Datasets (XAUUSD, EURUSD,
-   GBPUSD, indices, etc.) live under `data/raw`. Multiple files can be
-   selected for multi-timeframe analysis (e.g. 60m bias + 15m zone + 5m
-   entry). Alpaca API fetch is also supported for US equities/crypto.
+`python scripts/web_smoke_test.py` starts the real server and checks every main page. The **web-cross-platform** and
+**desktop-cross-platform** Actions run the tests and the smoke test on Windows, macOS and Linux.
 
-   **About downloads & data (buyers read this):** the full historical
-   datasets under `data/raw/` ship as their own download,
-   `T58-Market-Data.zip` (redistribution of this market data is licensed),
-   which you extract into the app folder next to the `.exe`; the app zip
-   itself carries only the small sample. You can also add more data any time after install: in the desktop
-   app use the "Import folder..." button on the Market Data tab (or drag a
-   folder onto the tab), and in the web app use the drag-and-drop folder
-   zone in the Data Center -- every recognized file is run through the
-   standard importer with per-file results.
-2. **Import/Create a Strategy** — four formats, all reduced to the same
-   standardized signal series:
-   - **Manual Builder** — a full no-code visual builder: entry conditions
-     across price/EMA/SMA/WMA/VWAP/RSI/MACD/ATR/Bollinger and
-     market-structure concepts (swing highs/lows, liquidity sweeps, break
-     of structure, fair value gaps, order blocks, session ranges); exits
-     via fixed/ATR stops & targets, trailing stop, break-even, time-based
-     exit, and more.
-   - **Python** — upload/paste a `.py` exposing `generate_signals(df)`.
-   - **PineScript** and **MQL5** — real parsers for a tested subset of each
-     language (see below); anything unsupported fails loudly rather than
-     producing a silently inaccurate backtest.
+New buyers: [docs/buyer/INSTALL.md](docs/buyer/INSTALL.md), then [docs/buyer/QUICKSTART.md](docs/buyer/QUICKSTART.md).
 
-   Every strategy can be checked for **lookahead bias**, which re-runs
-   signal generation on truncated data and flags the exact bar where a
-   leak first appears. A persistent **Strategy Library** saves any
-   strategy with status tags and its full backtest/search history.
-3. **Enter Prop-Firm Rules** — account size, profit target, daily loss
-   limit, max drawdown (trailing/static, intrabar/EOD), consistency rule,
-   payout threshold/cap/frequency. **Quick-fill from a preset** — FTMO,
-   Apex, TopStep, The5%ers, FundedNext, and Lucid rules are built in
-   (dated, with a note on what to re-verify — firms change terms often).
-4. **Configure Risk & Execution** — fixed-$ or %-of-equity risk per trade,
-   commission, slippage, spread, pip size (with a "detect from data"
-   helper).
-5. **Backtest → Prop Simulation → Monte Carlo → Report** — one click, or
-   the `--cli` flag.
+## Workflow
 
-## Create
+1. **Data** — CSV/TSV/Parquet/`.zip`/`.7z` with automatic column mapping and gap/duplicate checks, or Alpaca for US equities and crypto.
+   Datasets live in `data/raw`; drag a folder onto the Data Center to import it. The full history ships as the separate
+   `T58-Market-Data.zip` (redistribution is licensed); the app zip carries only a small sample.
+2. **Strategy** — Manual Builder (no-code: price, EMA/SMA/WMA, VWAP, RSI, MACD, ATR, Bollinger, market-structure concepts; fixed/ATR stops,
+   trailing, break-even, time exits), Python (`generate_signals(df)`), PineScript or MQL5 (tested subsets, see below). Every strategy can be
+   checked for **lookahead bias**: signals are re-computed on truncated data and the first bar that changes is reported. The Strategy Library
+   keeps status tags and each strategy's backtest and search history.
+3. **Prop rules** — account size, target, daily loss, max drawdown (trailing/static, intrabar/EOD), consistency, payout rules. Presets for FTMO,
+   Apex, TopStep, The5%ers, FundedNext and Lucid carry a verified date; check it before trading real money.
+4. **Risk and execution** — fixed-$ or %-equity risk, commission, slippage, spread, pip size.
+5. **Run** — backtest, prop simulation, Monte Carlo and report in one click.
 
-- **Speed Run** — an all-in-one discover-to-verdict tool for a hard
-  deadline: a fast, wide multi-family search feeding straight into Full
-  Pipeline validation of the top survivors, picking the best
-  READY/MARGINAL winner. If nothing clears the bar, it turns the run's own
-  rejection reasons into concrete "what to try next" suggestions.
-- **Generate Strategies (AI)** — a local Ollama model drafts a new
-  strategy from a plain-language idea, saved to the library as a `draft`.
-- **Research Agent** — a tool-calling AI that investigates a strategy over
-  several reasoning steps, each a read-only call into this app's own
-  engine (backtest, prop-sim, Monte Carlo, walk-forward, regime,
-  sensitivity) — never an invented number.
+| Stage | Tools |
+|---|---|
+| **Create** | Speed Run (fast wide search into Full Pipeline validation; if nothing clears the bar it suggests what to try next), Discovery Engine, Generate Strategies (AI), Research Agent (read-only engine calls, never invented numbers) |
+| **Test** | Run & Report, Payout Probability (eval pass, funded, payout 1, 2 ... with an optional scaling stress test), Prop-Firm Recommender (ranks every preset against your trade sequence) |
+| **Optimize** | Search Lab (5-stage funnel to a leaderboard), Iterative Refinement (GA), Full Pipeline, Quick Optimize, Multi-Objective (NSGA-II Pareto front), Evolution Lab (unattended generate, filter, validate, mutate, ranked by PROP FITNESS) |
+| **Validate** | Walk-Forward Optimization, Walk-Forward-Aware GA, CPCV / PBO, Parameter Sensitivity and Parameter Robustness, Regime Survival Matrix |
+| **Champion** | Multi-Asset Portfolio, Multi-Strategy Ensemble, Family Diversity, Automated Portfolio Composer |
+| **Deployment** | Forward Test (MT5 demo), Webhook Relay (TradingView), Overnight Autopilot, Auto-Retune, Deploy Live, Live PnL pill, Live Market monitor |
+| **Quant Lab** | Strategy Translator (to PineScript v5 / MQL5), Auto Regime Selector, Health / Drift Monitor, Pairs, Options Pricing, Order Book Simulator, Sentiment Correlation, Markowitz, Volatility Surface, Factor Model |
 
-## Test
+**Optimizer defaults.** Every GA form defaults to the same fitness, `pass_gradient`; Speed Run uses `edge_lb_r` (lower bound of mean R after 2x costs).
+The optimizers share one persistent worker pool, memoize backtests by effective parameter values, and score plateau-robust finalists by perturbing the
+winner's neighbours. After a GA run, **Map the winner's neighbourhood** opens Parameter Robustness, which shades the neighbouring parameter grid and
+says in plain words whether the winner sits on a plateau or a lone spike.
 
-- **Run & Report** — the core workflow above.
-- **Payout Probability** — a lifecycle simulation carrying a strategy
-  through funding milestones (eval pass → funded → payout #1 → payout #2
-  → …), reporting a funnel of probabilities at each stage instead of one
-  flat number. Includes an optional **account-scaling stress test**: model
-  a funded account scaling up after a run of consecutive payouts (a common
-  shape at several modern prop firms) and see how it changes your expected
-  total payout.
-- **Prop-Firm Recommender** — the reverse question: given your strategy's
-  own trade sequence, scores it against every prop-firm preset (or a
-  chosen subset) and returns a ranked table of which firm's rules it
-  actually fits best, instead of checking one firm at a time by hand.
+**Deployment notes.** Deploy Live connects MT5, cTrader, DXtrade, TradeLocker or Tradovate with enforced guardrails (news blackout, no weekend
+holds, no hedging, size cap, daily-loss and drawdown halts); start on a demo. Forward Test and Overnight Autopilot need a running MT5 terminal
+(desktop only). Webhook Relay needs a public https address and a TradingView plan with webhooks; it feeds a T58 paper account and optionally a demo broker.
 
-## Optimize
+## Discovery Engine
 
-- **Search Lab** — discovers and validates *many* candidates in one run
-  via a 5-stage funnel: generate a candidate pool from a named strategy
-  family, cheap Stage-1 filter, GA refinement, a full validation gate
-  (Monte Carlo + walk-forward holdout + robustness + Deflated Sharpe), then
-  a leaderboard and champion promotion.
-- **Iterative Refinement** — a genetic-algorithm parameter search across
-  all four strategy sources, toward a configurable fitness metric.
-- **Full Pipeline** — one button chaining baseline backtest → lookahead
-  check → walk-forward-aware GA → re-validated report → OOS/holdout checks
-  → a plain READY/MARGINAL/NOT READY verdict with reasons. Winners are
-  auto-saved to the Strategy Library.
-- **Quick Optimize** — a lighter, single-strategy version of the above.
-- **Multi-Objective Optimization** — a real NSGA-II Pareto front across
-  several objectives at once (e.g. Sharpe, drawdown, eval-pass
-  probability) instead of collapsing them into one score.
-- **Evolution Lab** — runs generate → filter → validate → keep-winners →
-  mutate unattended, for as long as you leave it running, ranked by a
-  composite **PROP FITNESS** score (pass probability × payout probability
-  × robustness × OOS consistency, penalized for thin samples, overfitting,
-  and concentration risk — not raw net profit). Every genome's backtest
-  now runs under the same daily-loss/drawdown circuit breakers your prop
-  rules define, so a candidate that would blow the account gets stopped
-  during its own backtest rather than only being caught later. Checkpoints
-  after every generation, so STOP-then-START resumes exactly where it left
-  off. Candidates are Manual Strategy Builder configs, not mutated
-  uploaded code.
+Finds new strategies without hand-picking parameters. Effort budgets are **5,000+ (Quick), 10,000+ (Standard) and 15,000+ (Deep)** evaluated
+configurations. Candidates are drawn from paper-sourced families, the full indicator pool (about 300 indicators as trend / revert / slope rules) and
+the graveyard (known-dead neighbourhoods are skipped). Every configuration is optimized, then verified with real-engine backtests plus a lookahead
+test: a prefix-invariance check on the signals and a second probe on the full history, so a signal that peeks at the future is rejected. The trial
+count feeds the Deflated Sharpe correction. Details: [docs/DISCOVERY_ENGINE.md](docs/DISCOVERY_ENGINE.md).
 
-## Validate
+- **Strategy Graveyard** — searchable by market and text, with **See all** and **Revive**, which re-optimizes a dead strategy on a chosen market.
+  New installs ship with 1,100+ measured failures (rebuild with `scripts/build_graveyard_seed.py`, extend with `scripts/expand_graveyard_seed.py`,
+  fold in your own with `scripts/export_graveyard_seed.py`).
+- **Trial ledger** (`/trial-ledger`) — a plain-language record of how many things have been tried, which is what multiple-testing corrections need.
 
-Five statistical-rigor tools answering different "how much should I trust
-this backtest?" questions:
-
-- **Walk-Forward Optimization** — rolling/anchored folds, a fresh GA per
-  fold, chained into one continuous OOS equity curve.
-- **Walk-Forward-Aware GA** — the same GA, scored only on chained OOS data
-  so the search can't just curve-fit harder; reports an overfitting gap.
-- **CPCV / PBO** — Combinatorial Purged Cross-Validation stress-tests one
-  strategy across many train/test partitions; Probability of Backtest
-  Overfitting checks a *pool* of candidates for whether the apparent best
-  one is really better than a coin flip out-of-sample.
-- **Parameter Sensitivity** — 1D sweeps of every tunable parameter with
-  cliff detection, plus an optional 2D heatmap.
-- **Regime Survival Matrix** — classifies every bar into a regime (trend,
-  volatility, session, environment) and attributes the strategy's own
-  trades to whichever regime was active, surfacing where its losers
-  concentrate.
+## Verdicts and scoring
 
 ## The verdict ladder (the headline everywhere)
 
@@ -273,40 +132,19 @@ READY / MARGINAL / NOT READY label only as detail:
 
 FORWARD-TEST CANDIDATE is the realistic output of a search. A backtest alone can never produce EVALUATE or FUNDED.
 
-## Is there an edge? The pooled cross-market test
+On the Full Pipeline result, a **verdict waterfall** lists each step in order (score, gate, cap, advisory) so you can see exactly what moved the verdict,
+and what single change would move it.
 
-One strategy on one market at about 7 trades a month cannot prove a +0.10R edge in six years; that is a power problem, not strictness.
-The primary edge question is therefore asked **pooled**: the same fixed parameters on 8-12 markets, R measured after 2x costs, one
-day-block bootstrap over trading days across all markets (same-day moves in correlated markets stay in one block). Code:
-`app/validation/pooled_edge.py` (`pooled_edge_test`, `pooled_family_test`, `cluster_t_stat`). Three questions stay separate: edge (this
-test), survival (cost stress, regimes, holdout, ruin), and only then sizing / EV for the prop rules.
+**Is there an edge? The pooled test.** One strategy on one market at 7 trades a month cannot prove a +0.10R edge in six years; that is a power problem,
+not strictness. So the edge question is asked pooled: the same fixed parameters on 8-12 markets, R after 2x costs, one day-block bootstrap over
+trading days (`app/validation/pooled_edge.py`). Search Lab ranks on `edge_lb_r`, needs 100+ Stage-1 trades, skips candidates whose round-trip cost exceeds
+0.15R and prints a random-entry control; `app/validation/pipeline_controls.py` shows on the Dashboard that a zero-edge stream almost never passes and a planted
++0.20-0.30R edge usually does. `python scripts/bootstrap_data.py` rebuilds the data manifest and calendars and warns about missing instrument specs or markets.
 
-`app/validation/pipeline_controls.py` publishes positive and negative controls on the Dashboard: a zero-edge stream must almost never pass,
-a planted +0.20-0.30R edge must usually be found, and pooling must beat a single market. If it does not, the pipeline is the problem.
+### How READY and the T58 score work
 
-Search Lab ranks on the lower bound of mean R after 2x costs (`edge_lb_r`), requires 100+ Stage-1 trades and a mean-R t-stat, skips
-candidates whose round-trip cost exceeds 0.15R, and prints a random-entry control for every run (`app/search/run_controls.py`):
-the share of RANDOM candidates that pass the same Stage-1 rule. Near-duplicate families are retired from "all" searches
-(`RETIRED_FAMILIES` in `app/search/strategy_space.py`; an explicit single-family request still runs them).
-
-## Data bootstrap
-
-    python scripts/bootstrap_data.py
-
-Rebuilds `data/data_manifest.json`, writes the FOMC/NFP calendar (2010 onward) and prints a loud banner for anything that weakens
-results: files without an instrument spec (unmeasured costs), unreadable files, session-clock problems, and missing markets for the pooled
-test (ES, NQ, YM, RTY, GC, CL, ZN, ZB, 6E, EURUSD, GBPUSD, USDJPY). Bar timestamps are stamped with `exchange_time` and `trading_day`
-columns at import (`app/data/session_clock.py`); the bundled files are naive UTC and operands now read them as exchange time.
-
-## How READY and the T58 score work
-
-A strategy is **READY** when it clears **every hard gate** *and* its **T58 score is 75 or more**. READY means
-"cleared the gates with a strong score", not "excellent on everything"; a score of **85+** earns the extra **Elite**
-label. The gates are demote-only (a gate can lower a verdict, never raise it). Everything below is read from
-`app/scoring/t58_scorecard.py`, `app/orchestration/full_pipeline.py` and `app/orchestration/audit_layers.py`.
-
-Click any verdict pill (READY / MARGINAL / NOT READY) on the **Dashboard** or the **Champion** page to see, in plain
-English, why that strategy got it.
+READY means every hard gate passes **and** the T58 score is 75 or more (85+ earns the Elite label). Gates only ever lower a verdict. Click any verdict pill
+on the Dashboard or Champion page for a plain-English reason. Source: `app/scoring/t58_scorecard.py`, `app/orchestration/full_pipeline.py`, `app/orchestration/audit_layers.py`.
 
 ### The T58 score (weights sum to 100)
 
@@ -325,7 +163,7 @@ English, why that strategy got it.
 | Parsimony | 4 | Fewer degrees of freedom scores higher |
 | CPCV / PBO (supporting) | 3 | Out-of-sample retention across CPCV paths |
 
-A component's share of the score is its weight / 100. (Older text said 120; that was the pre-audit card.)
+A component's share of the score is its weight / 100.
 
 The score is the weighted average over the components that were **measured** (a missing check is never scored as a
 zero, and thin coverage caps the verdict instead). Tiers: **85+ Elite, 75+ Strong, 65+ Promising,
@@ -337,7 +175,6 @@ vocabulary, so it is shown beside the score and **never** affects the score, the
 
 The four Monte Carlo components (pass, paid, ruin, funded survival) are capped at 30 of the 100 points because they come
 from one resampled trade list; the other 70 points are evidence independent of it (replay, expectancy lower bound,
-walk-forward, drawdown, robustness, parameter stability, parsimony, CPCV).
 
 ### The gates (defaults)
 
@@ -370,8 +207,6 @@ Real scorecard runs at the gate floors (every other component set to the value s
 
 So READY now asks for the gates plus a score of 75: roughly 80-85% per-attempt pass lower bound, 45-65% paid lower
 bound and ruin under about 10%, with decent (not perfect) secondary components. Elite (85+) is a label for
-strategies that are excellent across the board. Public aggregates put real challenge pass rates around 10-20%, so
-READY is still a top-percentile bar.
 
 ### Expected value beside READY
 
@@ -380,167 +215,65 @@ economic question: `EV = p × q × V − p × A − c`. For firms that charge a 
 Combine, $49 per month) `c` is the monthly price × the months the evaluation is expected to take (median time to pass,
 rounded up to whole 30-day periods), so slow passers are no longer priced as if they paid for one month.
 
-### Speed switches
+## Monte Carlo
 
-Monte Carlo runs vectorised across simulated paths (numpy only, bit-identical to the per-path loop; set
-`T58_MC_VECTORIZE=0` to fall back). Lookahead results are cached on disk keyed on the strategy's content, the data and
-the checker's code (`T58_LOOKAHEAD_DISK_CACHE=0` disables; `T58_CACHE_DIR` moves it). Python strategy modules are
-loaded once per file version (`T58_MODULE_CACHE=0` disables; a strategy that keeps mutable module-level state declares
-`T58_STATEFUL = True`). One persistent worker pool serves every Monte Carlo call, and a second persistent pool serves the search stages
-(GA, walk-forward, deflated-Sharpe trials), so a Full Pipeline run spawns and imports its workers once, not per stage.
-Backtests are memoized by effective parameter values (integer parameters that round equal share one run), and the
-PBO gate scores its CPCV paths from the trade lists the deflated-Sharpe step already produced instead of
-re-backtesting every path. Browser tabs stop polling while hidden.
+One method is used everywhere: **day-block bootstrap with 1-day blocks**. Whole session days are resampled, so every trade of a day stays together and the
+per-day rules (daily loss limit, consistency, winning-day counts) bind as often as in real life.
 
-## Champion
+It was chosen by test, not by taste. Trades were generated from processes whose true per-attempt pass rate is known (i.i.d. wins, hot/cold regimes, a shared
+daily shock, streaky wins); each method estimated that rate from about 9 months of history. Mean absolute error in pass-rate points (first run, 8 histories each):
+1-day blocks 7.9-10.9 versus 3-day blocks 12.5-15.1 and 5-day blocks 14.2-17.8 on the i.i.d. and daily-shock processes, with 1-day blocks about equal to the plain
+i.i.d. bootstrap and no worse on bias. On the regime and streaky processes every method failed about equally: one short history cannot reveal regimes it did not
+contain, which is why the score also leans on replay from real start dates. The experiment is `python scripts/mc_method_calibration.py 30 out.csv` (slow: about 20 minutes per process); rerun it before changing the default. A 30-history run was still finishing when this was written, so the numbers above come from the 8-history run.
 
-- **Multi-Asset Portfolio** — runs a strategy across several instruments,
-  computes their correlation, re-weights risk, and merges legs into one
-  shared account curve.
-- **Multi-Strategy Ensemble** — combines several different,
-  weakly-correlated strategies on the same instrument (blend or vote).
-- **Family Diversity** — reports per-family performance from a Search Lab
-  run, so you can see if the leaderboard is genuinely diverse.
-- An **Automated Portfolio Composer** (under Quant Lab) searches the
-  Strategy Library for the best N-strategy combination automatically.
+## Champion and Deployment
 
-Cost-stress-adjusted fitness (re-backtesting every GA candidate at
-inflated spread/slippage/commission) and a declarative adaptive-risk
-layer (de-risk after N losses, cut size on a bad day, coast near a profit
-target) apply across every optimizer above.
+Cost-stress-adjusted fitness (every GA candidate re-backtested at inflated spread, slippage and commission) and a declarative adaptive-risk layer
+(de-risk after N losses, cut size on a bad day, coast near the target) apply across every optimizer. The Dashboard's equity curve lets you select several
+strategies to compare, and you can promote a strategy from there. See the Deployment table above for the live tools.
 
-## Deployment
+## Library and research
 
-- **Forward Test (MT5 demo)** — deploys any Strategy Library strategy to a
-  free MT5 demo account and watches it trade forward against real broker
-  prices, reusing the exact signal/sizing engine the backtester uses.
-  Journals every trade, flags win-rate drift, ships a kill switch. Demo
-  accounts only. Desktop-only (needs a running MT5 terminal).
-- **Webhook Relay (TradingView)** — a TradersPost-style relay for forward
-  testing a Pine Script strategy. Create a relay at `/webhook-relay`, paste
-  its URL and the generated alert message into a TradingView alert on the
-  strategy, and every order fill arrives as a webhook. Each signal is
-  checked against the relay's rules (passphrase, allowed tickers, max
-  quantity, duplicate filter, long/short), then applied to a T58 paper
-  account (costs from the instrument specs) and, optionally, mirrored to a
-  **demo** broker account (live accounts are refused). Web only. Needs a
-  public https address for the app (ngrok, cloudflared or Tailscale Funnel)
-  and a TradingView plan that supports webhooks; TradingView's own Paper
-  Trading cannot receive webhooks, so the T58 paper account is the demo.
-- **Overnight Autopilot** — chains Speed Run discovery straight into a
-  live MT5 forward test of the winner: runs the search, and if it lands on
-  a READY/MARGINAL strategy, starts forward-testing it automatically and
-  writes one dated report to read in the morning. It can't finish a full
-  forward-test evaluation overnight (that's a live, ongoing process) — what
-  it gets you is "the search ran and a winner is already live on your demo
-  account" instead of needing to babysit the search, then load, then start
-  the forward test by hand. Desktop-only (same MT5 requirement as Forward
-  Test); available from both the Forward Test tab and Speed Run.
-- **Auto-Retune** — a one-click check against Strategy Health/Drift
-  Monitor: if a running forward test's realized performance has drifted
-  outside its predicted band, this re-runs Quick Optimize against it
-  automatically and shows you the before/after, instead of you needing to
-  notice the drift flag and start the re-tune by hand yourself.
-- **Deploy Live** — connect a funded prop-firm account (MT5, cTrader, DXtrade, TradeLocker, Tradovate) and run a strategy
-  live through the execution engine. Every web-launched session has enforced prop guardrails (news blackout, no weekend
-  holds, no hedging, per-order size cap, daily-loss and max-drawdown halts). Start on a demo account.
-- **Live PnL tracker** — a small floating pill (all pages) showing the floating PnL of your running live / forward-test
-  strategies; click it for the per-strategy breakdown. Hidden when nothing is running. Data: `/api/live-pnl`.
-- **Live Market monitor** — read-only live bars over your MT5/Alpaca connection, with a **Layout** selector for a
-  multi-chart grid (several symbols/timeframes side by side).
+- **Library** (Playground): your book shelf with progress, an in-app PDF reader for PDFs you add, a list of free legal books to read online (statistics,
+  machine learning, forecasting, optimization, probability), a Bible reader (KJV offline, ESV with your own free key) and focus sessions.
+- **Research papers**: `research/NN_*/Reading_List.md` lists 225 papers in 12 topic folders (momentum, validation, volatility, sizing, execution, machine learning,
+  multiple testing, regimes, trend and mean reversion, prop-firm behaviour), each with a one-line role and links. Drop PDFs anywhere under `research/` and
+  the optional AI assist reads them when suggesting parameters (keyword matching only, nothing leaves your machine). Links were compiled without being opened:
+  run `python scripts/check_paper_links.py` to find dead ones, or add `--download` to save the arXiv PDFs. See [research/README.md](research/README.md).
+- **Global Events**: a plain-language session brief, the economic calendar and an optional X feed (Bearer token under API Keys, paid X plan; see
+  [docs/GLOBAL_EVENTS.md](docs/GLOBAL_EVENTS.md)).
+- **Options Outlook** (Black-Scholes candidates with an optional AI narrative), the **AI Assistant** dashboard (news, scanner, chat) and a beginner **Resources** guide.
 
-## Quant Lab
+## Account, ranks and themes
 
-A dozen standalone analysis tools: Universal Strategy Translator (Manual
-config → clean PineScript v5 or MQL5), Auto Regime Selector, Strategy
-Health / Drift Monitor, Automated Portfolio Composer, Pairs
-Screener/Backtest, Options Pricing Calculator, Order Book Simulator,
-Sentiment-Price Correlation, Portfolio Optimizer (Markowitz), Volatility
-Surface, and Factor Model.
+**Account Settings** holds your research profile: a rank and title earned from XP, collectible metallic badges, a three-badge showcase, shareable
+achievement cards and downloadable certificates (SVG or PNG). The **Achievements** page filters by status, difficulty and category. Three scenes unlock
+through achievements (Obsidian Gold, Sakura Reverie, Abyssal Blue; locked tiles show what to do), five whole-interface themes can be switched on, and your
+theme, accent and background sync with the account. The bell beside your picture is the notification inbox; a weekly digest arrives on Sundays.
+Personalization also offers the original mountains and four seasonal scenes, and an optional Bible verse bar (off by default). There are no online
+leaderboards: nothing in the app talks to a T58 server for that.
 
-## Options Outlook & AI Assistant
+## Settings and defaults
 
-**Options Outlook** generates deterministic call/put candidates via
-Black-Scholes, with an optional Ollama-ranked narrative on top. The **AI
-Assistant** dashboard combines a ForexFactory news panel, a best-markets
-scanner, and chat, reading live bars from your MT5/Alpaca connection.
+- **AI Assist** is off by default. Ollama (local, free) is the default provider; **API Keys → AI provider** switches every feature to Claude or OpenAI with your key
+  (it falls back to Ollama if no key is saved). The model only proposes values for already-discovered tunable parameters, never code, and every suggestion goes
+  through the same backtest, prop-sim and Monte Carlo pipeline.
+- **Costs are never zero by default**: realistic spread and slippage plus $3 per trade commission (`app/backtest/risk.py`). You can set any cost to 0.
+- **One account size**: RiskConfig and prop rules both default to $100,000.
+- **Presets with no verified stamp** are labelled unverified and cannot reach READY (`app/prop/presets.py`).
+- **Licensing**: master key (offline, owner), Google Sheet keys (customers) or an optional license server. See [docs/LICENSING.md](docs/LICENSING.md).
+- **Speed switches** (environment variables): `T58_MC_VECTORIZE=0` (Monte Carlo falls back to the per-path loop), `T58_LOOKAHEAD_DISK_CACHE=0`,
+  `T58_CACHE_DIR`, `T58_MODULE_CACHE=0` (a strategy with mutable module state sets `T58_STATEFUL = True`).
 
-## Resources
+## Strategy formats
 
-A curated beginner's guide to trading fundamentals — market structure,
-liquidity, supply & demand, entry models — for anyone who wants a running
-start before backtesting their first strategy.
+**PineScript (subset):** `open/high/low/close`, `input.int`/`input.float`, `ta.sma`/`ta.ema`/`ta.wma`/`ta.rsi`, `ta.crossover`/`ta.crossunder`,
+`strategy.entry`/`strategy.close` with `when=`, and `// T58_SL_PIPS=20` / `// T58_TP_PIPS=40`. Not supported: custom functions, arrays, `security()`, plotting, alerts.
 
-**Just bought the app?** Start with [docs/buyer/INSTALL.md](docs/buyer/INSTALL.md)
-(Windows install + 15-minute first run) and
-[docs/buyer/QUICKSTART.md](docs/buyer/QUICKSTART.md) (your first backtest in
-10 minutes). The buyer pack also includes the EULA, refund policy, and
-privacy policy templates plus the crash-reporting (Sentry) setup guide.
+**MQL5 (subset):** direct-value `iMA()`/`iRSI()`, C-style conditions, `trade.Buy`/`trade.Sell`/`OrderSend()`, the same SL/TP directives.
+Not supported: `CopyBuffer()` handles, custom indicators, multi-symbol logic, trailing stops.
 
-## AI Assist (Ollama by default; Claude / OpenAI with your key)
-
-Several tools above can optionally call an AI model — Full Pipeline's GA search, the Research Agent, Generate Strategies,
-and Options Outlook / AI Assistant's narrative layer. Every GA-relevant suggestion still passes through the same
-backtest → prop-sim → Monte Carlo pipeline as any other candidate: the model proposes numbers for already-discovered
-tunable parameters, never writes strategy code, and can never displace a genuinely better candidate the GA already found.
-
-**Provider:** [Ollama](https://ollama.com) (local, free) is the default. In **API Keys → AI provider** you can switch to
-**Claude** or **OpenAI** using the key saved on that page; every AI feature then follows that one choice. If a hosted
-provider is selected but no key is saved, the app falls back to Ollama.
-
-**Ollama setup:** install Ollama and pull a model (`ollama pull llama3.1`), then check **Enable** and hit **Test Connection**
-wherever a page has an **AI Assist** section. Off by default everywhere; an unreachable provider degrades quietly rather than
-breaking the feature.
-
-## Personalize, Bible verse bar
-
-**Account Settings → Personalize** (web app): pick a background — the original mountains (default) or one of four seasonal
-scenes (spring, summer, autumn, winter), each with a light and a dark variant that follow your theme. Optional **Bible verse
-bar** (off by default): a slim static quote with its reference at the top of every page, rotating every 30 minutes.
-Both settings are stored in the browser only.
-
-## Global Events: X (Twitter) feed
-
-Global Events has an **X** section: add usernames and see their most recent posts. Add your X **Bearer token** under
-**API Keys → X**. Note: X's API requires a paid plan for reading posts; without a valid token the section shows a clear
-message and nothing else is affected. See [docs/GLOBAL_EVENTS.md](docs/GLOBAL_EVENTS.md).
-
-## Licensing
-
-Three activation modes — master key (offline, owner), Google Sheet license keys (customers), optional license server.
-Details, env vars and troubleshooting: [docs/LICENSING.md](docs/LICENSING.md).
-
-## Defaults you should know about
-
-- **Costs are never zero by default.** Backtests start with a realistic spread/slippage and **$3 per trade** commission
-  (`app/backtest/risk.py`). You can still set any cost to 0 explicitly.
-- **One account size.** RiskConfig and prop rules both default to the same account size ($100,000), so a plain run and a prop
-  simulation agree.
-- **Prop presets carry a "verified" date.** Each prop-firm preset shows when its rules were last checked against the firm's
-  public page (`app/prop/presets.py` `_VERIFIED_STAMPS`). Presets with no stamp are labelled unverified and cannot reach READY.
-  Firms change rules often — re-check before trading real money.
-- **Strategy Graveyard starter seed.** New installs ship with 1,100+ real, measured failed strategy variants (bundled data, real
-  costs, in-sample + held-out) so Search/Forge skip known-dead neighbourhoods from day one. They are scoped to the dataset they were
-  measured on. Rebuild with `scripts/build_graveyard_seed.py`; add more near-miss failures (covers every strategy family, keeps only
-  rows that were close -- overfit collapses, drawdown breaches, noise-band edges, and edges that costs ate) with
-  `scripts/expand_graveyard_seed.py`; fold in your own graveyard with `scripts/export_graveyard_seed.py`.
-
-## Strategy format support
-
-**PineScript (subset):** `open/high/low/close`, `input.int`/`input.float`,
-`ta.sma`/`ta.ema`/`ta.wma`/`ta.rsi`, `ta.crossover`/`ta.crossunder`,
-`strategy.entry`/`strategy.close` with `when=` conditions, and
-`// T58_SL_PIPS=20` / `// T58_TP_PIPS=40` directive comments. Not
-supported: custom functions, arrays, `security()`/multi-timeframe
-requests, plotting/alerts.
-
-**MQL5 (subset):** direct-value `iMA()`/`iRSI()` calls, C-style
-conditions, `trade.Buy`/`trade.Sell`/`OrderSend()` for entries, the same
-`T58_SL_PIPS`/`T58_TP_PIPS` directives. Not supported: `CopyBuffer()`
-indicator handles, custom indicators, multi-symbol logic, trailing stops.
-
-Both fail loudly with a clear error on anything unsupported, rather than
-silently producing an inaccurate backtest.
+Both fail loudly on anything unsupported instead of producing a silently wrong backtest.
 
 ## Tests
 
@@ -548,22 +281,8 @@ silently producing an inaccurate backtest.
 pytest -q tests
 ```
 
-## Brand & assets
-
-The desktop app, web app, and the reports both generate share one visual
-identity — see `assets/brand/palette.md` for the exact colors. Strategy
-Library statuses read at a glance the same way across both builds:
-
-<p align="center">
-  <img src="assets/brand/status-badges.png" alt="Strategy status badges: ready, developing, wait, extended, pass" width="420" />
-</p>
-
-<p align="center">
-  <img src="assets/brand/social-icons.png" alt="GitHub, Discord, YouTube, X" width="320" />
-</p>
+Brand colors: `assets/brand/palette.md`.
 
 ## Disclaimer
 
-Simulated results are estimates derived from historical data and
-resampling. Past performance and simulated outcomes do not guarantee
-future results.
+Simulated results are estimates derived from historical data and resampling. Past performance and simulated outcomes do not guarantee future results.
