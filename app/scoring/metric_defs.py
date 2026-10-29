@@ -93,6 +93,22 @@ METRICS: dict[str, dict[str, Any]] = {
         "reading": ["It is the product of two hurdles, so it is always ≤ pass probability."],
         "history_field": "first_payout_probability", "unit": "%", "higher_is_better": True,
     },
+    "oos_pct": {
+        "title": "OOS (Out-of-Sample Score)", "aliases": ["oos", "oos %", "oos validation", "out-of-sample", "out of sample", "oos score", "oos efficiency"],
+        "meaning": "How well the strategy holds up on data it was NOT tuned on. A strategy that only works on the data it was fitted to is curve-fit; a high OOS says the edge survives on unseen data.",
+        "formula": "Best available validation result, as a percent: walk-forward / CPCV efficiency × 100 (out-of-sample performance ÷ in-sample performance), or 100 − PBO (probability of backtest overfitting) when that is what was run.",
+        "inputs": ["Walk-forward optimisation, CPCV or walk-forward GA results", "Probability of backtest overfitting (PBO)", "Shows -- until at least one validation has been run"],
+        "reading": ["Below 50: likely curve-fit.", "Champion Candidate needs 50 or more.", "Blank (--) means no validation has been run yet -- run Walk-forward or CPCV from the Strategy Lab."],
+        "history_field": None, "unit": "%", "higher_is_better": True,
+    },
+    "promotion_stage": {
+        "title": "Stage", "aliases": ["promotion stage"],
+        "meaning": "Where the strategy is on the road from idea to something you would trade for real. It only moves forward when it passes that stage's gate.",
+        "formula": "Candidate \u2192 Validated \u2192 Champion Candidate \u2192 Forward Testing \u2192 Production Ready. Champion Candidate needs Eval \u2265 60, Payout \u2265 55, OOS \u2265 50 and a verdict that is not NOT READY. Forward Testing needs a READY Champion Check and Eval \u2265 70. Production Ready needs at least 14 days of forward testing.",
+        "inputs": ["Eval pass probability", "Payout probability", "OOS score", "Champion Check verdict", "Days of forward testing"],
+        "reading": ["Open the Strategy Library to promote a strategy when it qualifies.", "A strategy can never skip a stage."],
+        "history_field": None, "unit": "", "higher_is_better": True,
+    },
     "risk_of_ruin": {
         "title": "Risk of Ruin", "aliases": ["risk of ruin", "ruin", "ruin %", "risk of ruin %", "ror"],
         "meaning": "Probability the account breaches a loss rule within the horizon (90 days by default).",

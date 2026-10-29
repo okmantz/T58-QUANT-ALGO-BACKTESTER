@@ -30,6 +30,18 @@
   }
   function queue(k, v) { pending[k] = v; dirty = true; if (!timer) timer = setTimeout(flush, 400); }
 
+  // 0. owner fresh start: the server ran its one-time clean slate (new __T58_FRESH_EPOCH), so this browser forgets its own
+  //    saved look once too. The marker key deliberately does not start with `t58-` so it is never mirrored or wiped.
+  try {
+    var epoch = window.__T58_FRESH_EPOCH || '';
+    if (epoch && ls.getItem('x58-fresh-epoch') !== epoch) {
+      var dead = [];
+      for (var j = 0; j < ls.length; j++) { var kk = ls.key(j); if (mine(kk)) dead.push(kk); }
+      dead.forEach(function (kk) { nativeRemove.call(ls, kk); });
+      nativeSet.call(ls, 'x58-fresh-epoch', epoch);
+    }
+  } catch (e) {}
+
   // 1. hydrate: the server's copy wins
   Object.keys(server).forEach(function (k) {
     if (!mine(k)) return;

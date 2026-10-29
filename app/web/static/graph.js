@@ -35,106 +35,224 @@ function ensureGlowFilter(svg, id, color, stdDev) {
 }
 
 /* ---- Equity comparison chart ----
-   Click a line (or its legend entry) to spotlight that strategy: it is drawn
-   thick and bright with its name labelled at the end, the others fade. Click
-   it again (or the empty chart) to clear. The selection is remembered across
-   the dashboard's periodic repaints. */
-let t58EquitySelected = null;
+   Every curve is drawn as RETURN FROM ITS OWN STARTING BALANCE (%), not raw dollars. Raw dollars put a $200k account
+   far above a $50k one and squash everything else flat; returns put every strategy on the same footing, so the curves
+   are directly comparable and fill the chart.
+   Click any legend chip (or line) to add/remove it from the comparison -- select as many as you like. With a selection,
+   the axis zooms to just those curves and the rest fade into the background. Selection survives the dashboard's
+   periodic repaints. */
+const t58EquitySel = new Set();
+const EQUITY_COLORS = ["#35e0b0", "#8b7cff", "#4cc9f0", "#f0b429", "#ff7b7b", "#7ee0a0", "#6aa8ff", "#e879f9", "#fb923c", "#a3e635"];
+
+function eqNiceStep(raw) {
+  const p = Math.pow(10, Math.floor(Math.log10(raw || 1)));
+  const f = raw / p;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p;
+}
+
+function eqTicks(lo, hi, target) {
+  const step = eqNiceStep((hi - lo) / Math.max(target, 2));
+  const out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-6; v += step) out.push(Math.abs(v) < step * 1e-6 ? 0 : v);
+  return { ticks: out, step };
+}
+
+function eqSmoothPath(pts) {
+  if (pts.length < 3) return "M" + pts.map(p => p[0].toFixed(1) + "," + p[1].toFixed(1)).join("L");
+  let d = `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const mx = (pts[i][0] + pts[i + 1][0]) / 2, my = (pts[i][1] + pts[i + 1][1]) / 2;
+    d += `Q${pts[i][0].toFixed(1)},${pts[i][1].toFixed(1)} ${mx.toFixed(1)},${my.toFixed(1)}`;
+  }
+  const l = pts[pts.length - 1];
+  return d + `L${l[0].toFixed(1)},${l[1].toFixed(1)}`;
+}
+
+function eqThin(vals, max) {
+  if (vals.length <= max) return vals.slice();
+  const out = [];
+  const step = (vals.length - 1) / (max - 1);
+  for (let i = 0; i < max; i++) out.push(vals[Math.round(i * step)]);
+  return out;
+}
 
 function renderEquityChart(container, series) {
+  container.__eqSeries = series;
   container.innerHTML = "";
   if (!series || !series.length) {
     container.innerHTML = '<div class="t58-empty">No completed runs yet -- run a strategy to populate this chart.</div>';
     return;
   }
-  if (t58EquitySelected !== null && !series.some(s => s.name === t58EquitySelected)) t58EquitySelected = null;
+  // forget selections for strategies that no longer exist
+  Array.from(t58EquitySel).forEach(n => { if (!series.some(s => s.name === n)) t58EquitySel.delete(n); });
 
-  const width = 560, height = 200, pad = 28;
-  const svg = svgEl("svg", { viewBox: `0 0 ${width} ${height}`, width: "100%", height: "220" });
+  // Stable colour per strategy (by name order, so a repaint or a re-sort never changes a strategy's colour)
+  const byName = series.map(s => s.name).sort();
+  const colorOf = name => EQUITY_COLORS[byName.indexOf(name) % EQUITY_COLORS.length];
+
+  // Return from each curve's own starting balance. If a curve has no usable starting balance, fall back to dollars for all.
+  const pctMode = series.every(s => { const st = (typeof s.start === "number" && s.start > 0) ? s.start : s.values[0]; return st > 0; });
+  const curves = series.map(s => {
+    const start = (typeof s.start === "number" && s.start > 0) ? s.start : s.values[0];
+    const raw = pctMode ? s.values.map(v => (v / start - 1) * 100) : s.values.slice();
+    return { s, color: colorOf(s.name), r: eqThin(raw, 110), final: raw.length ? raw[raw.length - 1] : 0 };
+  });
+  const fmt = v => pctMode
+    ? ((v > 0 ? "+" : v < 0 ? "−" : "") + (Math.abs(v) >= 100 ? Math.abs(v).toFixed(0) : Math.abs(v) >= 10 ? Math.abs(v).toFixed(1) : Math.abs(v).toFixed(2)) + "%")
+    : ((v < 0 ? "−$" : "$") + Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 0 }));
+  const axisFmt = v => pctMode ? (v === 0 ? "0%" : (v > 0 ? "+" : "−") + Math.abs(v) + "%") : (v < 0 ? "−$" : "$") + Math.abs(v).toLocaleString();
+
+  const hasSel = t58EquitySel.size > 0;
+  const visible = hasSel ? curves.filter(c => t58EquitySel.has(c.s.name)) : curves;
+
+  const W = Math.max(280, Math.round(container.clientWidth || 640));
+  const H = Math.round(Math.min(340, Math.max(230, W * 0.44)));
+  const padL = pctMode ? 48 : 58, padR = hasSel ? Math.min(118, Math.round(W * 0.2)) : 14, padT = 12, padB = 24;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+
+  let lo = 0, hi = 0;
+  visible.forEach(c => c.r.forEach(v => { if (v < lo) lo = v; if (v > hi) hi = v; }));
+  if (hi - lo < 1e-9) { hi = lo + 1; }
+  const span = hi - lo; lo -= span * 0.06; hi += span * 0.08;
+  const tk = eqTicks(lo, hi, H > 280 ? 6 : 5);
+  const x = (i, n) => padL + (n <= 1 ? 0 : (i / (n - 1))) * plotW;
+  const y = v => padT + (1 - (v - lo) / (hi - lo)) * plotH;
+
+  const wrap = document.createElement("div");
+  wrap.style.cssText = "position:relative;";
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", height: H, role: "img", "aria-label": "Equity curves as return from starting balance" });
+  svg.style.display = "block";
   ensureGlowFilter(svg, "t58-glow-line", null, 2.2);
+  const clipId = "t58-eq-clip";
+  const defs = svg.querySelector("defs");
+  const clip = svgEl("clipPath", { id: clipId });
+  clip.appendChild(svgEl("rect", { x: padL, y: padT - 2, width: plotW, height: plotH + 4 }));
+  defs.appendChild(clip);
 
-  let lo = Infinity, hi = -Infinity, maxLen = 0;
-  series.forEach(s => {
-    s.values.forEach(v => { lo = Math.min(lo, v); hi = Math.max(hi, v); });
-    maxLen = Math.max(maxLen, s.values.length);
+  // grid + axis labels
+  tk.ticks.forEach(v => {
+    const yy = y(v);
+    if (yy < padT - 1 || yy > padT + plotH + 1) return;
+    svg.appendChild(svgEl("line", { x1: padL, x2: padL + plotW, y1: yy, y2: yy, stroke: v === 0 ? "rgba(200,230,240,.38)" : T58_COLORS.grid, "stroke-dasharray": v === 0 ? "4 4" : "", "stroke-width": 1 }));
+    const t = svgEl("text", { x: padL - 7, y: yy + 3.5, "text-anchor": "end", "font-size": 10.5 });
+    t.style.fill = "var(--text-dim)"; t.textContent = axisFmt(v);
+    svg.appendChild(t);
   });
-  if (!isFinite(lo)) { lo = 0; hi = 1; }
-  const range = (hi - lo) || 1;
+  [0, 0.25, 0.5, 0.75, 1].forEach(f => {
+    const t = svgEl("text", { x: padL + f * plotW, y: H - 7, "text-anchor": f === 0 ? "start" : f === 1 ? "end" : "middle", "font-size": 10 });
+    t.style.fill = "var(--text-dim)"; t.textContent = f === 0 ? "start" : f === 1 ? "latest" : Math.round(f * 100) + "%";
+    svg.appendChild(t);
+  });
 
-  const x = i => pad + (i / Math.max(maxLen - 1, 1)) * (width - pad * 2);
-  const y = v => height - pad - ((v - lo) / range) * (height - pad * 2);
-
-  svg.appendChild(svgEl("line", { x1: pad, y1: height - pad, x2: width - pad, y2: height - pad, stroke: T58_COLORS.grid }));
-
-  const parts = [];   // {name, glow, line, hit, legend, color}
-  const select = name => {
-    t58EquitySelected = (t58EquitySelected === name) ? null : name;
-    apply();
-  };
-
-  series.forEach(s => {
-    const color = s.passed ? T58_COLORS.teal : T58_COLORS.coral;
-    const points = s.values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
-    const glow = svgEl("polyline", { points, fill: "none", stroke: color, "stroke-width": 2.5, opacity: 0.5, filter: "url(#t58-glow-line)" });
-    const line = svgEl("polyline", { points, fill: "none", stroke: color, "stroke-width": 1.6 });
-    const hit = svgEl("polyline", { points, fill: "none", stroke: "transparent", "stroke-width": 12, style: "cursor:pointer;pointer-events:stroke;" });
-    const tip = svgEl("title", {});
-    tip.textContent = `${s.name} (${s.passed ? "passed" : "failed"}) -- click to highlight`;
+  const g = svgEl("g", { "clip-path": `url(#${clipId})` });
+  svg.appendChild(g);
+  const order = curves.slice().sort((a, b) => (t58EquitySel.has(a.s.name) ? 1 : 0) - (t58EquitySel.has(b.s.name) ? 1 : 0));  // selected on top
+  order.forEach(c => {
+    const hot = hasSel && t58EquitySel.has(c.s.name);
+    const faded = hasSel && !hot;
+    const pts = c.r.map((v, i) => [x(i, c.r.length), y(v)]);
+    const d = eqSmoothPath(pts);
+    if (hasSel && hot && t58EquitySel.size === 1) {
+      const area = svgEl("path", { d: d + `L${pts[pts.length - 1][0].toFixed(1)},${y(0).toFixed(1)}L${pts[0][0].toFixed(1)},${y(0).toFixed(1)}Z`, fill: c.color, opacity: 0.1 });
+      g.appendChild(area);
+    }
+    if (!faded) g.appendChild(svgEl("path", { d, fill: "none", stroke: c.color, "stroke-width": 3, opacity: hot ? 0.45 : 0.28, filter: "url(#t58-glow-line)", "stroke-linejoin": "round", "stroke-linecap": "round" }));
+    const line = svgEl("path", { d, fill: "none", stroke: c.color, "stroke-width": hot ? 2.4 : 1.7, opacity: faded ? 0.14 : 1, "stroke-linejoin": "round", "stroke-linecap": "round" });
+    g.appendChild(line);
+    const hit = svgEl("path", { d, fill: "none", stroke: "transparent", "stroke-width": 12, style: "cursor:pointer;pointer-events:stroke;" });
+    const tip = svgEl("title", {}); tip.textContent = `${c.s.name} ${fmt(c.final)} -- click to ${t58EquitySel.has(c.s.name) ? "remove from" : "add to"} the comparison`;
     hit.appendChild(tip);
-    hit.addEventListener("click", e => { e.stopPropagation(); select(s.name); });
-    svg.appendChild(glow);
-    svg.appendChild(line);
-    svg.appendChild(hit);
-    const last = s.values.length ? s.values[s.values.length - 1] : null;
-    parts.push({ s, color, glow, line, hit, end: last === null ? null : [x(s.values.length - 1), y(last)] });
+    hit.addEventListener("click", e => { e.stopPropagation(); toggle(c.s.name); });
+    g.appendChild(hit);
   });
 
-  const label = svgEl("text", { "font-size": 10, "font-weight": 600, "pointer-events": "none", "text-anchor": "end" });
-  svg.appendChild(label);
-  svg.addEventListener("click", () => { if (t58EquitySelected !== null) { t58EquitySelected = null; apply(); } });
-
-  container.appendChild(svg);
-
-  const legend = document.createElement("div");
-  legend.style.cssText = "display:flex;flex-wrap:wrap;gap:6px 8px;margin-top:8px;";
-  parts.forEach(p => {
-    const item = document.createElement("button");
-    item.type = "button";
-    item.style.cssText = "display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-muted);background:none;border:1px solid transparent;border-radius:999px;padding:2px 8px;cursor:pointer;font-family:inherit;";
-    item.innerHTML = `<span style="width:9px;height:9px;border-radius:50%;background:${p.color};box-shadow:0 0 6px ${p.color};display:inline-block;"></span>`;
-    item.appendChild(document.createTextNode(p.s.name));
-    item.title = "Click to highlight this strategy";
-    item.addEventListener("click", e => { e.stopPropagation(); select(p.s.name); });
-    legend.appendChild(item);
-    p.legend = item;
-  });
-  container.appendChild(legend);
-
-  function apply() {
-    const sel = t58EquitySelected;
-    label.textContent = "";
-    parts.forEach(p => {
-      const on = sel === null || p.s.name === sel;
-      const hot = sel !== null && p.s.name === sel;
-      p.line.setAttribute("stroke-width", hot ? 3.4 : 1.6);
-      p.line.setAttribute("opacity", on ? 1 : 0.15);
-      p.glow.setAttribute("opacity", hot ? 0.9 : (on ? 0.5 : 0.04));
-      p.legend.style.opacity = on ? 1 : 0.4;
-      p.legend.style.borderColor = hot ? p.color : "transparent";
-      p.legend.style.color = hot ? "var(--text)" : "var(--text-muted)";
-      if (hot) {
-        svg.appendChild(p.glow); svg.appendChild(p.line); svg.appendChild(p.hit);   // draw on top
-        if (p.end) {
-          label.setAttribute("x", Math.min(width - 4, p.end[0]));
-          label.setAttribute("y", Math.max(12, p.end[1] - 8));
-          label.setAttribute("fill", p.color);
-          label.textContent = p.s.name;
-          svg.appendChild(label);
-        }
-      }
+  // end-of-line labels for the selected curves (nudged apart so they never overlap)
+  if (hasSel) {
+    const ends = visible.map(c => ({ c, yy: y(c.r[c.r.length - 1]) })).sort((a, b) => a.yy - b.yy);
+    for (let i = 1; i < ends.length; i++) if (ends[i].yy - ends[i - 1].yy < 13) ends[i].yy = ends[i - 1].yy + 13;
+    ends.forEach(e => {
+      svg.appendChild(svgEl("circle", { cx: padL + plotW, cy: y(e.c.r[e.c.r.length - 1]), r: 3.2, fill: e.c.color }));
+      const t = svgEl("text", { x: padL + plotW + 8, y: e.yy + 3.5, "font-size": 10.5, "font-weight": 600 });
+      t.setAttribute("fill", e.c.color);
+      const nm = e.c.s.name.length > 11 ? e.c.s.name.slice(0, 10) + "…" : e.c.s.name;
+      t.textContent = `${nm} ${fmt(e.c.final)}`;
+      svg.appendChild(t);
     });
   }
-  apply();
+
+  // hover readout
+  const cross = svgEl("line", { y1: padT, y2: padT + plotH, stroke: "rgba(200,230,240,.35)", "stroke-width": 1, visibility: "hidden", "pointer-events": "none" });
+  svg.appendChild(cross);
+  const tipBox = document.createElement("div");
+  tipBox.style.cssText = "position:absolute;pointer-events:none;display:none;z-index:3;background:var(--panel-3,#0f1722);border:1px solid var(--border,#243044);border-radius:10px;padding:7px 10px;font-size:11.5px;line-height:1.5;box-shadow:0 8px 24px rgba(0,0,0,.35);white-space:nowrap;";
+  const overlay = svgEl("rect", { x: padL, y: padT, width: plotW, height: plotH, fill: "transparent" });
+  overlay.style.cursor = "default";
+  overlay.addEventListener("click", () => { if (t58EquitySel.size) { t58EquitySel.clear(); redraw(); } });
+  svg.addEventListener("pointermove", ev => {
+    const box = svg.getBoundingClientRect();
+    const px = (ev.clientX - box.left) * (W / box.width);
+    if (px < padL - 2 || px > padL + plotW + 2) { cross.setAttribute("visibility", "hidden"); tipBox.style.display = "none"; return; }
+    const f = Math.min(1, Math.max(0, (px - padL) / plotW));
+    cross.setAttribute("x1", padL + f * plotW); cross.setAttribute("x2", padL + f * plotW); cross.setAttribute("visibility", "visible");
+    const rows = visible.map(c => ({ c, v: c.r[Math.round(f * (c.r.length - 1))] })).sort((a, b) => b.v - a.v).slice(0, 8);
+    tipBox.innerHTML = `<div style="color:var(--text-dim);margin-bottom:2px;">${Math.round(f * 100)}% through the run</div>` + rows.map(r =>
+      `<div><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${r.c.color};margin-right:6px;"></span>${r.c.s.name.replace(/</g, "&lt;")} <b style="float:right;margin-left:14px;">${fmt(r.v)}</b></div>`).join("");
+    tipBox.style.display = "block";
+    const left = (padL + f * plotW) * (box.width / W);
+    tipBox.style.left = Math.min(Math.max(4, left + 12), Math.max(4, box.width - tipBox.offsetWidth - 4)) + "px";
+    tipBox.style.top = "10px";
+  });
+  svg.addEventListener("pointerleave", () => { cross.setAttribute("visibility", "hidden"); tipBox.style.display = "none"; });
+  svg.appendChild(overlay);
+  // lines sit under the overlay for hover, so re-raise the hit paths for clicking
+  Array.from(g.querySelectorAll("path[stroke=transparent]")).forEach(p => svg.appendChild(p));
+  svg.querySelectorAll("path[stroke=transparent]").forEach(p => p.setAttribute("clip-path", `url(#${clipId})`));
+
+  wrap.appendChild(svg);
+  wrap.appendChild(tipBox);
+  container.appendChild(wrap);
+
+  // legend: click to add / remove (multi-select)
+  const legend = document.createElement("div");
+  legend.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;margin-top:8px;";
+  curves.slice().sort((a, b) => b.final - a.final).forEach(c => {
+    const on = !hasSel || t58EquitySel.has(c.s.name);
+    const hot = hasSel && t58EquitySel.has(c.s.name);
+    const item = document.createElement("button");
+    item.type = "button";
+    item.setAttribute("aria-pressed", hot ? "true" : "false");
+    item.style.cssText = `display:flex;align-items:center;gap:6px;font-size:11px;color:${hot ? "var(--text)" : "var(--text-muted)"};background:${hot ? "rgba(255,255,255,.05)" : "none"};border:1px solid ${hot ? c.color : "var(--border,transparent)"};border-radius:999px;padding:2px 9px;cursor:pointer;font-family:inherit;opacity:${on ? 1 : 0.45};`;
+    item.innerHTML = `<span style="width:9px;height:9px;border-radius:50%;background:${c.color};box-shadow:0 0 6px ${c.color};display:inline-block;"></span>`;
+    item.appendChild(document.createTextNode(c.s.name + " "));
+    const fin = document.createElement("span");
+    fin.style.cssText = `font-variant-numeric:tabular-nums;color:${c.final >= 0 ? "var(--teal)" : "var(--coral)"};`;
+    fin.textContent = fmt(c.final);
+    item.appendChild(fin);
+    item.title = `Click to ${hot ? "remove from" : "add to"} the comparison`;
+    item.addEventListener("click", e => { e.stopPropagation(); toggle(c.s.name); });
+    legend.appendChild(item);
+  });
+  const hint = document.createElement("button");
+  hint.type = "button";
+  hint.style.cssText = "margin-left:auto;font-size:11px;color:var(--text-dim);background:none;border:none;cursor:pointer;font-family:inherit;text-decoration:underline dotted;";
+  hint.textContent = hasSel ? "Show all" : (series.length > 1 ? "Click strategies to compare" : "");
+  hint.addEventListener("click", e => { e.stopPropagation(); if (hasSel) { t58EquitySel.clear(); redraw(); } });
+  if (hint.textContent) legend.appendChild(hint);
+  container.appendChild(legend);
+
+  function toggle(name) { if (t58EquitySel.has(name)) t58EquitySel.delete(name); else t58EquitySel.add(name); redraw(); }
+  function redraw() { renderEquityChart(container, container.__eqSeries); }
+
+  // keep the chart crisp when the card is resized (one observer per container)
+  if (!container.__eqRO && typeof ResizeObserver !== "undefined") {
+    let lastW = container.clientWidth, timer = 0;
+    container.__eqRO = new ResizeObserver(() => {
+      if (Math.abs(container.clientWidth - lastW) < 8) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => { lastW = container.clientWidth; if (container.__eqSeries) renderEquityChart(container, container.__eqSeries); }, 120);
+    });
+    container.__eqRO.observe(container);
+  }
 }
 
 /* ---- Weekday x hour heatmap ---- */

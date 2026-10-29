@@ -47,17 +47,30 @@
       <span>Remember this license on this device</span>
     </label>
     <p class="hint" style="margin:0 0 14px;">Unchecked: this license works for today's session only -- you'll be asked to activate again next time you open the app.</p>
-    {% if needs_url %}
-    <details open style="margin:0 0 14px;">
-      <summary style="cursor:pointer;color:var(--teal);font-size:12.5px;">License connection (owner setup, one time)</summary>
-      <p class="hint" style="text-align:left;margin:8px 0;">This copy isn't linked to your license sheet. Paste the Web App URL from Apps Script (Deploy &rarr; Manage deployments; it ends in <code>/exec</code>). It is saved on this computer and used for every activation after.</p>
-      <input type="text" id="sheet_url" name="sheet_url" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="off">
+    <details {% if needs_url or error %}open{% endif %} style="margin:0 0 14px;">
+      <summary style="cursor:pointer;color:var(--teal);font-size:12.5px;">License connection{% if sheet_url %} &mdash; linked &#10003;{% else %} (owner setup, one time){% endif %}</summary>
+      <p class="hint" style="text-align:left;margin:8px 0;">{% if sheet_url %}This copy is linked to a license sheet. Paste a different Web App URL to replace it.{% else %}This copy isn't linked to your license sheet. Paste the Web App URL from Apps Script (Deploy &rarr; Manage deployments; it ends in <code>/exec</code>).{% endif %} It is saved on this computer and used for every activation after.</p>
+      <input type="text" id="sheet_url" name="sheet_url" value="{{ sheet_url or '' }}" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="off" {% if url_locked %}readonly title="Set by the T58_LICENSE_SHEET_URL environment variable"{% endif %}>
+      <button type="button" id="test-conn" class="submit-btn" style="background:transparent;color:var(--teal);margin:0 0 6px;">Test connection</button>
+      <p id="test-result" class="hint" style="text-align:left;margin:4px 0 0;"></p>
     </details>
-    {% endif %}
     <input type="hidden" name="next" value="{{ next }}">
     <button class="submit-btn" type="submit">Activate</button>
     {% if error %}<p class="error-note">{{ error }}</p>{% endif %}
     <p class="hint">No license yet? Purchases and support are handled through Whop.</p>
   </form>
+<script>
+(function(){
+  var btn=document.getElementById('test-conn'); if(!btn) return;
+  btn.addEventListener('click',function(){
+    var out=document.getElementById('test-result'), url=document.getElementById('sheet_url').value;
+    out.style.color=''; out.textContent='Testing...';
+    fetch('/activate/test-connection',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:url})})
+      .then(function(r){return r.json();}).then(function(d){
+        out.textContent=d.message; out.style.color=d.ok?'var(--teal)':'var(--danger)';
+      }).catch(function(){out.textContent='Could not run the test.'; out.style.color='var(--danger)';});
+  });
+})();
+</script>
 </body>
 </html>

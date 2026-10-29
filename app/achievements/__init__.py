@@ -275,6 +275,16 @@ def bump(counter: str, n: int = 1) -> None:
         pass
 
 
+def _owner_mode() -> bool:
+    """True when this device is signed in with the owner's master key: every reward is shown unlocked so backgrounds, themes,
+    titles and badges can all be tried. It is an overlay only -- nothing is written to achievements.json."""
+    try:
+        from app.licensing import client
+        return bool(client.master_key_active())
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def evaluate(persist: bool = True) -> dict[str, Any]:
     """Recompute counters, record new unlocks, and return the whole page model."""
     counters = compute_counters()
@@ -291,6 +301,9 @@ def evaluate(persist: bool = True) -> dict[str, Any]:
                 newly.append(aid)
         if persist and newly:
             _save(state)
+        if _owner_mode():
+            state = {**state, "unlocked": {aid: {"at": (state["unlocked"].get(aid) or {}).get("at", now), "seen": True}
+                                           for aid in CATALOGUE}}
     items = []
     xp = 0
     for aid, (_i, cat, tier, title, desc, counter, target, link) in CATALOGUE.items():
@@ -399,7 +412,10 @@ def _requirement(spec: dict[str, Any], unlocked: dict[str, Any], level: int) -> 
 
 def _read_unlocked() -> tuple[dict[str, Any], int]:
     """Cheap: reads the saved unlock record only (no file scans), for hot paths like the page-head bootstrap."""
-    u = _load().get("unlocked", {})
+    if _owner_mode():
+        u = {aid: {"at": 0, "seen": True} for aid in CATALOGUE}
+    else:
+        u = _load().get("unlocked", {})
     xp = sum(XP_BY_TIER[CATALOGUE[a][2]] for a in u if a in CATALOGUE)
     return u, level_for(xp)["level"]
 

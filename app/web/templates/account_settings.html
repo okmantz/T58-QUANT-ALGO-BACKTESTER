@@ -119,6 +119,13 @@
   .as-grid { display: grid; grid-template-columns: minmax(0, 560px) minmax(0, 520px); gap: 0 28px; align-items: start; }
   .as-grid > * { grid-column: 1; min-width: 0; }
   .as-grid .card { max-width: none; }
+  /* Wide desktop: Research profile moves to the far right, next to Personalize, instead of sitting in the left column.
+     Below this width it falls back into the normal order (underneath Security) -- including on phones. */
+  @media (min-width: 1500px) {
+    .as-grid { grid-template-columns: minmax(0, 540px) minmax(0, 500px) minmax(0, 460px); gap: 0 24px; }
+    .as-grid #research-profile { grid-column: 3; grid-row: 1 / span 6; position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto;
+      overscroll-behavior: contain; scrollbar-width: thin; }
+  }
   /* FIX: the sticky Personalize card is taller than a laptop viewport, so its lower half (Background scenes, motion, verse) stayed
      out of reach until the LEFT column had scrolled all the way to the bottom. Capping it at the viewport height and letting it
      scroll on its own makes every option reachable at any time, wherever the left column is. */

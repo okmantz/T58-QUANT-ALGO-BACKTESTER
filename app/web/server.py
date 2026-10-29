@@ -661,7 +661,13 @@ def _prefs_bootstrap_tag() -> str:
     blob = _json.dumps(prefs).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     csrf = _json.dumps(session.get("csrf_token", "")).replace("<", "\\u003c")
     lock = _json.dumps({"bg": locked_bg, "theme": locked_th})
-    return ("<script>window.__T58_PREFS=" + blob + ";window.__T58_CSRF=" + csrf + ";window.__T58_LOCKED=" + lock + ";</script>"
+    try:
+        from app.licensing import fresh_start as _fs
+        epoch = _json.dumps(_fs.epoch())
+    except Exception:  # noqa: BLE001
+        epoch = '""'
+    return ("<script>window.__T58_PREFS=" + blob + ";window.__T58_CSRF=" + csrf + ";window.__T58_LOCKED=" + lock
+            + ";window.__T58_FRESH_EPOCH=" + epoch + ";</script>"
             '<script src="/static/t58-prefs-sync.js"></script>')
 
 
@@ -820,6 +826,20 @@ def _license_ok_for_webhook() -> bool:
 app.config["t58_license_check"] = _license_ok_for_webhook
 
 
+_fresh_start_checked = False
+
+
+def _maybe_fresh_start() -> None:
+    """Owner clean slate: if this device is signed in with the master key and has never had its one-time fresh start (e.g. the
+    key was saved before this feature existed), do it now. The activation route does the same right after a master sign-in."""
+    try:
+        from app.licensing import client as license_client, fresh_start
+        if license_client.master_key_active() and fresh_start.needed():
+            fresh_start.run_if_needed()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 @app.before_request
 def _license_gate():
     """Runs before the account-lock gate below (registration order = the
@@ -827,11 +847,14 @@ def _license_gate():
     never even reaches the optional password lock -- license comes
     first, exactly like the desktop build's ensure_licensed() runs
     before main_window.launch()."""
-    global _license_ok_cached
+    global _license_ok_cached, _fresh_start_checked
     path = request.path
     if any(path == p or path.startswith(p) for p in _LICENSE_GATE_EXEMPT_PREFIXES):
         return None
     if _license_ok_cached:
+        if not _fresh_start_checked:
+            _fresh_start_checked = True
+            _maybe_fresh_start()
         return None
 
     from app.licensing import client as license_client
@@ -871,6 +894,26 @@ def _commission_from_form(form) -> float:
     return commission_from_mapping(form)
 
 
+def _activate_ctx(license_client) -> dict:
+    """Template context for the license-connection box: always shown, so a wrong or old URL can be replaced."""
+    url = license_client.resolve_sheet_url() or ""
+    return {
+        "needs_url": not license_client.check_license_server_configured()[0],
+        "sheet_url": url,
+        "url_locked": bool(__import__("os").environ.get("T58_LICENSE_SHEET_URL", "").strip()),
+    }
+
+
+@app.route("/activate/test-connection", methods=["POST"])
+def activate_test_connection():
+    """Probe the license sheet (with a made-up key, so nothing changes) and say in plain words what is wrong."""
+    from app.licensing import client as license_client
+    data = request.get_json(silent=True) or {}
+    url = (data.get("url") or request.form.get("url") or "").strip()
+    ok, message = license_client.test_sheet_connection(url or None)
+    return jsonify({"ok": ok, "message": message})
+
+
 @app.route("/activate", methods=["GET"])
 def activate_form():
     from app.licensing import client as license_client
@@ -879,7 +922,7 @@ def activate_form():
     state = license_client.load_state()
     return render_template(
         "activate.html", next=_post_activation_target(request.args.get("next")),
-        error=None, email=state.email, needs_url=not license_client.check_license_server_configured()[0],
+        error=None, email=state.email, **_activate_ctx(license_client),
     )
 
 
@@ -892,17 +935,18 @@ def activate_submit():
     license_key = request.form.get("license_key", "")
     remember = request.form.get("remember") == "1"
     sheet_url = (request.form.get("sheet_url") or "").strip()
-    if sheet_url and not license_client.check_license_server_configured()[0]:
+    if sheet_url and sheet_url != (license_client.resolve_sheet_url() or ""):
         saved, save_msg = license_client.save_sheet_url(sheet_url)
         if not saved:
-            return render_template("activate.html", next=next_path, error=save_msg, email=email, needs_url=True), 400
+            return render_template("activate.html", next=next_path, error=save_msg, email=email,
+                                   **{**_activate_ctx(license_client), "needs_url": True}), 400
     ok, message = license_client.activate(email, license_key, remember=remember)
     if ok:
         _license_ok_cached = True
         _new_login_id()          # a new login: the morning briefing may pop open once
         return redirect(next_path)
     return render_template("activate.html", next=next_path, error=message, email=email,
-                           needs_url=not license_client.check_license_server_configured()[0]), 401
+                           **_activate_ctx(license_client)), 401
 
 
 # Paths the account lock gate below never blocks, even when a password is
@@ -1899,6 +1943,25 @@ def _dashboard_cards_and_flow(stats: dict, board_rows: list) -> tuple[list, dict
         span = (hi - lo) or 1.0
         return [round(100 - (v - lo) / span * 100, 1) for v in pts]  # y in 0..100, 0 = top
 
+    def _dims(row, run):
+        """Eval / payout / OOS (percent) + T58 score + composite strength for a card. The library row wins (it carries the
+        validation results); a tracked run that isn't saved yet falls back to its own simulation numbers."""
+        row, run = row or {}, run or {}
+        def pick(k, *alt):
+            for src in (row, run):
+                for key in (k,) + alt:
+                    v = src.get(key)
+                    if isinstance(v, (int, float)):
+                        return float(v)
+            return None
+        return {
+            "eval_pct": pick("eval_pct", "eval_pass_probability"),
+            "payout_pct": pick("payout_pct", "first_payout_probability"),
+            "oos_pct": pick("oos_pct"),
+            "t58_score": pick("t58_score"),
+            "strength": pick("strength"),
+        }
+
     cards, used = [], set()
     for s in (stats.get("strategies") or [])[:12]:
         row = _ns.match_run_to_row(s, board_rows)
@@ -1917,6 +1980,7 @@ def _dashboard_cards_and_flow(stats: dict, board_rows: list) -> tuple[list, dict
             "row_type": (row or {}).get("strategy_type"), "row_file": (row or {}).get("filename"),
             "can_promote": bool(row and row["promotion"].get("can_promote")),
             "next_stage": (row or {}).get("promotion", {}).get("next_stage_title"),
+            **_dims(row, s),
         })
     for r in board_rows:  # saved but never run: still a card, so nothing hides
         if r["filename"] in used or len(cards) >= 16:
@@ -1929,7 +1993,16 @@ def _dashboard_cards_and_flow(stats: dict, board_rows: list) -> tuple[list, dict
             "row_type": r.get("strategy_type"), "row_file": r.get("filename"),
             "can_promote": bool(r["promotion"].get("can_promote")),
             "next_stage": r["promotion"].get("next_stage_title"),
+            **_dims(r, None),
         })
+    # Rank best first: T58 score, then composite strength (eval/payout/OOS), then net profit. Unscored strategies go last.
+    def _rank_key(c):
+        return (c["t58_score"] if c["t58_score"] is not None else -1.0,
+                c["strength"] if c["strength"] is not None else -1.0,
+                c["net"] if c["net"] is not None else float("-inf"))
+    cards.sort(key=_rank_key, reverse=True)
+    for i, c in enumerate(cards, 1):
+        c["rank"] = i
     counts = [0] * len(champion_board.PROMOTION_STAGES)
     for r in board_rows:
         counts[champion_board.PROMOTION_STAGES.index(r["promotion"]["stage"])] += 1

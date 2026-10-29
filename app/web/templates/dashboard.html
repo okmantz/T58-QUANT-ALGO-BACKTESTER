@@ -96,7 +96,7 @@
 
   /* ---- strategy cards ---- */
   .sc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
-  .sc { display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: 16px; min-width: 0;
+  .sc { position: relative; display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: 16px; min-width: 0;
         background: rgba(var(--teal-rgb), .04); border: 1px solid var(--border); --tone: var(--teal-rgb); }
   .sc.bad { --tone: var(--coral-rgb, 255, 107, 107); } .sc.warn { --tone: var(--amber-rgb); } .sc.info { --tone: var(--neon-cyan-rgb); }
   @media (hover: hover) and (prefers-reduced-motion: no-preference) { .sc { transition: transform .18s var(--ease), border-color .18s; } .sc:hover { transform: translateY(-2px); border-color: rgba(var(--tone), .5); } }
@@ -112,6 +112,14 @@
   .sc-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 0; }
   .sc-stats div { text-align: left; } .sc-stats dt { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-dim); }
   .sc-stats dd { margin: 2px 0 0; font-size: 13.5px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .sc-dims { display: grid; grid-template-columns: 1fr 1fr 1fr 1.6fr; gap: 6px; margin: 0; padding-top: 10px; border-top: 1px solid var(--border); }
+  .sc-dims div { min-width: 0; } .sc-dims dt { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-dim); }
+  .sc-dims dd { margin: 2px 0 0; font-size: 13.5px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .sc-dims dd.stg { font-size: 11.5px; line-height: 1.25; }
+  .sc-dims [data-metric] { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; text-decoration-color: var(--text-dim); }
+  .sc-rank { position: absolute; right: 14px; bottom: 8px; font-size: 38px; font-weight: 800; line-height: 1; letter-spacing: -.02em;
+             color: var(--text); opacity: .13; pointer-events: none; user-select: none; font-variant-numeric: tabular-nums; }
+  .sc-next { padding-right: 46px; }
   .sc-next { border-top: 1px solid var(--border); padding-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .sc-head { width: 100%; font-size: 13px; font-weight: 650; display: flex; gap: 8px; align-items: center; }
   .sc-dot { width: 8px; height: 8px; border-radius: 50%; background: rgb(var(--tone)); box-shadow: 0 0 10px rgba(var(--tone), .7); flex: none; }
@@ -263,7 +271,7 @@
 <div class="db-kpis">
   <div class="db-kpi" style="--k: var(--teal-rgb)">
     <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 20v-6M11 20V6M17 20v-9M3 20h18"/></svg></span>
-    <div class="txt"><div class="lbl">Strategies tracked</div><div class="val">{{ data.total_strategies }}</div><div class="sub">{{ board_rows|length }} on the Champion Board</div></div>
+    <div class="txt"><div class="lbl">Strategies tracked</div><div class="val">{{ data.total_strategies }}</div><div class="sub">{{ board_rows|length }} saved in your library</div></div>
   </div>
   <div class="db-kpi" style="--k: var(--neon-cyan-rgb)">
     <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M10 8.5l5.5 3.5-5.5 3.5z"/></svg></span>
@@ -284,7 +292,7 @@
 <!-- ---- Performance + focus ---- -->
 <div class="db-row">
   <div class="db-card">
-    <h2>Equity curves &mdash; top strategies by net profit <a href="/runs">All runs &rarr;</a></h2>
+    <h2>Equity curves &mdash; return from starting balance <a href="/runs">All runs &rarr;</a></h2>
     <div id="equity-chart"></div>
   </div>
 
@@ -377,7 +385,7 @@
 
 <!-- ---- Your strategies: friendly cards ---- -->
 <div class="db-card">
-  <h2>Your strategies <a href="/library">Strategy Library &rarr;</a></h2>
+  <h2>Your strategies <span style="font-size:11.5px;font-weight:500;color:var(--text-dim);margin-left:6px;">ranked best first by T58 score &amp; performance</span> <a href="/library">Strategy Library &rarr;</a></h2>
   {% if strategy_cards %}
   <div class="sc-grid">
     {% for c in strategy_cards %}
@@ -401,12 +409,19 @@
         <div><dt>Max DD</dt><dd>{{ "%.1f%%"|format(c.dd) if c.dd is not none else '–' }}</dd></div>
         <div><dt>Trades</dt><dd>{{ c.trades if c.trades is not none else '–' }}</dd></div>
       </dl>
+      <dl class="sc-dims">
+        <div><dt data-metric="eval_pass_probability">Eval</dt><dd>{{ "%.0f%%"|format(c.eval_pct) if c.eval_pct is not none else '–' }}</dd></div>
+        <div><dt data-metric="first_payout_probability">Payout</dt><dd>{{ "%.0f%%"|format(c.payout_pct) if c.payout_pct is not none else '–' }}</dd></div>
+        <div><dt data-metric="oos_pct">OOS</dt><dd>{{ "%.0f%%"|format(c.oos_pct) if c.oos_pct is not none else '–' }}</dd></div>
+        <div><dt data-metric="promotion_stage" data-metric-value="{{ c.stage }}">Stage</dt><dd class="stg">{{ c.stage }}</dd></div>
+      </dl>
       <div class="sc-next">
         <div class="sc-head"><span class="sc-dot"></span>{{ c.plan.headline }}</div>
         <p>{{ c.plan.why }}</p>
         <a class="t58-btn primary sm" href="{{ c.plan.primary.href }}">{{ c.plan.primary.label }} &rarr;</a>
         {% for s in c.plan.secondary[:1] %}<a class="t58-btn ghost sm" href="{{ s.href }}">{{ s.label }}</a>{% endfor %}
       </div>
+      <span class="sc-rank" title="Rank {{ c.rank }} of {{ strategy_cards|length }} by T58 score and performance" aria-label="Rank {{ c.rank }}">{{ c.rank }}</span>
     </article>
     {% endfor %}
   </div>
@@ -425,148 +440,6 @@
     <h2>Market data <a href="/assistant/">Full rankings &rarr;</a></h2>
     <div id="db-rank" class="db-feed"><div class="db-empty">Loading markets&hellip;</div></div>
   </div>
-</div>
-
-<!-- ---- Current strategy ---- -->
-<div class="db-card">
-  <h2>Current strategy</h2>
-  {% if current_strategy %}
-  <div class="db-cur-top">
-    <div class="n">{{ current_strategy.strategy_name }} &middot; {{ current_strategy.instrument }}</div>
-    <div class="c">{{ robustness.ran_count }}/{{ robustness.total_count }} checks run{% if robustness.decided_count %} &middot; {{ robustness.pct_passed_of_decided }}% passed (of {{ robustness.decided_count }} with a verdict){% endif %}</div>
-  </div>
-  {% if current_metrics %}
-  <div class="db-metrics">
-    <div><div class="lbl">Net P&amp;L</div><div class="val {{ 'pos' if current_metrics.net_profit >= 0 else 'neg' }}">${{ "{:,.0f}".format(current_metrics.net_profit) }}</div></div>
-    <div><div class="lbl">Sharpe ratio</div><div class="val">{{ "%.2f"|format(current_metrics.sharpe_ratio) }}</div></div>
-    <div><div class="lbl">Win rate</div><div class="val">{{ "%.1f"|format(current_metrics.win_rate) }}%</div></div>
-    <div><div class="lbl">Profit factor</div><div class="val">{{ "%.2f"|format(current_metrics.profit_factor) }}</div></div>
-    <div><div class="lbl">Max drawdown</div><div class="val">{{ "%.1f"|format(current_metrics.max_drawdown_pct) }}%</div></div>
-    <div><div class="lbl">Risk of ruin</div><div class="val">{{ "%.1f"|format(current_metrics.risk_of_ruin_pct) }}%</div></div>
-    <div><div class="lbl">Eval pass probability</div><div class="val">{{ "%.1f"|format(current_metrics.eval_pass_probability) }}%</div></div>
-    <div><div class="lbl">First payout probability</div><div class="val">{{ "%.1f"|format(current_metrics.get('first_payout_probability', 0)) }}%</div></div>
-  </div>
-  {% else %}
-  <div class="db-empty" style="margin-bottom:12px;">No backtest recorded yet for {{ current_strategy.strategy_name }} on {{ current_strategy.instrument }} &mdash; run it once and these numbers will fill in.</div>
-  {% endif %}
-  <div class="db-chips">
-    {% for kind in validation_kinds %}
-    {% set check = checklist[kind] %}
-    <span class="t58-status {{ 'validated' if check.passed == true else ('rejected' if check.passed == false else ('optimized' if check.ran else 'draft')) }}">{{ validation_labels[kind] }}</span>
-    {% endfor %}
-  </div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;align-items:center;">
-    {% if current_metrics or (robustness and robustness.ran_count) %}
-    <a class="t58-btn secondary sm" href="/validate-simple">Open Validate (pick checks) &rarr;</a>
-    {% else %}
-    <a class="t58-btn primary sm" href="/full-pipeline">&#9654; Run Full Pipeline</a>
-    {% endif %}
-    <a class="t58-btn ghost sm" href="/reports/by-strategy">All reports for this strategy &rarr;</a>
-    <form method="post" action="/current-strategy/clear" style="display:inline;margin:0;">
-      <button type="submit" class="t58-btn ghost sm">Stop tracking</button>
-    </form>
-  </div>
-  {% else %}
-  <div class="db-empty">No strategy marked current yet. Click <b>Set as current</b> on any row in Recent runs below to track its validation checklist here.</div>
-  {% endif %}
-</div>
-
-<!-- ---- Recent runs (table view; the cards above are the friendly version) ---- -->
-<details class="db-card db-runs-d">
-  <summary><b>Recent runs table</b> <a href="/runs">Open Runs &rarr;</a></summary>
-  {% if data.strategies %}
-  <div class="tbl-wrap">
-  <table>
-    <thead>
-      <tr>
-        <th>Strategy</th><th>Instrument</th><th>Trades</th><th>Net P/L</th><th>Win %</th><th>Sharpe</th><th>Max DD</th><th>Runs</th>
-        <th title="Whether this ONE historical run cleared your prop-firm rules -- not the same as a Full Pipeline verdict, which also weighs Monte Carlo risk of ruin, out-of-sample validation, and trade count.">Single-run pass&nbsp;&#9432;</th><th></th><th></th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for s in data.strategies[:8] %}
-      <tr>
-        <td>{{ s.strategy_name }}</td>
-        <td>{{ s.instrument }}</td>
-        <td>{{ s.trades }}</td>
-        <td class="{{ 'pos' if s.net_profit >= 0 else 'neg' }}">${{ "{:,.0f}".format(s.net_profit) }}</td>
-        <td>{{ "%.1f"|format(s.win_rate) }}%</td>
-        <td>{{ "%.2f"|format(s.sharpe_ratio) }}</td>
-        <td>{{ "%.1f"|format(s.max_drawdown_pct) }}%</td>
-        <td>{{ s.run_count }}</td>
-        <td><span class="t58-pill {{ 'pass' if s.single_run_passed else 'fail' }}">{{ 'pass' if s.single_run_passed else 'fail' }}</span></td>
-        <td>
-          {% if current_strategy and current_strategy.strategy_name == s.strategy_name and current_strategy.instrument == s.instrument %}
-          <span class="t58-status validated">&#9733; Current</span>
-          {% else %}
-          <form method="post" action="/current-strategy/set" style="margin:0;">
-            <input type="hidden" name="strategy_name" value="{{ s.strategy_name }}">
-            <input type="hidden" name="instrument" value="{{ s.instrument }}">
-            <input type="hidden" name="timeframe" value="{{ s.timeframe }}">
-            <button type="submit" class="t58-btn ghost sm">Set as current</button>
-          </form>
-          {% endif %}
-        </td>
-        <td>{% if s.report_html %}<a href="{{ s.report_html }}" target="_blank" rel="noopener">report &rarr;</a>{% endif %}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  </div>
-  {% if data.strategies|length > 8 %}<p style="margin:12px 0 0;"><a class="db-more" href="/runs">{{ data.strategies|length - 8 }} more strategies in Runs &rarr;</a></p>{% endif %}
-  {% else %}
-  <div class="db-empty">No backtests run yet &mdash; head to Run &amp; report and run your first strategy to populate this table.</div>
-  {% endif %}
-</details>
-
-<!-- ---- Champion Board ---- -->
-<div class="db-card">
-  <h2>Champion Board <a href="/champion-simple">Open &rarr;</a></h2>
-  <p class="db-sub">Every saved strategy's standing: Eval / Payout / OOS and how far it's been promoted. Promotion is manual &mdash; a high raw metric alone never advances a strategy.</p>
-  {% if board_rows %}
-  <div class="tbl-wrap">
-  <table>
-    <thead><tr><th>Strategy</th><th>Status</th><th>Eval</th><th>Payout</th><th>OOS</th><th>Stage</th><th></th></tr></thead>
-    <tbody>
-      {% for r in board_rows[:10] %}
-      <tr>
-        <td>{{ r.display_name }}</td>
-        <td><span class="t58-pill {{ 'pass' if r.status == 'READY' else ('fail' if r.status == 'NOT READY' else '') }}" data-ve='{{ r.verdict_explain|tojson }}' tabindex="0" role="button" title="Click to see why (legacy verdict: {{ r.status }})">{{ r.status|ladder }}</span></td>
-        <td>{{ "%.0f%%"|format(r.eval_pct) if r.eval_pct is not none else "--" }}</td>
-        <td>{{ "%.0f%%"|format(r.payout_pct) if r.payout_pct is not none else "--" }}</td>
-        <td>{{ "%.0f%%"|format(r.oos_pct) if r.oos_pct is not none else "--" }}</td>
-        <td>{{ r.promotion.stage_title }}</td>
-        <td style="white-space:normal;">
-          {% if r.promotion.can_promote %}
-          <form method="post" action="/champion/promote" style="margin:0;">
-            <input type="hidden" name="strategy_type" value="{{ r.strategy_type }}">
-            <input type="hidden" name="filename" value="{{ r.filename }}">
-            <button type="submit" class="t58-btn ghost sm">Promote &rarr; {{ r.promotion.next_stage_title }}</button>
-          </form>
-          {% elif r.promotion.next_stage_title %}
-          {% set bt_req = r.promotion.requirements | selectattr('key', 'equalto', 'backtested') | list %}
-          {% set untested = bt_req and not bt_req[0].met %}
-          {% if untested %}
-          <span style="font-size:11px;color:var(--text-dim);">No test run yet</span>
-          <a class="t58-btn primary sm" href="/full-pipeline?load_strategy_type={{ r.strategy_type }}&load_strategy_name={{ r.filename | urlencode }}" style="font-size:11px;">&#9654; Run Full Pipeline</a>
-          {% else %}
-          {% set unmet = r.promotion.requirements | rejectattr('met') | list %}
-          <span style="font-size:11px;color:var(--text-dim);" title="{{ unmet | map(attribute='label') | join('; ') }}">Not yet eligible for {{ r.promotion.next_stage_title }}{% if unmet %} &mdash; {{ unmet | length }} check{{ '' if unmet | length == 1 else 's' }} to run{% endif %}</span>
-          <a href="/validate-simple" style="font-size:11px;">Open Validate (pick checks) &rarr;</a>
-          {% endif %}
-          {% else %}
-          <span style="font-size:11px;color:var(--amber);">&#9733; Final stage</span>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  </div>
-  {% if board_rows|length > 10 %}<p style="margin:12px 0 0;"><a class="db-more" href="/champion-simple">{{ board_rows|length - 10 }} more on the Champion Board &rarr;</a></p>{% endif %}
-  {% else %}
-  <div class="db-empty">No saved strategies yet. Backtest and save a strategy to the Strategy Library to see it here.</div>
-  {% endif %}
 </div>
 
 <!-- ---- Insights: heavier visuals, drawn only when a row is opened ---- -->

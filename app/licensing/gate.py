@@ -81,7 +81,7 @@ def show_activation_window(initial_message: str = "", initial_email: str = "", i
         The network call runs on a worker thread, so the window never
         freezes or goes "Not Responding" while the license server answers."""
 
-        W, H = 480, 640
+        W, H = 480, 720
 
         def __init__(self):
             super().__init__()
@@ -113,7 +113,7 @@ def show_activation_window(initial_message: str = "", initial_email: str = "", i
                             bordercolor=PANEL_3, lightcolor=GREEN, darkcolor=GREEN)
 
             # --- the card: a rounded panel centred in the window (web: .activate-card)
-            cw, ch = 400, 580
+            cw, ch = 400, 660
             self._canvas = tk.Canvas(self, width=self.W, height=self.H, bg=BG, highlightthickness=0, bd=0)
             self._canvas.pack(fill="both", expand=True)
             x0, y0 = (self.W - cw) // 2, (self.H - ch) // 2
@@ -143,6 +143,18 @@ def show_activation_window(initial_message: str = "", initial_email: str = "", i
             self.key_var = tk.StringVar(self)
             self.email_entry = self._field(pad, "Email", self.email_var)
             self.key_entry = self._field(pad, "License key", self.key_var, placeholder=KEY_PLACEHOLDER)
+
+            # License connection: the Web App URL of the owner's license sheet (ends in /exec). Pre-filled when this copy is
+            # already linked, so a wrong or outdated one can be replaced right here.
+            try:
+                current_url = client.resolve_sheet_url() or ""
+            except Exception:  # noqa: BLE001
+                current_url = ""
+            self.url_var = tk.StringVar(self, value=current_url)
+            self._start_url = current_url
+            self.url_entry = self._field(
+                pad, "License connection \u2014 Web App URL (owner setup, ends in /exec)" + (" \u2713 linked" if current_url else ""),
+                self.url_var)
 
             self.remember_var = tk.BooleanVar(self, value=True)
             tk.Checkbutton(
@@ -254,6 +266,14 @@ def show_activation_window(initial_message: str = "", initial_email: str = "", i
                 self.status_var.set("Enter both your email and license key.")
                 return
             self.status_var.set("")
+            url = self.url_var.get().strip()
+            if url and url != self._start_url:
+                saved, save_msg = client.save_sheet_url(url)
+                if not saved:
+                    self.status_label.config(fg=RED)
+                    self.status_var.set(save_msg)
+                    return
+                self._start_url = url
             self._set_busy(True, "Activating\u2026")
 
             def work():
@@ -310,6 +330,13 @@ def ensure_licensed(interactive: bool = True) -> bool:
     """
     ok, message = client.validate_fast_start()
     if ok:
+        # Owner clean slate: the first launch with the master key starts like a fresh install, once.
+        try:
+            if client.master_key_active():
+                from app.licensing import fresh_start
+                fresh_start.run_if_needed()
+        except Exception:  # noqa: BLE001
+            pass
         return True
 
     # v9.14 -- the activation window is BACK on first launch (Owen's

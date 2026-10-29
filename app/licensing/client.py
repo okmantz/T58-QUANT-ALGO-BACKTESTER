@@ -75,6 +75,11 @@ def resolve_license_server_url() -> str | None:
     return baked or None
 
 
+_NOT_LINKED_MESSAGE = (
+    "This copy isn't linked to your license sheet yet, so it can't check a customer key. Paste your Web App URL (it ends in "
+    "/exec) into the License connection box, then press Activate again. The master key works without it."
+)
+
 _NO_LICENSE_SERVER_URL_MESSAGE = (
     "This copy of T58 isn't connected to the license sheet yet, so it can't check a license key. "
     "Owner: paste your license sheet's Web App URL (the one ending in /exec) into the \"License connection\" "
@@ -120,21 +125,40 @@ def _baked_sheet_url() -> str:
     return str(getattr(build_config, "LICENSE_SHEET_URL", "") or "").strip()
 
 
+# PERMANENT LINK TO YOUR LICENSE SHEET (owner: paste once, never think about it again).
+# Put the Web App URL of your Apps Script deployment (the one ending in /exec) between the quotes and EVERY copy of
+# the app -- from source, a downloaded zip, a CI-built .exe -- is connected to your sheet with no extra setup. This is
+# the last-resort fallback (env var, the saved connection and the baked build_config all win over it). The URL is
+# safe to keep in a public repo: with it, someone can only ask "is key X valid?", never read the sheet.
+_DEFAULT_LICENSE_SHEET_URL = ""
+
 SHEET_URL_FILENAME = "license_sheet_url.txt"
 
 
 def _sheet_url_files() -> list:
-    """Where a runtime-configured sheet URL may live: next to the app (so it can ship in the release zip or be
-    dropped in by the owner) or in the app's data folder (where the Activate window saves it)."""
-    from pathlib import Path
+    """Where a runtime-configured sheet URL may live. The Activate window saves it to ALL of these so the connection
+    survives replacing the app folder (a fresh zip, a new .exe, a git pull that wipes data/):
+      1. next to the app and in the app's data folder (also where a hand-made license_sheet_url.txt is found);
+      2. the per-user data folder (%LOCALAPPDATA% / ~/Library/Application Support / ~/.local/share), which an
+         uninstall or reinstall never touches."""
     out = []
     try:
-        from app.data.storage import get_app_base_dir
         base = Path(get_app_base_dir())
         out += [base / SHEET_URL_FILENAME, base / "data" / SHEET_URL_FILENAME]
     except Exception:  # noqa: BLE001 -- config lookup must never break licensing
         pass
+    try:
+        from app.data.storage import user_data_dir
+        out.append(Path(user_data_dir()) / SHEET_URL_FILENAME)
+    except Exception:  # noqa: BLE001
+        pass
     return out
+
+
+def _clean_sheet_url(url: str) -> str:
+    """Trim the stray characters a paste picks up: whitespace/newlines, wrapping quotes or angle brackets."""
+    u = str(url or "").strip().strip("\"'<>").strip()
+    return u.split()[0] if u.split() else ""
 
 
 def _valid_sheet_url(url: str) -> bool:
@@ -147,44 +171,55 @@ def _runtime_sheet_url() -> str:
         try:
             if f.is_file():
                 for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
-                    line = line.strip()
+                    line = _clean_sheet_url(line)
                     if line and not line.startswith("#"):
-                        return line if _valid_sheet_url(line) else ""
+                        if _valid_sheet_url(line):
+                            return line
+                        break
         except OSError:
             continue
     return ""
 
 
 def save_sheet_url(url: str) -> tuple[bool, str]:
-    """Persist the license sheet Web App URL for this install. Refuses to replace a URL that is already configured
-    by the environment or baked into the build (those win in resolve_sheet_url anyway)."""
-    url = (url or "").strip()
+    """Persist the license sheet Web App URL for this install, replacing any URL saved earlier (a wrong or stale URL
+    used to be impossible to fix from the app). Refuses only when the environment variable pins the URL, because that
+    one wins in resolve_sheet_url no matter what is saved. Written to every location in _sheet_url_files()."""
+    url = _clean_sheet_url(url)
     if not _valid_sheet_url(url):
         return False, "That doesn't look like a Web App URL. It should start with https:// and end with /exec."
-    if os.environ.get("T58_LICENSE_SHEET_URL", "").strip() or _baked_sheet_url():
-        return False, "This build already has a license connection configured."
+    if url.rstrip("/").endswith("/dev"):
+        return False, ("That is the TEST deployment URL (it ends in /dev) and only works while you are signed in to Google. "
+                       "In Apps Script choose Deploy \u2192 Manage deployments and copy the Web app URL that ends in /exec.")
+    if os.environ.get("T58_LICENSE_SHEET_URL", "").strip():
+        return False, "The T58_LICENSE_SHEET_URL environment variable is set on this computer and overrides the saved connection."
     files = _sheet_url_files()
     if not files:
         return False, "Couldn't find a place to save the license connection."
-    target = files[-1]
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(url + "\n", encoding="utf-8")
-    except OSError as exc:
-        return False, f"Couldn't save the license connection: {exc}"
+    saved, last_err = 0, None
+    for target in files:
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(url + "\n", encoding="utf-8")
+            saved += 1
+        except OSError as exc:
+            last_err = exc
+    if not saved:
+        return False, f"Couldn't save the license connection: {last_err}"
     return True, "License connection saved."
 
 
 def resolve_sheet_url() -> str | None:
     """The effective Google Sheet web-app URL, or None when sheet mode is off.
-    Order: T58_LICENSE_SHEET_URL env var > license_sheet_url.txt (runtime) > baked build_config."""
+    Order: T58_LICENSE_SHEET_URL env var > saved license_sheet_url.txt > baked build_config > _DEFAULT_LICENSE_SHEET_URL."""
     env_value = os.environ.get("T58_LICENSE_SHEET_URL", "").strip()
     if env_value:
         return env_value
-    return _runtime_sheet_url() or _baked_sheet_url() or None
+    default = _DEFAULT_LICENSE_SHEET_URL.strip()
+    return _runtime_sheet_url() or _baked_sheet_url() or (default if _valid_sheet_url(default) else None) or None
 
 
-def _sheet_get(path: str, payload: dict, timeout: float) -> tuple[bool, dict, str | None]:
+def _sheet_get(path: str, payload: dict, timeout: float, base: str | None = None) -> tuple[bool, dict, str | None]:
     """Same contract as _post(): (network_ok, response_json, error_detail).
     Apps Script web apps answer GETs reliably (and redirect to a googleusercontent
     URL, which urllib follows), so each request is a GET with query parameters.
@@ -192,7 +227,7 @@ def _sheet_get(path: str, payload: dict, timeout: float) -> tuple[bool, dict, st
     sign-in/error page because the web app was deployed with the wrong access
     setting, a transient "busy" -- counts as UNREACHABLE (offline grace applies),
     never as "revoked", so a deployment mistake can't lock paying customers out."""
-    base = resolve_sheet_url()
+    base = base or resolve_sheet_url()
     params = {"action": path.strip("/")}
     params.update({k: v for k, v in payload.items() if v is not None})
     url = base + ("&" if "?" in base else "?") + urlencode(params)
@@ -209,12 +244,35 @@ def _sheet_get(path: str, payload: dict, timeout: float) -> tuple[bool, dict, st
     except ValueError:
         body = None
     if not isinstance(body, dict) or "ok" not in body:
-        return False, {}, ("unexpected reply from the license sheet -- check the Apps Script web app is "
-                           "deployed with \"Who has access: Anyone\"")
+        return False, {}, ("unexpected reply from the license sheet -- in Apps Script choose Deploy \u2192 Manage deployments "
+                           "\u2192 edit, set \"Execute as: Me\" and \"Who has access: Anyone\", pick \"New version\" and Deploy, "
+                           "then paste the /exec URL again")
     if body.get("error") in ("busy", "not_configured"):
         # Transient / setup problems on YOUR side are never a verdict on the customer.
         return False, {}, "the license sheet is busy or not set up -- try again in a moment"
     return True, body, None
+
+
+def test_sheet_connection(url: str | None = None, timeout: float = 10.0) -> tuple[bool, str]:
+    """Ask the license sheet a question it can only answer if the Apps Script is deployed correctly, and say in plain words
+    what is wrong when it can't. Uses a made-up key, so the sheet is never changed: a healthy deployment answers
+    {"ok": false, "error": "not_found"} (the same check license_sheet/SETUP.md step 3 does in a browser)."""
+    target = _clean_sheet_url(url) if url else (resolve_sheet_url() or "")
+    if not target:
+        return False, "No license connection is saved yet. Paste your Web App URL (it ends in /exec)."
+    if target != (resolve_sheet_url() or "") and not _valid_sheet_url(target):
+        return False, "That doesn't look like a Web App URL. It should start with https:// and end with /exec."
+    if target.rstrip("/").endswith("/dev"):
+        return False, "That is the TEST deployment URL (ends in /dev). Use the Web app URL that ends in /exec."
+    ok, body, err = _sheet_get("validate", {"license_key": "T58-CONNECTION-TEST", "email": "", "device_id": "connection-test"},
+                               timeout, base=target)
+    if not ok:
+        return False, f"Couldn't get an answer from the license sheet: {err}"
+    if body.get("error") == "not_found":
+        return True, "Connected. Your license sheet answered correctly."
+    if body.get("ok"):
+        return True, "Connected (the sheet answered)."
+    return True, f"The sheet answered, but unexpectedly: {body.get('error') or body}"
 
 
 # --- Allowlist mode (no license server, no hosting) ------------------------------
@@ -418,6 +476,28 @@ def master_key_configured() -> bool:
     return _master_key_hash() is not None
 
 
+_MASTER_CACHE: dict = {"at": 0.0, "value": False}
+
+
+def master_key_active() -> bool:
+    """True when the currently saved sign-in is the owner's master key (cached ~60 s; cheap enough to call per request)."""
+    import time as _time
+    now = _time.monotonic()
+    if now - _MASTER_CACHE["at"] < 60 and _MASTER_CACHE["at"]:
+        return bool(_MASTER_CACHE["value"])
+    try:
+        st = load_state()
+        val = bool(st and st.license_key and _is_master_key(st.license_key))
+    except Exception:  # noqa: BLE001
+        val = False
+    _MASTER_CACHE.update(at=now, value=val)
+    return val
+
+
+def _reset_master_cache() -> None:
+    _MASTER_CACHE.update(at=0.0, value=False)
+
+
 _MASTER_KEY_UNSET_HINT = (
     "If this was a master-key attempt: no master key is configured in this build. "
     "Set the T58_MASTER_LICENSE_KEY_HASH environment variable (to the SHA-256 hash "
@@ -611,6 +691,7 @@ def clear_state() -> None:
     global _session_state, _session_only_active
     _session_state = None
     _session_only_active = False
+    _reset_master_cache()
     _state_path().unlink(missing_ok=True)
     _key_fallback_path().unlink(missing_ok=True)
     kr = _try_keyring()
@@ -732,7 +813,10 @@ def _activate_impl(email: str, license_key: str, remember: bool = True) -> tuple
 
     ok, body, err = _post("/activate", {"email": email, "license_key": license_key, "device_id": did})
     if not ok:
-        return False, f"Couldn't reach the license server: {err}{'' if master_key_configured() else ' ' + _MASTER_KEY_UNSET_HINT}"
+        if err in (_NO_LICENSE_SERVER_URL_MESSAGE,):
+            return False, _NOT_LINKED_MESSAGE
+        what = "license sheet" if resolve_sheet_url() else "license server"
+        return False, f"Couldn't reach the {what}: {err}{'' if master_key_configured() else ' ' + _MASTER_KEY_UNSET_HINT}"
     if not body.get("ok"):
         msg = _error_message(body.get("error", "unknown_error"))
         if not master_key_configured():
@@ -759,7 +843,14 @@ def activate(email: str, license_key: str, remember: bool = True) -> tuple[bool,
     empty. It now runs after EVERY successful sign-in, whichever kind of key was used. Best effort: it never blocks or fails
     the activation itself."""
     ok, message = _activate_impl(email, license_key, remember=remember)
+    _reset_master_cache()
     if ok:
+        try:
+            if _is_master_key(license_key):
+                from app.licensing import fresh_start
+                fresh_start.run_if_needed()
+        except Exception:  # noqa: BLE001
+            pass
         try:
             from app.persistence import vault
             vault.on_activated()

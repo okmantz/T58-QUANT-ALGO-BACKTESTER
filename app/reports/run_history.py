@@ -392,7 +392,8 @@ def _dashboard_data_uncached() -> dict:
     # every strategy that has been run gets a curve (this used to be capped at the top 5)
     top_equity = sorted(latest_rows, key=lambda r: r["net_profit"], reverse=True)
     equity_series = [
-        {"name": r["strategy_name"], "passed": r["single_run_passed"], "values": r["equity_curve"]}
+        {"name": r["strategy_name"], "passed": r["single_run_passed"], "values": r["equity_curve"],
+         "start": r["equity_curve"][0], "net": r["net_profit"]}
         for r in top_equity if r["equity_curve"]
     ]
 

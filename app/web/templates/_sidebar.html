@@ -1,4 +1,28 @@
 {% include '_lucide_sprite.html' %}
+<style>
+  /* Main sidebar icons (the section headers and the top-level pages) glow in the UI colour; the pages INSIDE an opened
+     dropdown stay grey and monotone so the header icon stays the one that pops. */
+  .t58-nav-item.top-level > .t58-nav-icon,
+  .t58-nav-group > summary > .t58-nav-icon {
+    color: var(--teal);
+    filter: drop-shadow(0 0 4px rgba(var(--teal-rgb), .75)) drop-shadow(0 0 9px rgba(var(--teal-rgb), .35));
+  }
+  .t58-nav-item.top-level:hover > .t58-nav-icon, .t58-nav-item.top-level.active > .t58-nav-icon,
+  .t58-nav-group > summary:hover > .t58-nav-icon, .t58-nav-group[open] > summary > .t58-nav-icon {
+    color: var(--teal);
+    filter: drop-shadow(0 0 5px rgba(var(--teal-rgb), .95)) drop-shadow(0 0 12px rgba(var(--teal-rgb), .5));
+  }
+  .t58-nav-group-items .t58-nav-icon,
+  .t58-nav-group-items .t58-nav-item:hover .t58-nav-icon,
+  .t58-nav-group-items .t58-nav-item.active .t58-nav-icon {
+    color: var(--text-dim); filter: none; opacity: .85;
+  }
+  :root[data-theme="light"] .t58-nav-item.top-level > .t58-nav-icon,
+  :root[data-theme="light"] .t58-nav-group > summary > .t58-nav-icon { filter: drop-shadow(0 0 3px rgba(var(--teal-rgb), .35)); }
+  @media (prefers-reduced-motion: no-preference) {
+    .t58-nav-item > .t58-nav-icon, .t58-nav-group > summary > .t58-nav-icon { transition: filter .2s, color .2s; }
+  }
+</style>
 <script>
   // Applied inline (not deferred) so the saved theme takes effect before
   // first paint, avoiding a dark-then-light (or vice versa) flash.
@@ -144,7 +168,7 @@
 
   <!-- (7) Strategy Graveyard -- v9.8: single link to the consolidated section page;
        its individual tools live on that page (tools grid), not in the sidebar. -->
-  <a href="/graveyard" class="t58-nav-item top-level {{ 'active' if active_page in ['graveyard', 'start_here_graveyard'] else '' }}">
+  <a href="/graveyard" data-accent="red" class="t58-nav-item top-level {{ 'active' if active_page in ['graveyard', 'start_here_graveyard'] else '' }}">
     <span class="t58-nav-icon"><svg class="lu"><use href="#lu-skull"/></svg></span><span class="label">Strategy Graveyard</span>
   </a>
 
