@@ -74,6 +74,7 @@ class Indicators:
         else:
             self.tday = self.day
         self._m: dict = {}
+        self.df = df
 
     def memo(self, key, fn):
         if key not in self._m:
@@ -228,6 +229,12 @@ class Family:
     grid: dict
     build: Callable
     source: str = ""       # which paper in the Library / which known effect this family is drawn from
+    categorical: tuple = ()  # grid keys whose values are NAMES, not an ordered scale: never 'one step' apart (neighbours skip them)
+
+
+def _f_ind_rule(I, p):
+    from app.discovery_lab import indicator_pool as _P
+    return _P.rule_signals(I, p)
 
 
 def _f_ema_cross(I, p):
@@ -507,6 +514,8 @@ def apply_filters(I, lg, sh, flt: dict | None):
     return lg, sh
 
 
+from app.discovery_lab.indicator_pool import POOL_KINDS as _POOL_KINDS  # noqa: E402
+
 FAMILIES: dict[str, Family] = {f.name: f for f in (
     Family("ema_cross", "EMA cross", "trend", "Fast EMA crosses slow EMA, optionally only when ADX says the market is trending.",
            {"fast": [8, 12, 20, 30], "slow": [40, 55, 80, 120], "adx_min": [0, 18, 25]}, _f_ema_cross, 'Momentum Strategies in Futures Markets and Trend-Following Funds'),
@@ -564,6 +573,9 @@ FAMILIES: dict[str, Family] = {f.name: f for f in (
            {"hour": [9, 10, 11, 12, 13, 14], "thr": [0.25, 0.5, 1.0, 1.5], "dir": [1, -1]}, _f_sess_mom, "Intraday momentum (first part of the day predicts the last)"),
     Family("pullback", "Trend pullback", "trend", "In an EMA trend, RSI dips then turns back with the trend.",
            {"trend": [50, 100, 200], "n": [3, 5, 14], "dip": [30, 40, 50]}, _f_pullback),
+    Family("ind_rule", "Any-indicator rule", "pool", "One of ~300 causal indicators (every family the app can compute), standardised against its own trailing window: ride the shift, fade the extreme, or follow its turn.",
+           {"kind": list(_POOL_KINDS), "period": [7, 14, 21, 34], "win": [100, 250, 500], "k": [1.0, 1.5, 2.0], "mode": ["trend", "revert", "slope"]}, _f_ind_rule,
+           "Indicator pool: every causal indicator in the app (base + v7-v13) against the same exits and filters as every other family.", categorical=("kind", "mode")),
     Family("momentum", "Time-series momentum", "momentum", "N-bar return beats a volatility-scaled threshold; ride it.",
            {"n": [10, 20, 40, 80], "thr_atr": [0.5, 1.0, 1.5]}, _f_momo, 'Do Momentum and Reversal Strategies Work in Commodity Futures'),
 )}
@@ -592,7 +604,7 @@ def neighbours(fam: Family, params: dict) -> list[dict]:
     """Grid neighbours: change ONE parameter by one step. Used by the robustness check."""
     out = []
     for k, vals in fam.grid.items():
-        if len(vals) < 2 or params[k] not in vals:
+        if len(vals) < 2 or params[k] not in vals or k in fam.categorical:
             continue
         i = vals.index(params[k])
         for j in (i - 1, i + 1):

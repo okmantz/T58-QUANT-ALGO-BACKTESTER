@@ -33,8 +33,8 @@ import pandas as pd
 
 from . import families as F
 
-# Minimum number of ideas simulated by each effort level (random search + evolution + refinement; robustness checks come on top).
-EFFORT_BUDGET = {"quick": 3000, "standard": 5800, "deep": 11500}
+# Minimum number of ideas simulated by each effort level (Quick 5,000+, Standard 10,000+, Deep 15,000+) (random search + evolution + refinement; robustness checks come on top).
+EFFORT_BUDGET = {"quick": 5200, "standard": 10400, "deep": 15600}
 WARMUP = 250
 MAX_HOLD = 400
 CURVE_POINTS = 90
@@ -43,6 +43,7 @@ HOLDS = [6, 12, 24, 48, 120, 400]                      # bars before a trade is 
 STOPS = [1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 6.0]
 BAR_LADDER = (5, 15, 30, 60, 240)
 SAMPLE_SHARE, EVOLVE_SHARE, REFINE_SHARE = 0.55, 0.38, 0.07
+POOL_SHARE = 0.22                                      # share of random samples spent on the any-indicator family
 
 
 @dataclass
@@ -382,7 +383,9 @@ def _rand_flt(rng: random.Random, ctx: _Ctx) -> dict:
 
 
 def _sample(rng: random.Random, fams: list, ctx: _Ctx) -> dict:
-    fn = rng.choice(fams)
+    # The indicator pool is ONE family with ~300 indicators x settings behind it; a uniform pick would give it 1/30 of the search, so it is
+    # sampled on its own share (POOL_SHARE) and the hand-built families split the rest.
+    fn = "ind_rule" if ("ind_rule" in fams and rng.random() < POOL_SHARE) else rng.choice(fams)
     fam = F.FAMILIES[fn]
     for _ in range(20):
         p = {k: rng.choice(v) for k, v in fam.grid.items()}
@@ -397,7 +400,7 @@ def _neighbours(c: dict, ctx: _Ctx) -> list:
     out = []
     fam = F.FAMILIES[c["family"]]
     for k, vals in fam.grid.items():
-        if c["params"][k] in vals and len(vals) > 1:
+        if c["params"][k] in vals and len(vals) > 1 and k not in fam.categorical:
             i = vals.index(c["params"][k])
             for j in (i - 1, i + 1):
                 if 0 <= j < len(vals):
@@ -424,7 +427,7 @@ def _mutate(rng: random.Random, c: dict, ctx: _Ctx, fams: list) -> dict:
             k = rng.choice(list(fam.grid))
             vals = fam.grid[k]
             i = vals.index(ch["params"][k]) if ch["params"][k] in vals else 0
-            j = min(len(vals) - 1, max(0, i + rng.choice([-2, -1, 1, 2]))) if rng.random() < 0.8 else rng.randrange(len(vals))
+            j = min(len(vals) - 1, max(0, i + rng.choice([-2, -1, 1, 2]))) if (rng.random() < 0.8 and k not in fam.categorical) else rng.randrange(len(vals))
             ch["params"][k] = vals[j]
         elif g < 0.60:
             ch["flt"] = _rand_flt(rng, ctx) if rng.random() < 0.5 else {k: v for k, v in ch["flt"].items() if rng.random() < 0.7}

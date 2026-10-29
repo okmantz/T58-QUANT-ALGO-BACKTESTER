@@ -60,6 +60,15 @@ def make_verifier(raw_df: pd.DataFrame, frames: dict, risk, instrument: str, sea
         if d is None:
             out["reason"] = "no full-history frame for this bar size"
             return out
+        # (1b) 2026-10: the same lookahead test over the WHOLE history, not just the recent slice. A leak that only shows in older data (a
+        #      different session layout, a gap, a contract roll) used to pass here and then fail later in Full Pipeline.
+        if len(d) > len(tail) // max(1, int(minutes)) + 500:
+            full_probe = run_backtest(d, strat, risk, lookahead_check="always")
+            bad_full = [w for w in full_probe.warnings if "LOOKAHEAD BIAS DETECTED" in str(w)]
+            if bad_full:
+                out["lookahead_bug"] = True
+                out["reason"] = "failed the lookahead test on the full history (its signal changes when future bars are removed)"
+                return out
         bt = run_backtest(d, strat, risk, lookahead_check="skip")
         trades = bt.trades
         out["trades"] = len(trades)

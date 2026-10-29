@@ -129,7 +129,7 @@ class SpeedRunConfig:
     validation_final_mc_sims: int = 3000
     validation_folds: int = 3
     validation_holdout_frac: float = 0.2
-    fitness_metric: str = "eval_pass_probability"
+    fitness_metric: str = "edge_lb_r"   # the shared Discovery objective (was eval_pass_probability, which disagreed with every other discovery tool)
     save_winner_to_library: bool = True
     random_seed: int = 42
 

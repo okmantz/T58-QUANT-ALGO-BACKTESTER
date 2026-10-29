@@ -224,3 +224,18 @@ html[data-theme="light"] input[type=text] { background: #ffffff; }
   background: rgba(var(--teal-rgb), 0.10); border: 1px solid rgba(var(--teal-rgb), 0.35); color: var(--text);
   padding: 16px; border-radius: var(--radius-md); font-size: 14px; line-height: 1.6; white-space: pre-wrap;
 }
+
+/* Verdict waterfall ("Why this verdict") -- Full Pipeline results and anywhere else build_waterfall() is rendered. */
+.wf { margin: 14px 0 6px; padding: 14px 16px; border: 1px solid var(--border, #2a3340); border-radius: 12px; background: var(--panel-2, rgba(255,255,255,.03)); }
+.wf[hidden], .wf-single[hidden] { display: none; }
+.wf-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; margin-bottom: 10px; } .wf-head span { color: var(--text-muted, #8b98a8); font-size: 13px; }
+.wf-steps { list-style: none; margin: 0; padding: 0 0 0 14px; border-left: 2px solid var(--border-light, #34404f); display: grid; gap: 10px; }
+.wf-step { position: relative; padding-left: 14px; } .wf-step::before { content: ""; position: absolute; left: -22px; top: 5px; width: 10px; height: 10px; border-radius: 50%; background: var(--k, #8b98a8); box-shadow: 0 0 0 3px var(--panel-2, #11161d); }
+.wf-step.score { --k: #4d90ff; } .wf-step.cap { --k: #f5b83d; } .wf-step.gate { --k: #ff5d6c; } .wf-step.advisory, .wf-step.info { --k: #8b98a8; }
+.wf-step.final.READY { --k: #35e0b0; } .wf-step.final.MARGINAL { --k: #f5b83d; } .wf-step.final.NOT_READY { --k: #ff5d6c; }
+.wf-step .t { font-weight: 700; font-size: 14px; display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+.wf-step .tag { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; font-weight: 800; color: var(--k); }
+.wf-step .m { font-size: 12px; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--border-light, #34404f); color: var(--text-muted, #8b98a8); }
+.wf-step .d { font-size: 12.5px; color: var(--text-muted, #8b98a8); margin-top: 2px; } .wf-step .f { font-size: 12.5px; margin-top: 3px; }
+.wf-single { margin-top: 12px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--teal, #35e0b0); background: rgba(53, 224, 176, .07); font-size: 13.5px; }
+.wf-raw { margin: 8px 0; } .wf-raw summary { cursor: pointer; font-size: 12.5px; color: var(--text-muted, #8b98a8); }

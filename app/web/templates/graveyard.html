@@ -90,7 +90,7 @@
 <div class="t58-page-header">
   <h1>Strategy Graveyard</h1>
   <p>Every strategy that was tested hard and then rejected, with the reason. Click any row to see its scores and an equity curve.
-     Forge Strategy reads this same file before a new run, so settings already proven dead here are skipped instead of re-tested.</p>
+     Forge Strategy reads this same file before a new run, so settings already proven dead here are skipped instead of re-tested. <a href="/trial-ledger">How many ideas has the Deflated Sharpe check counted? &rarr;</a></p>
 </div>
 
 <div class="card" id="searched-variants">
@@ -165,10 +165,20 @@ least once and rejections that reach CPCV/stress-testing will start accumulating
   <form method="get" action="/graveyard" class="gy-filters" id="gy-form">
     <label>Market &amp; timeframe
       <select name="path" onchange="this.form.family.value='';this.form.why.value='';this.form.submit()">
+        <option value="ALL" {{ 'selected' if all_markets else '' }}>All markets together</option>
         {% for f in files %}
         <option value="{{ f.path }}" {{ 'selected' if f.path == selected_path else '' }}>{{ f.label }} &mdash; {{ f.n_rows }} rejected</option>
         {% endfor %}
       </select>
+    </label>
+    {% if all_markets %}<label>Instrument
+      <select name="inst" onchange="this.form.submit()">
+        <option value="">Every instrument</option>
+        {% for i in instruments %}<option value="{{ i }}" {{ 'selected' if i == inst_filter else '' }}>{{ i }}</option>{% endfor %}
+      </select>
+    </label>{% endif %}
+    <label>Search
+      <input type="search" name="q" value="{{ text_q }}" placeholder="e.g. breakout, RSI, NQ, too few trades" onchange="this.form.submit()" style="min-width:210px">
     </label>
     <label>Strategy type
       <select name="family" onchange="this.form.submit()">
@@ -206,8 +216,8 @@ least once and rejections that reach CPCV/stress-testing will start accumulating
     <thead><tr><th>Strategy</th><th>Why it failed</th><th class="gy-hide-sm">Stopped at</th><th class="gy-hide-sm">Trades</th><th></th></tr></thead>
     <tbody>
       {% for it in items %}
-      <tr tabindex="0" role="button" data-id="{{ it.id }}" aria-label="Open details for {{ it.family_title }}">
-        <td><div class="gy-name">{{ it.family_title }}</div>{% if it.settings %}<div class="gy-sub">{{ it.settings }}</div>{% endif %}</td>
+      <tr tabindex="0" role="button" data-id="{{ it.id }}" data-path="{{ it.path }}" aria-label="Open details for {{ it.family_title }}">
+        <td><div class="gy-name">{{ it.family_title }}</div>{% if it.settings %}<div class="gy-sub">{{ it.settings }}</div>{% endif %}{% if it.market %}<div class="gy-sub">{{ it.market }}</div>{% endif %}</td>
         <td><span class="tag bad">{{ it.why }}</span></td>
         <td class="gy-hide-sm">{{ it.stage }}</td>
         <td class="gy-hide-sm">{{ it.trades if it.trades is not none else '--' }}</td>
@@ -217,7 +227,9 @@ least once and rejections that reach CPCV/stress-testing will start accumulating
     </tbody>
   </table>
   {% if n_shown > items|length %}
-  <a class="more-link" href="?path={{ selected_path|urlencode }}&family={{ family_filter|urlencode }}&why={{ why_filter|urlencode }}&sort={{ sort }}&limit={{ limit + 150 }}">Show 150 more ({{ n_shown - items|length }} hidden)</a>
+  {% set base_q = '?path=' ~ ('ALL' if all_markets else selected_path|urlencode) ~ '&inst=' ~ inst_filter|urlencode ~ '&q=' ~ text_q|urlencode ~ '&family=' ~ family_filter|urlencode ~ '&why=' ~ why_filter|urlencode ~ '&sort=' ~ sort %}
+  <a class="more-link" href="{{ base_q }}&limit={{ limit + 150 }}">Show 150 more ({{ n_shown - items|length }} hidden)</a>
+  &nbsp;&middot;&nbsp;<a class="more-link" href="{{ base_q }}&limit=100000">See all {{ n_shown }}</a>
   {% endif %}
   {% endif %}
 </div>
@@ -273,6 +285,7 @@ least once and rejections that reach CPCV/stress-testing will start accumulating
 <script>
 (function () {
   var PATH = {{ selected_path|tojson }};
+  var REVIVE = {{ revive_datasets|tojson }};
   var list = document.getElementById('gy-list');
   if (!list) return;
   var panel = document.getElementById('gy-panel'), scrim = document.getElementById('gy-scrim'), body = document.getElementById('gy-body');
@@ -348,8 +361,23 @@ least once and rejections that reach CPCV/stress-testing will start accumulating
         (o.failed && o.failed.length ? '<p class="gy-note">' + o.failed.map(function (f) { return '\u2717 ' + esc(f.metric) + ' ' + esc(f.value); }).join(' \u00b7 ') + '</p>' : '') +
         '<button type="button" class="t58-btn primary sm" id="gy-opt">Auto-optimize this strategy &rarr;</button> <span class="gy-note" id="gy-opt-msg"></span></div>';
     }
+    if (REVIVE.length) {
+      h += '<div class="gy-sec"><h4>Revive on another market</h4><p class="gy-note">A setup that died on one market says nothing about another. This rebuilds the same idea for the market you pick and opens Optimize so it gets a fresh, honest test there.</p>' +
+        '<select id="gy-rev-ds" style="max-width:100%">' + REVIVE.map(function (x) { return '<option value="' + esc(x.name) + '">' + esc(x.label) + '</option>'; }).join('') + '</select> ' +
+        '<button type="button" class="t58-btn sm" id="gy-rev">Revive there &rarr;</button> <span class="gy-note" id="gy-rev-msg"></span></div>';
+    }
     if (d.context && !d.context.assumed) h += '<p class="gy-note">Tested on ' + esc(d.context.dataset) + ' (' + esc(d.context.start) + ' to ' + esc(d.context.end) + ') with ' + esc(d.context.spread) + ' pip spread, ' + esc(d.context.slippage) + ' pip slippage and $' + esc(d.context.commission) + ' per trade, risking ' + esc(d.context.risk_pct) + '% of $' + fmt(d.context.account, 0) + '. This only shows it failed on this data and these costs \u2014 not that the idea can never work elsewhere.</p>';
     body.innerHTML = h;
+    var rb = document.getElementById('gy-rev');
+    if (rb) rb.addEventListener('click', function () {
+      rb.disabled = true; var m = document.getElementById('gy-rev-msg'); m.textContent = 'Rebuilding it for that market\u2026';
+      var ds = document.getElementById('gy-rev-ds').value;
+      fetch('/graveyard/auto-optimize?path=' + encodeURIComponent(PATH) + '&id=' + encodeURIComponent(d.candidate_id) + '&dataset=' + encodeURIComponent(ds), {method: 'POST'})
+        .then(function (r) { return r.json(); }).then(function (x) {
+          if (x.ok) { m.textContent = 'Saved as ' + x.name + '. Opening Optimize\u2026'; window.location = x.url; }
+          else { m.textContent = x.error || 'Could not rebuild it.'; rb.disabled = false; }
+        }).catch(function () { m.textContent = 'Could not rebuild it.'; rb.disabled = false; });
+    });
     var ob = document.getElementById('gy-opt');
     if (ob) ob.addEventListener('click', function () {
       ob.disabled = true; var m = document.getElementById('gy-opt-msg'); m.textContent = 'Rebuilding it in your library\u2026';
@@ -364,6 +392,7 @@ least once and rejections that reach CPCV/stress-testing will start accumulating
     if (lastRow) lastRow.classList.remove('sel');
     lastRow = row; row.classList.add('sel');
     var id = row.getAttribute('data-id'), my = ++token;
+    PATH = row.getAttribute('data-path') || PATH;
     titleEl.textContent = row.querySelector('.gy-name').textContent; subEl.textContent = '';
     body.innerHTML = '<div class="gy-spin">Loading\u2026</div>';
     panel.classList.add('on'); scrim.classList.add('on'); panel.setAttribute('aria-hidden', 'false');

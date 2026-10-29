@@ -1,0 +1,95 @@
+/* T58 interface themes -- unlockable whole-interface styles (Account -> Personalize -> Interface theme).
+ * Each one re-skins the app by overriding the design tokens in theme.css (colours, radius, shadows, a typeface where it fits),
+ * so every page follows with no per-page code. Chosen with <html data-ui-theme="...">, set by t58-personalize.js. A theme that is
+ * still locked is never applied (the server drops it from the synced preferences). Arctic Glass sits on the light base
+ * (data-theme="light" is forced by the script); the others sit on the dark base.
+ * The accent colour picked in Personalize still wins over a theme's accent (it is written as inline custom properties). */
+
+/* the light/dark toggle makes no sense while a theme owns the palette */
+html[data-ui-theme] #t58-theme-toggle { display: none; }
+
+/* ------------------------------------------------------------------ Obsidian Gold: black stone, warm gold */
+html[data-ui-theme="obsidian-gold"] {
+  --bg: #070605; --bg-1: #070605; --panel: rgba(18, 15, 10, .82); --panel-2: rgba(23, 19, 12, .84); --panel-3: #1b160d; --panel-elevated: #1d180e;
+  --border: #2c2412; --border-light: #4a3c1c; --text: #f3ead5; --text-muted: #b2a47f; --text-dim: #7f734f;
+  --teal: #e2b84d; --teal-dim: #7a5d17; --teal-rgb: 226, 184, 77; --on-teal: #1a1204; --on-teal2: #1a1204; --on-teal3: #1a1204;
+  --pop-bg: #16110a; --pop-bg-2: #1d170d; --pop-bd: rgba(226, 184, 77, .32);
+  --glass-bg: rgba(18, 15, 10, .74); --glass-border: rgba(226, 184, 77, .14);
+  --shadow-md: 0 8px 26px rgba(0, 0, 0, .55); --shadow-lg: 0 14px 44px rgba(0, 0, 0, .65);
+  --glow-teal: 0 0 0 1px rgba(226, 184, 77, .16), 0 0 26px rgba(226, 184, 77, .08);
+}
+html[data-ui-theme="obsidian-gold"] .t58-card, html[data-ui-theme="obsidian-gold"] .card { border-color: rgba(226, 184, 77, .16); }
+html[data-ui-theme="obsidian-gold"] h1, html[data-ui-theme="obsidian-gold"] h2 { letter-spacing: .01em; }
+html[data-ui-theme="obsidian-gold"] h1 { background: linear-gradient(100deg, #fff1c9, #e2b84d 55%, #b98a22); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+/* ------------------------------------------------------------------ Arctic Glass: frosted, bright, cool */
+html[data-ui-theme="arctic-glass"] {
+  --bg: #e4eef6; --bg-1: #e4eef6; --panel: rgba(255, 255, 255, .62); --panel-2: rgba(255, 255, 255, .66); --panel-3: rgba(235, 244, 251, .8); --panel-elevated: rgba(255, 255, 255, .8);
+  --border: rgba(110, 150, 185, .34); --border-light: rgba(80, 120, 160, .5); --text: #0f2230; --text-muted: #3d5668; --text-dim: #54697a;
+  --teal: #1c6fa8; --teal-dim: #165a89; --teal-rgb: 28, 111, 168; --on-teal: #ffffff; --on-teal2: #ffffff; --on-teal3: #ffffff;
+  --pop-bg: rgba(255, 255, 255, .94); --pop-bg-2: #eef5fa; --pop-bd: rgba(80, 120, 160, .45);
+  --glass-bg: rgba(255, 255, 255, .6); --glass-border: rgba(255, 255, 255, .8);
+  --radius-sm: 8px; --radius-md: 14px; --radius-lg: 20px;
+  --shadow-md: 0 8px 28px rgba(40, 80, 120, .16); --shadow-lg: 0 16px 48px rgba(40, 80, 120, .2);
+}
+html[data-ui-theme="arctic-glass"] body { background: linear-gradient(160deg, #eaf3fa 0%, #d8e8f3 45%, #e8f1f8 100%) fixed; }
+html[data-ui-theme="arctic-glass"] .t58-card, html[data-ui-theme="arctic-glass"] .card, html[data-ui-theme="arctic-glass"] .t58-sidebar {
+  -webkit-backdrop-filter: blur(14px) saturate(1.25); backdrop-filter: blur(14px) saturate(1.25); border-color: rgba(255, 255, 255, .85);
+  box-shadow: 0 6px 24px rgba(40, 80, 120, .12), inset 0 1px 0 rgba(255, 255, 255, .9);
+}
+
+/* ------------------------------------------------------------------ Terminal Green: phosphor on black, monospace, square corners */
+html[data-ui-theme="terminal-green"] {
+  --bg: #000000; --bg-1: #000000; --panel: rgba(2, 14, 8, .9); --panel-2: rgba(3, 18, 10, .92); --panel-3: #04170c; --panel-elevated: #051c0f;
+  --border: #0d3b20; --border-light: #146236; --text: #b8ffd0; --text-muted: #52c07c; --text-dim: #2f8a52;
+  --teal: #19ff7a; --teal-dim: #0a8a42; --teal-rgb: 25, 255, 122; --on-teal: #00170a; --on-teal2: #00170a; --on-teal3: #00170a;
+  --pop-bg: #03140a; --pop-bg-2: #051c0f; --pop-bd: rgba(25, 255, 122, .38);
+  --glass-bg: rgba(2, 14, 8, .86); --glass-border: rgba(25, 255, 122, .16);
+  --radius-sm: 2px; --radius-md: 3px; --radius-lg: 4px;
+  --shadow-sm: none; --shadow-md: 0 0 0 1px rgba(25, 255, 122, .12); --shadow-lg: 0 0 24px rgba(25, 255, 122, .1);
+  --glow-teal: 0 0 0 1px rgba(25, 255, 122, .2), 0 0 18px rgba(25, 255, 122, .1);
+}
+html[data-ui-theme="terminal-green"] body, html[data-ui-theme="terminal-green"] button, html[data-ui-theme="terminal-green"] input,
+html[data-ui-theme="terminal-green"] select, html[data-ui-theme="terminal-green"] textarea { font-family: ui-monospace, "JetBrains Mono", "Cascadia Mono", Consolas, "Courier New", monospace; }
+html[data-ui-theme="terminal-green"] h1::before { content: "> "; color: var(--teal); }
+html[data-ui-theme="terminal-green"] body::after { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 1;
+  background: repeating-linear-gradient(0deg, rgba(0, 0, 0, 0) 0, rgba(0, 0, 0, 0) 2px, rgba(0, 0, 0, .13) 3px); opacity: .5; }
+
+/* ------------------------------------------------------------------ Deep Space: indigo void, violet light */
+html[data-ui-theme="deep-space"] {
+  --bg: #04040f; --bg-1: #04040f; --panel: rgba(12, 12, 34, .82); --panel-2: rgba(15, 15, 42, .84); --panel-3: #14143a; --panel-elevated: #181845;
+  --border: #25255a; --border-light: #3a3a82; --text: #e8eaff; --text-muted: #9a9fd4; --text-dim: #6c71a8;
+  --teal: #8f86ff; --teal-dim: #4a41b8; --teal-rgb: 143, 134, 255; --on-teal: #0b0824; --on-teal2: #0b0824; --on-teal3: #0b0824;
+  --pop-bg: #0e0e2c; --pop-bg-2: #151540; --pop-bd: rgba(143, 134, 255, .4);
+  --glass-bg: rgba(12, 12, 34, .74); --glass-border: rgba(143, 134, 255, .16);
+  --shadow-md: 0 8px 28px rgba(2, 2, 20, .6); --shadow-lg: 0 16px 52px rgba(2, 2, 20, .7);
+  --glow-teal: 0 0 0 1px rgba(143, 134, 255, .2), 0 0 28px rgba(143, 134, 255, .12);
+}
+html[data-ui-theme="deep-space"] body {
+  background: radial-gradient(1200px 700px at 78% -10%, rgba(99, 76, 230, .22), transparent 60%), radial-gradient(900px 600px at 5% 105%, rgba(40, 160, 220, .14), transparent 60%), #04040f fixed; }
+
+/* ------------------------------------------------------------------ Crimson Protocol: black-red, sharp, alert */
+html[data-ui-theme="crimson-protocol"] {
+  --bg: #080304; --bg-1: #080304; --panel: rgba(22, 8, 11, .86); --panel-2: rgba(27, 10, 14, .88); --panel-3: #1d0b0f; --panel-elevated: #240d12;
+  --border: #3a1219; --border-light: #5c1c27; --text: #f6e7ea; --text-muted: #c08a94; --text-dim: #8c5a64;
+  --teal: #ff3d57; --teal-dim: #8a1424; --teal-rgb: 255, 61, 87; --on-teal: #ffffff; --on-teal2: #ffffff; --on-teal3: #ffffff;
+  --pop-bg: #180709; --pop-bg-2: #220c10; --pop-bd: rgba(255, 61, 87, .4);
+  --glass-bg: rgba(22, 8, 11, .8); --glass-border: rgba(255, 61, 87, .16);
+  --radius-sm: 3px; --radius-md: 4px; --radius-lg: 6px;
+  --shadow-md: 0 8px 26px rgba(0, 0, 0, .6); --shadow-lg: 0 14px 44px rgba(0, 0, 0, .7);
+  --glow-teal: 0 0 0 1px rgba(255, 61, 87, .22), 0 0 22px rgba(255, 61, 87, .1);
+}
+html[data-ui-theme="crimson-protocol"] h1, html[data-ui-theme="crimson-protocol"] h2, html[data-ui-theme="crimson-protocol"] .t58-nav-section-label { text-transform: uppercase; letter-spacing: .08em; }
+html[data-ui-theme="crimson-protocol"] .t58-card, html[data-ui-theme="crimson-protocol"] .card { border-left: 3px solid rgba(255, 61, 87, .55); }
+
+/* ------------------------------------------------------------------ picker tiles (Account -> Personalize) */
+.ut-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.ut-tile { position: relative; text-align: left; padding: 0; border-radius: 12px; border: 2px solid var(--border-light); background: var(--panel-3); color: var(--text); cursor: pointer; overflow: hidden; font: inherit; }
+.ut-tile.on { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(var(--teal-rgb), .35); }
+.ut-tile .sw { display: block; height: 64px; }
+.ut-tile .nm { display: block; padding: 8px 10px; font-size: 12.5px; font-weight: 650; }
+.ut-tile.locked .sw { filter: brightness(.38) saturate(.5); }
+.ut-tile.locked .nm { color: var(--text-muted); }
+.ut-tile .lock { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; border-radius: 50%; display: none; place-items: center; background: rgba(0, 0, 0, .65); color: #fff; }
+.ut-tile.locked .lock { display: grid; }
+.ut-tile .lock .lu { width: 13px; height: 13px; }

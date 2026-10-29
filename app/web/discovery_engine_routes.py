@@ -27,9 +27,9 @@ JOB_DISCOVERY_ENGINE = "Strategy Discovery Engine"
 
 # How thoroughly to look -> (engine preset, headline). Plain words on the page; the preset names stay internal.
 EFFORT = {
-    "quick": ("lab", "Quick look", "2,500+ ideas across 29 strategy types, in well under a minute. Good for a first pass."),
-    "standard": ("lab", "Standard search", "5,000+ ideas, evolved and refined, each checked on data it never trained on and then proven in the real backtester."),
-    "deep": ("lab", "Deep search", "10,000+ ideas with the widest stop, target, filter and hold-time variants. Takes a few minutes."),
+    "quick": ("lab", "Quick look", "5,000+ ideas across every strategy family, indicator and paper-derived idea. Good for a first pass."),
+    "standard": ("lab", "Standard search", "10,000+ ideas, evolved and refined, each checked on data it never trained on and then proven in the real backtester."),
+    "deep": ("lab", "Deep search", "15,000+ ideas with the widest stop, target, filter and hold-time variants. Takes a few minutes."),
 }
 # "Deep statistical gauntlet": the original multi-lab engine (slow, very strict). Reachable from Advanced options.
 GAUNTLET = {"quick": "speed_run", "standard": "search_lab", "deep": "forge"}

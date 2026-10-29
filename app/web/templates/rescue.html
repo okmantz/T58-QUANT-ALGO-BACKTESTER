@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Rescue Search — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+{% include '_lifecycle_css.html' %}
+</head>
+<body>
+{% set active_page = 'rescue' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="lc-scope"><div class="lc-wrap">
+<div class="lc-crumb">Optimize · <b>Rescue Search</b></div>
+<h1 class="lc-title">Rescue a weak strategy</h1>
+<p class="lc-sub">The normal optimizer only moves the numbers a strategy already has. Rescue changes its structure: which side it trades, its stops and targets, how trades end, and which hours it trades. It chooses on the older 70% of the data, then judges the winner on the newest 30% that no variant ever saw. Every variant tried is counted as a trial.</p>
+<div id="rs-err" class="lc-error" style="display:none"></div>
+<div class="lc-card">
+  <div class="lc-row">
+    <div class="lc-col">
+      <label class="flabel" for="rs-strategy">Strategy (Manual Builder only)</label>
+      <select class="inp" id="rs-strategy">
+        {% for s in strategies if s.type == 'manual' %}
+        <option value="manual::{{ s.name }}"{% if prefill.strategy_pick == 'manual::' ~ s.name %} selected{% endif %}>{{ s.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="lc-col">
+      <label class="flabel" for="rs-data">Market data</label>
+      <select class="inp" id="rs-data">
+        {% for g in dataset_groups %}
+        <optgroup label="{{ g.instrument }}">
+          {% for f in g.files %}<option value="{{ f.full_name }}"{% if prefill.existing_dataset == f.full_name %} selected{% endif %}>{{ f.name }}</option>{% endfor %}
+        </optgroup>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+  <p><button class="lc-btn" id="rs-go" type="button">Try to rescue it</button></p>
+</div>
+<div class="lc-card" id="rs-log-card" style="display:none"><pre id="rs-log" style="white-space:pre-wrap;margin:0;font-size:12.5px"></pre></div>
+<div class="lc-card" id="rs-out" style="display:none">
+  <h3 id="rs-head" style="margin-top:0"></h3>
+  <table class="lc-table" style="width:100%;font-size:13px;border-collapse:collapse">
+    <thead><tr><th align="left">Edge per trade (lower bound, after costs)</th><th align="right">Training data</th><th align="right">Holdout</th></tr></thead>
+    <tbody><tr><td>Original</td><td align="right" id="rs-b-tr"></td><td align="right" id="rs-b-ho"></td></tr>
+    <tr><td>After rescue</td><td align="right" id="rs-r-tr"></td><td align="right" id="rs-r-ho"></td></tr></tbody>
+  </table>
+  <details style="margin-top:12px"><summary>Everything that was tried</summary><div id="rs-steps" style="font-size:12.5px;margin-top:8px"></div></details>
+  <p class="pg-hint" style="font-size:12.5px;margin-top:12px">To keep a rescue, make the listed changes in your Manual Builder strategy, then run the Full Pipeline on it. A change that only helped on training data is a coincidence until the holdout agrees.</p>
+</div>
+</div></div></div></div>
+<script>
+(function () {
+  function $(i) { return document.getElementById(i); }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function fmt(x) { return (x === null || x === undefined || !isFinite(x)) ? 'not enough trades' : (x >= 0 ? '+' : '') + Number(x).toFixed(2) + 'R'; }
+  var go = $('rs-go');
+  go.onclick = function () {
+    $('rs-err').style.display = 'none'; $('rs-out').style.display = 'none';
+    var fd = new FormData(); fd.append('strategy_pick', $('rs-strategy').value); fd.append('existing_dataset', $('rs-data').value);
+    var h = {}; if (window.__T58_CSRF) { h['X-CSRF-Token'] = window.__T58_CSRF; fd.append('_csrf_token', window.__T58_CSRF); }
+    go.disabled = true; $('rs-log-card').style.display = 'block'; $('rs-log').textContent = 'Starting...';
+    fetch('/api/rescue/start', { method: 'POST', body: fd, headers: h, credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
+      if (!j.ok) { go.disabled = false; $('rs-err').textContent = j.error || 'Could not start.'; $('rs-err').style.display = 'block'; $('rs-log-card').style.display = 'none'; return; }
+      poll(j.job_id);
+    }).catch(function () { go.disabled = false; $('rs-err').textContent = 'Could not reach the server.'; $('rs-err').style.display = 'block'; });
+  };
+  function poll(id) {
+    fetch('/api/rescue/' + id, { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (d) {
+      $('rs-log').textContent = (d.log || []).join('\n');
+      if (d.error) { go.disabled = false; $('rs-err').textContent = d.error; $('rs-err').style.display = 'block'; return; }
+      if (!d.done) { setTimeout(function () { poll(id); }, 1500); return; }
+      go.disabled = false; var r = d.result; if (!r) return;
+      $('rs-head').textContent = r.headline;
+      $('rs-b-tr').textContent = fmt(r.base_train); $('rs-b-ho').textContent = fmt(r.base_holdout);
+      $('rs-r-tr').textContent = fmt(r.best_train); $('rs-r-ho').textContent = fmt(r.best_holdout);
+      $('rs-steps').innerHTML = (r.steps || []).map(function (s) { return '<div>' + (s.kept ? '<b>' : '') + esc(s.stage) + ': ' + esc(s.label) + ' &mdash; ' + (s.train === null ? 'too few trades' : fmt(s.train)) + (s.kept ? ' (kept)</b>' : '') + '</div>'; }).join('');
+      $('rs-out').style.display = 'block';
+    }).catch(function () { setTimeout(function () { poll(id); }, 3000); });
+  }
+})();
+</script>
+</body>
+</html>

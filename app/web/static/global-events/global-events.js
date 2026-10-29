@@ -304,13 +304,51 @@
     fetch(API + 'refresh', { method: 'POST', credentials: 'same-origin' }).catch(function () {});
     setTimeout(function () { load(true); }, 4000); setTimeout(function () { load(true); }, 12000);
   });
+  function briefTime(iso) {   // event times arrive in UTC; show them in the reader's own clock
+    try { var d = new Date(String(iso).replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? '' : 'Z')); if (isNaN(d)) return String(iso).slice(11, 16);
+      return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); } catch (e) { return String(iso).slice(11, 16); }
+  }
+  function renderBrief(box, j) {
+    box.className = 'gx-brief rich'; box.textContent = '';
+    var b = j.brief;
+    if (!b) { box.textContent = j.text || ''; return; }
+    box.appendChild(el('p', 'gx-b-take', b.takeaway));
+    var grid = el('div', 'gx-b-grid');
+    b.sections.forEach(function (sec) {
+      var card = el('div', 'gx-b-card gx-b-' + sec.type); card.appendChild(el('h3', '', sec.title));
+      if (!sec.items.length) { card.appendChild(el('div', 'gx-b-empty', sec.empty)); grid.appendChild(card); return; }
+      if (sec.type === 'markets') {
+        var chips = el('div', 'gx-b-chips');
+        sec.items.forEach(function (m) { var c = el('span', 'gx-b-chip ' + (m.chg_pct > 0 ? 'up' : m.chg_pct < 0 ? 'down' : ''), ''); c.appendChild(el('b', '', m.symbol)); c.appendChild(document.createTextNode((m.chg_pct > 0 ? '▲ ' : m.chg_pct < 0 ? '▼ ' : '') + (m.chg_pct > 0 ? '+' : '') + m.chg_pct.toFixed(2) + '%')); chips.appendChild(c); });
+        card.appendChild(chips);
+      } else {
+        var ul = el('ul', 'gx-b-list');
+        sec.items.forEach(function (it) {
+          var li = el('li', '');
+          if (sec.type === 'events') { li.appendChild(el('span', 'tm', briefTime(it.when))); li.appendChild(el('span', 'tx', (it.country ? it.country + ' · ' : '') + it.name)); }
+          else if (sec.type === 'theaters') { li.appendChild(el('span', 'tx', it.name)); var bar = el('span', 'bar'); var i = el('i', ''); i.style.width = Math.max(4, Math.min(100, it.score)) + '%'; bar.appendChild(i); li.appendChild(bar); li.appendChild(el('span', 'sc', String(it.score))); }
+          else { li.appendChild(el('span', 'tx', it.title)); if (it.publisher) li.appendChild(el('span', 'pub', it.publisher)); }
+          ul.appendChild(li);
+        });
+        card.appendChild(ul);
+        if (sec.note) card.appendChild(el('div', 'gx-b-empty', sec.note));
+      }
+      grid.appendChild(card);
+    });
+    box.appendChild(grid);
+    if (j.ai) {
+      var ai = el('div', 'gx-b-ai'); ai.appendChild(el('h3', '', 'Analyst take (AI wording of the figures above)'));
+      String(j.ai).split(/\n+/).forEach(function (line) { line = line.trim(); if (!line) return;
+        var bullet = /^[-*•]\s+/.test(line); var node = el(bullet ? 'div' : 'p', bullet ? 'gx-b-bullet' : '', line.replace(/^[-*•]\s+/, '').replace(/\*\*/g, '')); ai.appendChild(node); });
+      box.appendChild(ai);
+    }
+    var foot = (b.health && b.health.overall ? 'Data health: ' + b.health.overall + ' (freshest source ' + b.health.age + '). ' : '') + (j.error ? j.error + ' ' : '') + 'Every figure comes from the local store.';
+    box.appendChild(el('div', 'note', foot));
+  }
   $('gx-brief-btn').addEventListener('click', function () {
     var btn = this, box = $('gx-brief'); btn.disabled = true; box.className = 'gx-brief muted'; box.textContent = 'Generating…';
-    fetch(API + 'brief', { method: 'POST', credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
-      box.className = 'gx-brief'; box.textContent = j.text || '';
-      if (j.ai) { var a = el('div', 'ai', j.ai); box.appendChild(a); }
-      var note = el('div', 'note', (j.ai ? 'AI wording of the figures above. ' : '') + (j.error ? j.error : '') + ' ' + (j.label || '')); box.appendChild(note);
-    }).catch(function () { box.className = 'gx-brief muted'; box.textContent = 'Could not generate a brief right now.'; }).then(function () { btn.disabled = false; });
+    fetch(API + 'brief', { method: 'POST', credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) { renderBrief(box, j); })
+      .catch(function () { box.className = 'gx-brief muted'; box.textContent = 'Could not generate a brief right now.'; }).then(function () { btn.disabled = false; });
   });
 
   /* ------------------------------------------------------------------ X posts (own endpoint, 5-min server cache) */

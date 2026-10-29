@@ -157,7 +157,7 @@
     <label>Fitness metric (scored on each instrument before combining)</label>
     <select name="fitness_metric">
       {% for key, label in fitness_metrics.items() %}
-      <option value="{{ key }}" {{ 'selected' if key == 'eval_pass_probability' else '' }}>{{ label }}</option>
+      <option value="{{ key }}" {{ 'selected' if key == 'pass_gradient' else '' }}>{{ label }}</option>
       {% endfor %}
     </select>
     <div class="row">

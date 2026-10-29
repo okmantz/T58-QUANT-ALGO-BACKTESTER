@@ -1033,15 +1033,13 @@ def average_daily_range(frame: pd.DataFrame, period: int = 14) -> pd.Series:
     indicator here, rather than being its own daily-only series."""
     from app.data.session_clock import session_day_key
     day = session_day_key(frame)
-    daily_high = frame["high"].groupby(day).transform("max")
-    daily_low = frame["low"].groupby(day).transform("min")
-    daily_range = (daily_high - daily_low)
-    # One range value per calendar day, then a rolling mean of the last
-    # `period` DAYS (not bars) of those values, forward-filled back onto
-    # every intraday bar.
-    per_day = daily_range.groupby(day).first()
+    # Per-day range from each day's own bars, then the rolling mean of the last `period` COMPLETED days.
+    # 2026-10 lookahead fix: the old version stamped today's FULL-day range (including bars not yet printed)
+    # onto every intraday bar of today, so a bar's value changed when later bars of its own day were removed.
+    # A bar may only know days that finished before it, so the value for day D is the mean of days D-period..D-1.
+    per_day = frame["high"].groupby(day).max() - frame["low"].groupby(day).min()
     p = _period(period)
-    adr_by_day = per_day.rolling(p, min_periods=p).mean()
+    adr_by_day = per_day.rolling(p, min_periods=p).mean().shift(1)
     return day.map(adr_by_day)
 
 

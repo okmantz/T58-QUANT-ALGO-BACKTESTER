@@ -125,6 +125,22 @@ _add("Habits", "active_days", "/dashboard", [
     ("medium", "A Month of Work", 30, "Work in the lab on 30 different days (they do not need to be in a row).", "days-30"),
 ])
 
+# Late-game badges: the hard / elite rows that make the gold and platinum collectibles genuinely rare.
+_add("Discovery", "discoveries", "/discovery-engine", [
+    ("hard", "Discovery Veteran", 50, "Run the Discovery Engine 50 times.", "disc-50"),
+    ("elite", "Discovery Legend", 200, "Run the Discovery Engine 200 times.", "disc-200"),
+])
+_add("Pipeline", "pipelines", "/full-pipeline", [("elite", "Pipeline Legend", 250, "Run the Full Pipeline 250 times.", "pipe-250")])
+_add("Pipeline", "passes", "/champion-simple", [("elite", "Proven Passer", 100, "Get 100 runs that pass a prop-firm evaluation.", "pass-100")])
+_add("Robustness", "validations", "/validate-simple", [("elite", "Relentless Skeptic", 500, "Produce 500 validation reports.", "val-500")])
+_add("Library", "library", "/library", [("elite", "Grand Curator", 100, "Keep 100 strategies in your library.", "lib-100")])
+_add("Habits", "journal", "/journal", [("elite", "Master Chronicler", 500, "Log 500 trades in the journal.", "jrnl-500")])
+_add("Habits", "active_days", "/dashboard", [
+    ("hard", "Hundred Days", 100, "Work in the lab on 100 different days.", "days-100"),
+    ("elite", "A Year of Research", 365, "Work in the lab on 365 different days.", "days-365"),
+])
+_add("Markets", "instruments", "/full-pipeline", [("elite", "Global Explorer", 50, "Analyse 50 different instruments.", "inst-50")])
+
 CATALOGUE = {a[0]: a for a in _CATALOGUE}
 
 
@@ -313,3 +329,132 @@ def acknowledge(ids: list[str] | None = None) -> None:
             if ids is None or aid in ids:
                 u["seen"] = True
         _save(d)
+
+
+# ---- research rank, titles, collectible badges, unlockables --------------------------------------------------------------
+# Rank = the level's metal. It is shown in Account settings (and on shared cards / certificates), nowhere else.
+RANK_METALS = [(0, "bronze", "Bronze"), (2, "silver", "Silver"), (4, "gold", "Gold"), (6, "platinum", "Platinum"), (9, "obsidian", "Obsidian")]
+TIER_METAL = {"easy": "bronze", "medium": "silver", "hard": "gold", "elite": "platinum"}
+METAL_LABEL = {"bronze": "Bronze", "silver": "Silver", "gold": "Gold", "platinum": "Platinum", "obsidian": "Obsidian"}
+
+
+def rank_for(level_index: int) -> dict[str, str]:
+    """level_index is 0-based (level 1 -> 0)."""
+    metal, label = RANK_METALS[0][1], RANK_METALS[0][2]
+    for at, m, lab in RANK_METALS:
+        if level_index >= at:
+            metal, label = m, lab
+    return {"metal": metal, "metal_label": label}
+
+
+# Special titles: each is earned by mastering one feature (one achievement id). (id, title, achievement id, how it reads on the lock)
+TITLES: list[tuple[str, str, str]] = [
+    ("pipeline-master", "Pipeline Master", "pipe-50"),
+    ("pipeline-legend", "Gatekeeper of the Pipeline", "pipe-250"),
+    ("validator-prime", "Validator Prime", "vtool-6"),
+    ("skeptic", "The Skeptic", "val-150"),
+    ("graveyard-keeper", "Graveyard Keeper", "grave-1000"),
+    ("data-alchemist", "Data Alchemist", "data-40"),
+    ("prospector-general", "Prospector General", "disc-50"),
+    ("curator", "Grand Curator", "lib-40"),
+    ("chronicler", "Chronicler of the Tape", "jrnl-100"),
+    ("market-explorer", "Cartographer of Markets", "inst-25"),
+    ("consistent-passer", "Eval Slayer", "pass-25"),
+    ("thousand-tests", "Thousand-Test Veteran", "runs-1000"),
+]
+TITLE_BY_ID = {t[0]: t for t in TITLES}
+
+# Unlockable backgrounds and whole-interface themes. "ach" = every listed badge must be unlocked; "level" = minimum level.
+BACKGROUND_UNLOCKS: dict[str, dict[str, Any]] = {
+    "obsidian-gold": {"label": "Obsidian Gold", "ach": ["runs-250", "val-50"]},
+    "sakura-reverie": {"label": "Sakura Reverie", "ach": ["jrnl-10", "lib-10"]},
+    "abyssal-blue": {"label": "Abyssal Blue", "ach": ["grave-100", "disc-10"]},
+}
+THEME_UNLOCKS: dict[str, dict[str, Any]] = {
+    "obsidian-gold": {"label": "Obsidian Gold", "level": 8, "ach": []},
+    "arctic-glass": {"label": "Arctic Glass", "ach": ["vtool-3", "val-10"]},
+    "terminal-green": {"label": "Terminal Green", "ach": ["pipe-10", "pass-1"]},
+    "deep-space": {"label": "Deep Space", "ach": ["inst-10", "tf-5"]},
+    "crimson-protocol": {"label": "Crimson Protocol", "ach": ["pass-5", "strat-50"]},
+}
+
+
+def _requirement(spec: dict[str, Any], unlocked: dict[str, Any], level: int) -> dict[str, Any]:
+    parts, ok = [], True
+    for aid in spec.get("ach", []):
+        row = CATALOGUE.get(aid)
+        have = aid in unlocked
+        ok = ok and have
+        if row:
+            parts.append({"id": aid, "title": row[3], "description": row[4], "done": have})
+    need_level = int(spec.get("level") or 0)
+    lvl_ok = level >= need_level
+    ok = ok and lvl_ok
+    bits = [f"{p['title']} ({p['description'].rstrip('.')})" for p in parts]
+    if need_level:
+        bits.append(f"reach level {need_level} ({LEVEL_TITLES[min(need_level - 1, len(LEVEL_TITLES) - 1)]})")
+    return {"unlocked": ok, "parts": parts, "level_needed": need_level, "level_ok": lvl_ok,
+            "text": "To unlock: " + (" and ".join(bits) if bits else "available now") + "."}
+
+
+def _read_unlocked() -> tuple[dict[str, Any], int]:
+    """Cheap: reads the saved unlock record only (no file scans), for hot paths like the page-head bootstrap."""
+    u = _load().get("unlocked", {})
+    xp = sum(XP_BY_TIER[CATALOGUE[a][2]] for a in u if a in CATALOGUE)
+    return u, level_for(xp)["level"]
+
+
+def unlock_state(fresh: bool = False) -> dict[str, Any]:
+    if fresh:
+        evaluate()
+    unlocked, level = _read_unlocked()
+    bgs = {k: {"label": v["label"], **_requirement(v, unlocked, level)} for k, v in BACKGROUND_UNLOCKS.items()}
+    themes = {k: {"label": v["label"], **_requirement(v, unlocked, level)} for k, v in THEME_UNLOCKS.items()}
+    titles = {}
+    for tid, name, aid in TITLES:
+        row = CATALOGUE.get(aid)
+        titles[tid] = {"title": name, "unlocked": aid in unlocked, "needs": (row[3] + " (" + row[4].rstrip(".") + ")") if row else aid}
+    return {"backgrounds": bgs, "themes": themes, "titles": titles, "level": level,
+            "locked_backgrounds": [k for k, v in bgs.items() if not v["unlocked"]],
+            "locked_themes": [k for k, v in themes.items() if not v["unlocked"]]}
+
+
+def profile(model: dict[str, Any] | None = None, prefs: dict[str, str] | None = None) -> dict[str, Any]:
+    """Everything the Account settings 'Research profile' card shows: rank, equipped title, showcase, collectibles, unlocks."""
+    model = model or evaluate()
+    if prefs is None:
+        try:
+            from app.persistence import ui_prefs
+            prefs = ui_prefs.load()
+        except Exception:  # noqa: BLE001
+            prefs = {}
+    L = model["level"]
+    rank = rank_for(L["level"] - 1)
+    items = {i["id"]: i for i in model["items"]}
+    st = unlock_state()
+    equipped = prefs.get("t58-title", "")
+    if equipped not in st["titles"] or not st["titles"][equipped]["unlocked"]:
+        equipped = ""
+    try:
+        picked = json.loads(prefs.get("t58-showcase", "[]"))
+    except Exception:  # noqa: BLE001
+        picked = []
+    picked = [a for a in picked if a in items and items[a]["unlocked"]][:3]
+    if not picked:       # default showcase: the three rarest unlocked badges, best first
+        order = {"elite": 3, "hard": 2, "medium": 1, "easy": 0}
+        best = sorted((i for i in items.values() if i["unlocked"]), key=lambda i: (-order[i["tier"]], -(i.get("unlocked_at") or 0)))
+        picked = [i["id"] for i in best[:3]]
+    def badge(i: dict[str, Any]) -> dict[str, Any]:
+        return {"id": i["id"], "title": i["title"], "description": i["description"], "tier": i["tier"], "metal": TIER_METAL[i["tier"]],
+                "metal_label": METAL_LABEL[TIER_METAL[i["tier"]]], "rare": i["tier"] == "elite", "category": i["category"],
+                "unlocked": i["unlocked"], "unlocked_at": i.get("unlocked_at")}
+    collection: dict[str, int] = {}
+    for i in items.values():
+        if i["unlocked"]:
+            m = TIER_METAL[i["tier"]]
+            collection[m] = collection.get(m, 0) + 1
+    return {"level": L, "rank": rank, "xp": model["xp"], "title": st["titles"].get(equipped, {}).get("title", ""), "title_id": equipped,
+            "titles": [{"id": k, **v} for k, v in st["titles"].items()],
+            "showcase": [badge(items[a]) for a in picked], "showcase_ids": picked,
+            "collection": collection, "badges": [badge(i) for i in items.values() if i["unlocked"]],
+            "unlocked": model["unlocked"], "total": model["total"], "unlocks": st}

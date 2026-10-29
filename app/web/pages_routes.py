@@ -42,6 +42,125 @@ def achievements_ack():
     return jsonify({"ok": True})
 
 
+# ------------------------------------------------------------------ Research profile (shown in Account settings only)
+def _display_name() -> str:
+    try:
+        from app.accounts.settings import load_account_settings
+        a = load_account_settings()
+        return (a.display_name or a.username or "").strip() or "T58 Researcher"
+    except Exception:  # noqa: BLE001
+        return "T58 Researcher"
+
+
+@pages_bp.route("/api/profile")
+def profile_api():
+    from app import achievements
+    return jsonify(achievements.profile())
+
+
+@pages_bp.route("/api/unlocks")
+def unlocks_api():
+    from app import achievements
+    return jsonify(achievements.unlock_state(fresh=True))
+
+
+@pages_bp.route("/api/profile/title", methods=["POST"])
+def profile_title():
+    """Equip a special title (only ones earned) -- stored with the synced preferences so it follows the account."""
+    from app import achievements
+    from app.persistence import ui_prefs
+    tid = str((request.get_json(silent=True) or {}).get("id") or "")
+    if tid:
+        t = achievements.unlock_state()["titles"].get(tid)
+        if not t or not t["unlocked"]:
+            return jsonify({"ok": False, "error": "That title has not been earned yet."}), 400
+    ui_prefs.update({"t58-title": tid or None})
+    return jsonify({"ok": True})
+
+
+@pages_bp.route("/api/profile/showcase", methods=["POST"])
+def profile_showcase():
+    """Pin up to three earned badges as the profile showcase."""
+    import json as _json
+    from app import achievements
+    from app.persistence import ui_prefs
+    ids = (request.get_json(silent=True) or {}).get("ids")
+    ids = [str(i) for i in ids][:3] if isinstance(ids, list) else []
+    got = {i["id"] for i in achievements.profile()["badges"]}
+    bad = [i for i in ids if i not in got]
+    if bad:
+        return jsonify({"ok": False, "error": "You can only pin badges you have earned."}), 400
+    ui_prefs.update({"t58-showcase": _json.dumps(ids) if ids else None})
+    return jsonify({"ok": True, "ids": ids})
+
+
+@pages_bp.route("/achievements/card/<aid>.svg")
+def achievement_card(aid: str):
+    from flask import Response
+    from app import achievements
+    from app.achievements import share
+    prof = achievements.profile()
+    badge = next((b for b in prof["badges"] if b["id"] == aid), None)
+    if badge is None:
+        return jsonify({"ok": False, "error": "Badge not earned yet."}), 404
+    svg = share.achievement_card_svg(badge, _display_name(), prof["rank"]["metal_label"], prof["level"]["level"])
+    resp = Response(svg, mimetype="image/svg+xml")
+    if request.args.get("download"):
+        resp.headers["Content-Disposition"] = f'attachment; filename="t58-badge-{aid}.svg"'
+    return resp
+
+
+@pages_bp.route("/achievements/certificate.svg")
+def achievement_certificate():
+    from flask import Response
+    from app import achievements
+    from app.achievements import share
+    prof = achievements.profile()
+    counters = achievements.evaluate(persist=False)["counters"]
+    svg = share.certificate_svg(_display_name(), prof["rank"], prof["level"], prof["title"], counters, prof["collection"],
+                                prof["unlocked"], prof["total"], prof["showcase"])
+    resp = Response(svg, mimetype="image/svg+xml")
+    if request.args.get("download"):
+        resp.headers["Content-Disposition"] = 'attachment; filename="t58-research-certificate.svg"'
+    return resp
+
+
+# ------------------------------------------------------------------ Notification inbox (bell icon beside the profile picture)
+@pages_bp.route("/api/inbox")
+def inbox_list():
+    """Inbox messages (weekly digests). Writes this week's digest first if the Sunday digest is due."""
+    from app import inbox
+    try:
+        inbox.maybe_generate_weekly()
+    except Exception:  # noqa: BLE001 -- the bell must never break a page
+        pass
+    return jsonify(inbox.list_messages())
+
+
+@pages_bp.route("/api/inbox/read", methods=["POST"])
+def inbox_read():
+    from app import inbox
+    ids = (request.get_json(silent=True) or {}).get("ids")
+    inbox.mark_read(ids if isinstance(ids, list) else None)
+    return jsonify({"ok": True})
+
+
+@pages_bp.route("/api/inbox/delete", methods=["POST"])
+def inbox_delete():
+    from app import inbox
+    mid = str((request.get_json(silent=True) or {}).get("id") or "")
+    if mid:
+        inbox.delete_message(mid)
+    return jsonify({"ok": True})
+
+
+@pages_bp.route("/api/inbox/preview-digest")
+def inbox_preview():
+    """The digest for the last 7 days, without saving it (the 'Preview this week' button)."""
+    from app import inbox
+    return jsonify(inbox.build_weekly_digest())
+
+
 # ------------------------------------------------------------------ Playground
 PLAYGROUND_SECTIONS = {
     "fidgets": {"title": "Fidgets", "blurb": "Calm things to fiddle with between runs. A twisting cube with secret combos, a ring of liquid light, a field of drifting particles.",

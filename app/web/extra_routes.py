@@ -34,7 +34,7 @@ from app.live_deploy.broker_registry import SUPPORTED_PLATFORMS
 from app.live_deploy.prop_firms import PROP_FIRMS
 from app.monte_carlo.engine import MonteCarloConfig
 from app.optimize.parameter_space import RefinementError
-from app.optimize.refinement import FITNESS_METRICS
+from app.optimize.refinement import DEFAULT_FITNESS, FITNESS_METRICS
 from app.orchestration.resource_guard import HEAVY_JOB_GUARD
 from app.prop.simulator import PropRules
 from app.prop.presets import list_presets as list_prop_firm_presets
@@ -411,7 +411,7 @@ def cross_instrument_start():
                 n_simulations=max(50, int(form.get("n_sims", 1000) or 1000)), reset_on_breach=reset_on_breach,
             ),
             families=form.getlist("families") or None,
-            fitness_metric=form.get("fitness_metric", "eval_pass_probability") or "eval_pass_probability",
+            fitness_metric=form.get("fitness_metric", DEFAULT_FITNESS) or DEFAULT_FITNESS,
             aggregation=form.get("aggregation", "mean_minus_dispersion") or "mean_minus_dispersion",
             max_candidates=max(2, min(400, int(form.get("max_candidates", 60) or 60))),
             screen_mc_sims=max(30, int(form.get("screen_sims", 150) or 150)),

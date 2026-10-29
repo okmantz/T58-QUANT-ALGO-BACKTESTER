@@ -42,6 +42,21 @@
     var search = PG.el('input', 'lib-search'); search.placeholder = 'Search title or author'; search.type = 'search'; bar.appendChild(search);
     var seg = PG.seg(bar, [['all', 'All'], ['reading', 'Reading'], ['want', 'Want to read'], ['done', 'Finished'], ['pdf', 'Has PDF']], 'all', function (v) { filter = v; draw(); });
     var cont = PG.el('div'); host.appendChild(cont); host.appendChild(PG.el('p', 'pg-hint', 'Covers are original typographic designs, not the publishers’ artwork. Own a book as a PDF? Open it here and tap “Add your PDF”: the file is saved on this computer only and opens in the in-app reader.'));
+    var FREE = [
+      ['An Introduction to Statistical Learning', 'James, Witten, Hastie, Tibshirani', 'https://www.statlearning.com/'],
+      ['The Elements of Statistical Learning', 'Hastie, Tibshirani, Friedman', 'https://hastie.su.domains/ElemStatLearn/'],
+      ['Forecasting: Principles and Practice', 'Hyndman, Athanasopoulos', 'https://otexts.com/fpp3/'],
+      ['Reinforcement Learning: An Introduction', 'Sutton, Barto', 'http://incompleteideas.net/book/the-book-2nd.html'],
+      ['Deep Learning', 'Goodfellow, Bengio, Courville', 'https://www.deeplearningbook.org/'],
+      ['Mathematics for Machine Learning', 'Deisenroth, Faisal, Ong', 'https://mml-book.com/'],
+      ['Convex Optimization', 'Boyd, Vandenberghe', 'https://web.stanford.edu/~boyd/cvxbook/'],
+      ['Think Stats', 'Allen B. Downey', 'https://greenteapress.com/wp/think-stats-2e/'],
+      ['Think Bayes', 'Allen B. Downey', 'https://allendowney.github.io/ThinkBayes2/'],
+      ['Introduction to Probability', 'Grinstead, Snell', 'https://math.dartmouth.edu/~prob/prob/prob.pdf'],
+      ['Python for Data Analysis', 'Wes McKinney', 'https://wesmckinney.com/book/'],
+      ['The Statistical Consequences of Fat Tails', 'Nassim Nicholas Taleb', 'https://arxiv.org/abs/2001.10488']
+    ];
+    host.appendChild((function () { var d = PG.el('details', 'lib-free'); d.innerHTML = '<summary style="cursor:pointer;margin-top:18px;font-size:13px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted)">Free, legal books to read online or download</summary><ul style="margin:10px 0 0;padding-left:18px;line-height:1.7;font-size:13.5px">' + FREE.map(function (f) { return '<li><a href="' + f[2] + '" target="_blank" rel="noopener" style="color:var(--teal)">' + esc(f[0]) + '</a> <span style="color:var(--text-muted)">· ' + esc(f[1]) + '</span></li>'; }).join('') + '</ul><p class="pg-hint">Published free by the authors or their publishers. Links open the official page; save the PDF and use “Add your PDF” on a shelf book if you want it in the in-app reader.</p>'; return d; })());
     function draw() {
       var list = BOOKS.filter(function (b) { var s = st[b.id] || {}; return (!q || (b.title + ' ' + b.author).toLowerCase().indexOf(q) >= 0) && (filter === 'all' || (filter === 'pdf' ? pdfs[b.id] : s.status === filter)); });
       var reading = BOOKS.filter(function (b) { return (st[b.id] || {}).status === 'reading'; });

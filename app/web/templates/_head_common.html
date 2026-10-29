@@ -13,8 +13,11 @@
 <link rel="apple-touch-icon" href="/static/icon-192.png">
 <meta name="theme-color" content="#05070a">
 <link rel="stylesheet" href="/static/theme.css">
+<link rel="stylesheet" href="/static/ui-themes.css">
 <script>try{if(localStorage.getItem('t58-theme')==='light')document.documentElement.setAttribute('data-theme','light')}catch(e){}</script>
-<script>try{var b=localStorage.getItem('t58-bg');if(b&&b!=='mountains')document.documentElement.setAttribute('data-bg',b)}catch(e){}</script>
+<script>try{var b=localStorage.getItem('t58-bg'),L=(window.__T58_LOCKED||{}).bg||[];if(b&&b!=='mountains'&&L.indexOf(b)<0)document.documentElement.setAttribute('data-bg',b)}catch(e){}</script>
+<script>/* interface theme (unlockable), painted before first paint; arctic-glass sits on the light base, the rest on dark */
+try{var ut=localStorage.getItem('t58-ui-theme'),UL=(window.__T58_LOCKED||{}).theme||[];if(ut&&UL.indexOf(ut)<0&&/^(obsidian-gold|arctic-glass|terminal-green|deep-space|crimson-protocol)$/.test(ut)){var h=document.documentElement;h.setAttribute('data-ui-theme',ut);if(ut==='arctic-glass')h.setAttribute('data-theme','light');else h.removeAttribute('data-theme')}}catch(e){}</script>
 <script>/* accent colour, painted before first paint (t58-personalize.js owns the logic and refreshes this cache) */
 try{var a=localStorage.getItem('t58-accent');if(a&&a!=='teal'){var v=JSON.parse(localStorage.getItem('t58-accent-vars')||'null'),r=document.documentElement;if(v){var m=localStorage.getItem('t58-theme')==='light'?'light':'dark',o=v[m];for(var k in o)r.style.setProperty(k,o[k]);r.setAttribute('data-ui-accent',a)}}}catch(e){}</script>
 <script src="/static/t58-scene-canvas.js" defer></script>

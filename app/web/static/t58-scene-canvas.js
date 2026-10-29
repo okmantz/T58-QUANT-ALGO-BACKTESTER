@@ -42,7 +42,10 @@
   }
 
   /* -------------------------------------------------------------- shared canvas plumbing */
-  function makeStage(kind, layer, drawFrame, setup) {
+  var IMAGE_OF = { ocean: 'midnight-ocean', forest: 'misty-forest', gold: 'obsidian-gold', sakura: 'sakura-reverie', abyss: 'abyssal-blue' };
+
+  function makeStage(kind, layer, drawFrame, setup, opts) {
+    opts = opts || {};
     var canvas = document.createElement('canvas');
     canvas.className = 'sc-canvas';
     canvas.setAttribute('aria-hidden', 'true');
@@ -51,14 +54,14 @@
     scrim.className = 'scrim';
     layer.insertBefore(scrim, layer.firstChild);
     layer.insertBefore(canvas, layer.firstChild);
-    var ctx = canvas.getContext('2d', { alpha: false });
+    var ctx = opts.gl ? (canvas.getContext('webgl', { alpha: false, antialias: false, powerPreference: 'low-power' }) || null) : canvas.getContext('2d', { alpha: false });
     if (!ctx) { canvas.remove(); scrim.remove(); return null; }
 
-    var st = { canvas: canvas, ctx: ctx, W: 0, H: 0, dpr: 1, img: null, ready: false, raf: 0, last: 0, t: 0, dead: false,
+    var st = { canvas: canvas, ctx: ctx, W: 0, H: 0, dpr: 1, img: null, ready: false, raf: 0, last: 0, t: (+window.__T58_SCENE_T0 || 0), dead: false,
       fps: 30, light: isLight(), small: window.innerWidth < 760 || (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 2) };
 
     function imageUrl() {
-      return '/static/backgrounds/' + (kind === 'ocean' ? 'midnight-ocean' : 'misty-forest') + (st.light ? '-light' : '-dark') + '.webp';
+      return '/static/backgrounds/' + IMAGE_OF[kind] + (st.light ? '-light' : '-dark') + '.webp';
     }
     function loadImage(done) {
       var im = new Image();
@@ -107,10 +110,7 @@
 
     resize();
     loadImage(function () {
-      resize();
-      setup(st);
-      st.ready = true;
-      drawFrame(st, 0.033);
+      try { resize(); setup(st); st.ready = true; drawFrame(st, 0.033); } catch (e) { destroy(); return; }
       canvas.style.transition = 'opacity .5s ease'; canvas.style.opacity = '1';
       st.raf = requestAnimationFrame(frame);
     });
@@ -361,6 +361,384 @@
     ctx.drawImage(st.keepMask, 0, 0);
   }
 
+
+  /* -------------------------------------------------------------- OBSIDIAN GOLD (WebGL)
+     The marble itself flows: the picture is re-sampled through two layers of slow, curling domain-warp noise, so the black
+     stone swirls like ink in water, and a soft pulse of light travels along the gold veins (found by colour: warm and
+     bright). All on the GPU, one full-screen quad. Without WebGL the still picture is left alone. */
+  var GOLD_VS = 'attribute vec2 p;varying vec2 v;void main(){v=vec2((p.x+1.0)*0.5,(1.0-p.y)*0.5);gl_Position=vec4(p,0.0,1.0);}';
+  var GOLD_FS = [
+    'precision mediump float;varying vec2 v;uniform sampler2D tex;uniform float t;uniform vec4 cov;uniform float lite;uniform vec2 asp;',
+    'vec2 flow(vec2 q,float k){float a=sin(q.y*3.1+k*0.23)+sin(q.x*2.3-k*0.19+q.y*1.7);float b=cos(q.x*2.7+k*0.21)+cos(q.y*3.4-k*0.17-q.x*1.3);return vec2(a,b);}',
+    'void main(){',
+    ' vec2 uv=v*cov.xy+cov.zw; vec2 q=uv*asp;',
+    ' vec2 w1=flow(q*1.6,t); vec2 w2=flow(q*3.4+w1*0.45,t*1.35);',
+    ' uv+=w1*0.0048+w2*0.0026;',
+    ' vec3 c=texture2D(tex,uv).rgb;',
+    ' float gold=smoothstep(0.07,0.32,c.r-c.b)*smoothstep(0.22,0.6,c.r);',
+    ' float pulse=0.5+0.5*sin(t*0.75+q.x*7.0+q.y*5.0+w1.x*1.6);',
+    ' float pulse2=0.5+0.5*sin(t*0.43-q.x*4.0+q.y*8.0+w2.y*1.3);',
+    ' c+=vec3(1.0,0.78,0.36)*gold*(0.10+0.26*pulse*pulse2)*(1.0-0.5*lite);',
+    ' c*=0.965+0.05*sin(t*0.31+w2.y*1.2);',
+    ' gl_FragColor=vec4(c,1.0);}'
+  ].join('\n');
+
+  function glShader(gl, type, src) {
+    var sh = gl.createShader(type); gl.shaderSource(sh, src); gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error('shader');
+    return sh;
+  }
+  function goldSetup(st) {
+    var gl = st.ctx;
+    if (!st.prog) {
+      var pr = gl.createProgram();
+      gl.attachShader(pr, glShader(gl, gl.VERTEX_SHADER, GOLD_VS));
+      gl.attachShader(pr, glShader(gl, gl.FRAGMENT_SHADER, GOLD_FS));
+      gl.linkProgram(pr);
+      if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error('link');
+      gl.useProgram(pr);
+      var buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+      var loc = gl.getAttribLocation(pr, 'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+      st.prog = pr;
+      st.u = { t: gl.getUniformLocation(pr, 't'), cov: gl.getUniformLocation(pr, 'cov'), lite: gl.getUniformLocation(pr, 'lite'), asp: gl.getUniformLocation(pr, 'asp'), tex: gl.getUniformLocation(pr, 'tex') };
+      st.texture = gl.createTexture();
+    }
+    if (st.img.naturalWidth > gl.getParameter(gl.MAX_TEXTURE_SIZE)) throw new Error('size');
+    gl.bindTexture(gl.TEXTURE_2D, st.texture);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, st.img);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.viewport(0, 0, st.W, st.H);
+    var iw = st.img.naturalWidth, ih = st.img.naturalHeight, sc = Math.max(st.W / iw, st.H / ih);
+    var fx = st.W / (iw * sc), fy = st.H / (ih * sc), pos = scenePos();
+    st.cover = [fx, fy, (1 - fx) * pos[0], (1 - fy) * pos[1]];
+    st.asp = [1, ih / iw];
+  }
+  function goldFrame(st) {
+    var gl = st.ctx;
+    gl.uniform1f(st.u.t, st.t); gl.uniform4f(st.u.cov, st.cover[0], st.cover[1], st.cover[2], st.cover[3]);
+    gl.uniform1f(st.u.lite, st.light ? 1 : 0); gl.uniform2f(st.u.asp, st.asp[0], st.asp[1]); gl.uniform1i(st.u.tex, 0);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
+  /* -------------------------------------------------------------- SAKURA REVERIE
+     One slow day: the picture is the sunset; over about five minutes it eases through night (blue dusk, paper-lantern glow
+     in the pagoda, fireflies), morning (soft pink light) and noon (bright, clear) and back to sunset. The lake ripples (the
+     water in the picture is re-drawn in strips pushed by travelling waves, plus the odd widening ring), and petals drift
+     diagonally across the scene from the blossom tree. */
+  var SAKURA_LAKE = 0.60;                    // water starts here, as a fraction of the picture's height
+  var PAGODA = { x: 0.317, y: 0.50 };        // paper-lantern windows
+  var SK_PHASES = [                          // [name, hold seconds, ease-in seconds, multiply top, multiply bottom, screen top, screen bottom]
+    ['sunset',  70, 25, [255, 255, 255], [255, 255, 255], [0, 0, 0],       [0, 0, 0]],
+    ['night',   50, 25, [58, 74, 142],   [44, 58, 112],   [4, 8, 26],      [0, 0, 8]],
+    ['morning', 40, 25, [255, 238, 246], [255, 244, 248], [72, 40, 62],    [40, 24, 34]],
+    ['noon',    50, 25, [214, 232, 255], [246, 251, 255], [96, 136, 196],  [24, 36, 52]]
+  ];
+  var SK_TOTAL = SK_PHASES.reduce(function (a, p) { return a + p[1] + p[2]; }, 0);
+  function lerp(a, b, k) { return a + (b - a) * k; }
+  function mix3(a, b, k) { return [lerp(a[0], b[0], k), lerp(a[1], b[1], k), lerp(a[2], b[2], k)]; }
+  function rgb3(c) { return 'rgb(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0) + ')'; }
+  // -> { mt, mb, stp, sb, night } at time t of the day cycle
+  function skyAt(t) {
+    var T = ((t % SK_TOTAL) + SK_TOTAL) % SK_TOTAL, i, acc = 0, n = SK_PHASES.length;
+    for (i = 0; i < n; i++) {
+      var P = SK_PHASES[i], prev = SK_PHASES[(i + n - 1) % n], ease = P[2];
+      // each phase = ease from the previous phase, then hold
+      if (T < acc + ease) { var k = smooth(0, 1, (T - acc) / ease); return blend(prev, P, k); }
+      acc += ease;
+      if (T < acc + P[1]) return blend(P, P, 1);
+      acc += P[1];
+    }
+    return blend(SK_PHASES[0], SK_PHASES[0], 1);
+  }
+  function blend(a, b, k) {
+    return { mt: mix3(a[3], b[3], k), mb: mix3(a[4], b[4], k), stp: mix3(a[5], b[5], k), sb: mix3(a[6], b[6], k),
+      night: lerp(a[0] === 'night' ? 1 : 0, b[0] === 'night' ? 1 : 0, k) };
+  }
+  function petalSprite(c1, c2) {
+    var c = document.createElement('canvas'); c.width = 32; c.height = 20;
+    var g = c.getContext('2d'), gr = g.createLinearGradient(0, 0, 32, 20);
+    gr.addColorStop(0, c1); gr.addColorStop(1, c2);
+    g.fillStyle = gr; g.beginPath(); g.moveTo(1, 10); g.bezierCurveTo(6, -2, 24, 0, 31, 10); g.bezierCurveTo(24, 21, 6, 21, 1, 10); g.fill();
+    return c;
+  }
+  function sakuraSetup(st) {
+    var W = st.W, H = st.H, r = coverRect(st.img.naturalWidth, st.img.naturalHeight, W, H, scenePos());
+    var M = Math.ceil(20 * st.dpr);
+    var base = document.createElement('canvas'); base.width = W + 2 * M; base.height = H;
+    var b = base.getContext('2d'); b.imageSmoothingQuality = 'high';
+    b.drawImage(st.img, r.x + M, r.y, r.w, r.h);
+    b.drawImage(base, M, 0, 1, H, 0, 0, M, H); b.drawImage(base, W + M - 1, 0, 1, H, W + M, 0, M, H);
+    st.base = base; st.M = M; st.rect = r;
+    st.lakeY = Math.max(0, Math.round(r.y + r.h * SAKURA_LAKE)); st.strip = Math.max(2, Math.round(2 * st.dpr));
+    st.lamp = { x: r.x + r.w * PAGODA.x, y: r.y + r.h * PAGODA.y, rad: r.w * 0.05 };
+    st.petalSprites = st.light ? [petalSprite('#ffffff', '#f6b6cc'), petalSprite('#fff0f5', '#f08fb0')] : [petalSprite('#ffe3ec', '#f7a9c4'), petalSprite('#ffd3e1', '#f28fb3'), petalSprite('#fff1f5', '#f9b9cf')];
+    var n = st.small ? 14 : 30;
+    st.petals = []; for (var i = 0; i < n; i++) st.petals.push(newPetal(st, true));
+    st.flies = []; for (var f = 0; f < (st.small ? 6 : 12); f++) st.flies.push({ x: rnd(0.05, 0.95), y: rnd(0.45, 0.85), ph: rnd(0, 6.28), sp: rnd(0.2, 0.5), rr: rnd(0.01, 0.035) });
+    st.rings = []; st.nextRing = 2;
+    st.mask = null;
+    var wk = document.createElement('canvas'); wk.width = 2; wk.height = 2; st.tint = wk;
+  }
+  function newPetal(st, anywhere) {
+    var r = st.rect, W = st.W, H = st.H, d = st.dpr;
+    var fromTree = Math.random() < 0.7;
+    var x = fromTree ? r.x + r.w * rnd(0.50, 0.92) : rnd(0, W * 1.1);
+    var y = fromTree ? r.y + r.h * rnd(0.26, 0.62) : rnd(-0.1 * H, 0.3 * H);
+    if (anywhere) { x = rnd(0, W * 1.1); y = rnd(-0.05 * H, H); }
+    return { x: x, y: y, vx: -rnd(14, 34) * d, vy: rnd(10, 24) * d, rot: rnd(0, 6.28), vr: rnd(-1.4, 1.4), flip: rnd(0, 6.28), vf: rnd(1.2, 3.2),
+      sz: rnd(12, 22) * d, sw: rnd(0.5, 1.4), ph: rnd(0, 6.28), spr: (Math.random() * st.petalSprites.length) | 0, a: rnd(0.55, 0.9) };
+  }
+  function sakuraFrame(st, dt) {
+    var ctx = st.ctx, W = st.W, H = st.H, M = st.M, t = st.t, d = st.dpr, ly = st.lakeY, base = st.base;
+    var sky = skyAt(t + SK_PHASES[0][2]);   // start the day on the sunset hold
+    // land + sky: the picture
+    ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+    ctx.drawImage(base, M, 0, W, ly, 0, 0, W, ly);
+    // lake: strips pushed sideways by travelling waves, stronger toward the viewer
+    var span = Math.max(1, H - ly), strip = st.strip;
+    for (var y = ly; y < H; y += strip) {
+      var dd = (y - ly) / span, z = 1 / (dd + 0.12);
+      var amp = (0.25 + 3.6 * Math.pow(dd, 1.1)) * d;
+      var dx = amp * (0.6 * Math.sin(z * 7.5 - t * (0.7 + dd * 0.5)) + 0.4 * Math.sin(z * 15.0 + t * 0.55 + Math.sin(t * 0.2) * 2));
+      ctx.drawImage(base, M + dx, y, W, strip, 0, y, W, strip);
+    }
+    // widening rings now and then
+    st.nextRing -= dt;
+    if (st.nextRing <= 0) { st.nextRing = rnd(1.6, 4.2); st.rings.push({ x: rnd(0.08, 0.92) * W, y: ly + rnd(0.12, 0.92) * span, age: 0, life: rnd(5, 8) }); if (st.rings.length > 7) st.rings.shift(); }
+    ctx.lineWidth = 1.2 * d; ctx.strokeStyle = st.light ? '#ffffff' : '#ffd9e6';
+    for (var q = st.rings.length - 1; q >= 0; q--) {
+      var rg = st.rings[q]; rg.age += dt; var k = rg.age / rg.life;
+      if (k >= 1) { st.rings.splice(q, 1); continue; }
+      var rad = (6 + 70 * k) * d, persp = 0.18 + 0.2 * ((rg.y - ly) / span);
+      ctx.globalAlpha = 0.28 * (1 - k) * (1 - k); ctx.beginPath(); ctx.ellipse(rg.x, rg.y, rad, rad * persp, 0, 0, 6.2832); ctx.stroke();
+      if (k > 0.18) { ctx.globalAlpha *= 0.6; ctx.beginPath(); ctx.ellipse(rg.x, rg.y, rad * 0.62, rad * 0.62 * persp, 0, 0, 6.2832); ctx.stroke(); }
+    }
+    // time of day: a multiply wash then a screen wash, each a top->bottom gradient
+    ctx.globalAlpha = 1;
+    if (sky.mt[0] < 254.5 || sky.mt[1] < 254.5 || sky.mt[2] < 254.5 || sky.mb[0] < 254.5) {
+      var g1 = ctx.createLinearGradient(0, 0, 0, H); g1.addColorStop(0, rgb3(sky.mt)); g1.addColorStop(1, rgb3(sky.mb));
+      ctx.globalCompositeOperation = 'multiply'; ctx.fillStyle = g1; ctx.fillRect(0, 0, W, H);
+    }
+    if (sky.stp[0] + sky.stp[1] + sky.stp[2] + sky.sb[0] + sky.sb[1] + sky.sb[2] > 3) {
+      var g2 = ctx.createLinearGradient(0, 0, 0, H); g2.addColorStop(0, rgb3(sky.stp)); g2.addColorStop(1, rgb3(sky.sb));
+      ctx.globalCompositeOperation = 'screen'; ctx.fillStyle = g2; ctx.fillRect(0, 0, W, H);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    var night = sky.night;
+    // night: stars, lantern glow in the pagoda (and its reflection), fireflies
+    if (night > 0.02) {
+      ctx.globalCompositeOperation = 'lighter';
+      if (!st.stars) { st.stars = []; for (var s = 0; s < (st.small ? 24 : 48); s++) st.stars.push({ x: rnd(0, 1), y: rnd(0, 0.16), ph: rnd(0, 6.28), sp: rnd(0.4, 1.3), sz: rnd(0.6, 1.6) }); }
+      for (var si = 0; si < st.stars.length; si++) {
+        var S = st.stars[si], tw = 0.45 + 0.55 * Math.sin(t * S.sp + S.ph);
+        ctx.globalAlpha = night * 0.7 * Math.max(0, tw);
+        ctx.fillStyle = '#e8f0ff'; var sx = st.rect.x + S.x * st.rect.w, sy = st.rect.y + S.y * st.rect.h;
+        ctx.fillRect(sx, sy, S.sz * d, S.sz * d);
+      }
+      var L = st.lamp, flick = 0.88 + 0.12 * Math.sin(t * 2.3) * Math.sin(t * 0.9 + 1);
+      for (var pass = 0; pass < 2; pass++) {
+        var ly2 = pass ? ly + (ly - L.y) * 0.95 : L.y;               // second pass = reflection in the lake
+        var gl = ctx.createRadialGradient(L.x, ly2, 0, L.x, ly2, L.rad * (pass ? 1.9 : 1.5));
+        gl.addColorStop(0, 'rgba(255,196,110,' + (0.62 * night * flick * (pass ? 0.55 : 1)) + ')'); gl.addColorStop(0.45, 'rgba(255,150,70,' + (0.22 * night * (pass ? 0.5 : 1)) + ')'); gl.addColorStop(1, 'rgba(255,140,60,0)');
+        ctx.globalAlpha = 1; ctx.fillStyle = gl;
+        ctx.fillRect(L.x - L.rad * 2.6, ly2 - L.rad * 2.6, L.rad * 5.2, L.rad * 5.2);
+      }
+      for (var fi = 0; fi < st.flies.length; fi++) {
+        var F = st.flies[fi], fx = (F.x + Math.sin(t * F.sp + F.ph) * F.rr) * W, fy = (F.y + Math.cos(t * F.sp * 0.8 + F.ph) * F.rr) * H;
+        var pulse = Math.pow(Math.max(0, Math.sin(t * 1.1 + F.ph * 3)), 3);
+        var fg = ctx.createRadialGradient(fx, fy, 0, fx, fy, 9 * d);
+        fg.addColorStop(0, 'rgba(255,240,150,' + (0.9 * pulse * night) + ')'); fg.addColorStop(1, 'rgba(255,240,150,0)');
+        ctx.globalAlpha = 1; ctx.fillStyle = fg; ctx.fillRect(fx - 9 * d, fy - 9 * d, 18 * d, 18 * d);
+      }
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    // petals, drifting diagonally (down and to the left) with a little flutter
+    var dim = 1 - 0.45 * night;
+    for (var pi = 0; pi < st.petals.length; pi++) {
+      var P = st.petals[pi];
+      P.x += (P.vx + Math.sin(t * P.sw + P.ph) * 9 * d) * dt; P.y += (P.vy + Math.cos(t * P.sw * 0.8 + P.ph) * 5 * d) * dt;
+      P.rot += P.vr * dt; P.flip += P.vf * dt;
+      if (P.x < -20 * d || P.y > H + 20 * d) { st.petals[pi] = newPetal(st, false); continue; }
+      var edgeFade = Math.min(1, Math.max(0, (W - P.x + 10 * d) / (60 * d)), Math.max(0, P.y / (30 * d) + 1));
+      ctx.globalAlpha = P.a * dim * Math.min(1, edgeFade);
+      ctx.save(); ctx.translate(P.x, P.y); ctx.rotate(P.rot); ctx.scale(1, 0.25 + 0.75 * Math.abs(Math.cos(P.flip)));
+      ctx.drawImage(st.petalSprites[P.spr], -P.sz / 2, -P.sz * 0.31, P.sz, P.sz * 0.62); ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /* -------------------------------------------------------------- ABYSSAL BLUE
+     Deep water, lit from above: soft turquoise light shafts that sway and breathe, caustic ripples near the surface, marine
+     snow drifting UP, a distant whale that crosses the whole screen very slowly (its body undulates, tail beating), and small
+     fish schools gliding past. Everything is drawn behind a readable scrim and kept slow on purpose. */
+  function causticTexture(n) {
+    var c = document.createElement('canvas'); c.width = n; c.height = n;
+    var g = c.getContext('2d'), img = g.createImageData(n, n), px = img.data, TAU = 6.2832;
+    for (var y = 0; y < n; y++) {
+      for (var x = 0; x < n; x++) {
+        var u = x / n * TAU, v = y / n * TAU;
+        // warped sine lattice -> thin bright filaments where waves cross (integer frequencies keep it tileable)
+        var a = Math.sin(u * 2 + Math.sin(v * 3) * 0.9) + Math.sin(v * 2 - Math.sin(u * 3) * 0.9) + Math.sin((u + v) * 2 + 1.3 * Math.sin((u - v) * 3));
+        var f = 1 - Math.abs(a) / 3;
+        var val = Math.pow(clamp(f, 0, 1), 11);
+        var i = (y * n + x) * 4;
+        px[i] = 190; px[i + 1] = 255; px[i + 2] = 245; px[i + 3] = Math.round(255 * clamp(val * 1.1, 0, 1));
+      }
+    }
+    g.putImageData(img, 0, 0);
+    return c;
+  }
+  function whaleSprite(w, h) {
+    var c = document.createElement('canvas'); c.width = w; c.height = h;
+    var g = c.getContext('2d'), Hm = h * 0.25, cy = h * 0.5, L = w * 0.82, x0 = w * 0.06;
+    function prof(u) { return u < 0.36 ? Math.pow(Math.sin(u / 0.36 * 1.5708), 0.55) : Math.pow(Math.max(0, 1 - (u - 0.36) / 0.64), 1.35) * 0.96 + 0.045; }
+    var grd = g.createLinearGradient(0, cy - Hm, 0, cy + Hm);
+    grd.addColorStop(0, 'rgba(3,26,38,0.92)'); grd.addColorStop(0.62, 'rgba(6,38,52,0.88)'); grd.addColorStop(1, 'rgba(34,92,108,0.75)');
+    g.fillStyle = grd; g.beginPath();
+    var N = 60, k;
+    for (k = 0; k <= N; k++) { var u = k / N; g.lineTo(x0 + u * L, cy - prof(u) * Hm * (u < 0.1 ? 0.9 : 1)); }
+    for (k = N; k >= 0; k--) { var u2 = k / N; g.lineTo(x0 + u2 * L, cy + prof(u2) * Hm * 0.82); }
+    g.closePath(); g.fill();
+    // tail flukes (a swept Y) and the long pectoral fin
+    g.fillStyle = 'rgba(4,30,42,0.9)'; var tx = x0 + L - 2, ty = cy;
+    g.beginPath(); g.moveTo(tx - 6, ty); g.quadraticCurveTo(tx + w * 0.05, ty - h * 0.20, tx + w * 0.085, ty - h * 0.21); g.quadraticCurveTo(tx + w * 0.045, ty - h * 0.05, tx + 3, ty); g.quadraticCurveTo(tx + w * 0.045, ty + h * 0.05, tx + w * 0.085, ty + h * 0.21); g.quadraticCurveTo(tx + w * 0.05, ty + h * 0.20, tx - 6, ty); g.fill();
+    g.fillStyle = 'rgba(8,48,62,0.85)'; g.beginPath(); g.moveTo(x0 + L * 0.30, cy + Hm * 0.55); g.quadraticCurveTo(x0 + L * 0.42, cy + Hm * 2.1, x0 + L * 0.52, cy + Hm * 2.35); g.quadraticCurveTo(x0 + L * 0.46, cy + Hm * 1.2, x0 + L * 0.40, cy + Hm * 0.7); g.fill();
+    // dorsal fin
+    g.beginPath(); g.moveTo(x0 + L * 0.62, cy - prof(0.62) * Hm); g.lineTo(x0 + L * 0.665, cy - prof(0.64) * Hm - h * 0.05); g.lineTo(x0 + L * 0.70, cy - prof(0.70) * Hm); g.fill();
+    // blur it (once) so it reads as far away in the water
+    var out = document.createElement('canvas'); out.width = w; out.height = h; var o = out.getContext('2d');
+    try { o.filter = 'blur(' + Math.max(2, w / 110) + 'px)'; } catch (e) {}
+    o.drawImage(c, 0, 0); o.filter = 'none';
+    return out;
+  }
+  function abyssSetup(st) {
+    var W = st.W, H = st.H, d = st.dpr, r = coverRect(st.img.naturalWidth, st.img.naturalHeight, W, H, scenePos());
+    var base = document.createElement('canvas'); base.width = W; base.height = H;
+    var b = base.getContext('2d'); b.imageSmoothingQuality = 'high'; b.drawImage(st.img, r.x, r.y, r.w, r.h);
+    st.base = base; st.rect = r;
+    st.src = { x: r.x + r.w * 0.50, y: r.y - r.h * 0.04 };                               // where the light enters at the surface
+    st.rays = []; var nr = st.small ? 6 : 10;
+    for (var i = 0; i < nr; i++) st.rays.push({ ang: rnd(-0.62, 0.62), w: rnd(0.035, 0.11), ph: rnd(0, 6.28), sp: rnd(0.05, 0.14), a: rnd(0.35, 0.9), sw: rnd(0.012, 0.035) });
+    st.caus = causticTexture(st.small ? 128 : 192);
+    st.cw = Math.max(64, Math.round(W / 2)); st.ch = Math.max(48, Math.round(H * 0.62 / 2));
+    st.cc = document.createElement('canvas'); st.cc.width = st.cw; st.cc.height = st.ch; st.cctx = st.cc.getContext('2d');
+    var fade = document.createElement('canvas'); fade.width = 4; fade.height = st.ch; var fg = fade.getContext('2d');
+    var gr = fg.createLinearGradient(0, 0, 0, st.ch); gr.addColorStop(0, 'rgba(0,0,0,1)'); gr.addColorStop(0.55, 'rgba(0,0,0,0.45)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+    fg.fillStyle = gr; fg.fillRect(0, 0, 4, st.ch); st.cfade = fade;
+    // the painted whale: region (picture fractions) that gets the swimming wave, plus a soft mask to blend it back in
+    var rx = Math.round(r.x + r.w * 0.14), ry = Math.round(r.y + r.h * 0.33), rw = Math.round(r.w * 0.66), rh = Math.round(r.h * 0.30), pad = Math.round(16 * d);
+    st.sw = { x: rx, y: ry, w: rw, h: rh, pad: pad };
+    st.swc = document.createElement('canvas'); st.swc.width = rw; st.swc.height = rh + 2 * pad; st.swx = st.swc.getContext('2d');
+    var mk = document.createElement('canvas'); mk.width = rw; mk.height = rh + 2 * pad; var mg = mk.getContext('2d');
+    var rad = mg.createRadialGradient(rw / 2, mk.height / 2, 0, rw / 2, mk.height / 2, rw / 2);
+    rad.addColorStop(0, 'rgba(0,0,0,1)'); rad.addColorStop(0.62, 'rgba(0,0,0,1)'); rad.addColorStop(1, 'rgba(0,0,0,0)');
+    mg.setTransform(1, 0, 0, mk.height / rw, 0, 0); mg.fillStyle = rad; mg.fillRect(0, 0, rw, rw);   // ellipse feather
+    st.swm = mk;
+    st.motes = []; var nm = st.small ? 46 : 110;
+    for (var m = 0; m < nm; m++) st.motes.push({ x: rnd(0, W), y: rnd(0, H), z: rnd(0.3, 1), ph: rnd(0, 6.28), tw: rnd(0.3, 1.1) });
+    st.whale = { spr: whaleSprite(Math.round(W * 0.22), Math.round(W * 0.22 * 0.34)), x: 0, dir: Math.random() < 0.5 ? 1 : -1, wait: 6, active: false, y: 0.74, speed: 0 };
+    st.schools = []; var ns = st.small ? 2 : 3;
+    for (var s = 0; s < ns; s++) {
+      var sc = { x: rnd(0, W), y: H * rnd(0.55, 0.9), dir: Math.random() < 0.5 ? 1 : -1, v: rnd(16, 30) * d, ph: rnd(0, 6.28), fish: [] };
+      for (var f = 0; f < (st.small ? 7 : 12); f++) sc.fish.push({ ox: rnd(-70, 70) * d, oy: rnd(-26, 26) * d, ph: rnd(0, 6.28), sz: rnd(6, 10) * d, fl: rnd(0, 6.28) });
+      st.schools.push(sc);
+    }
+  }
+  function abyssFrame(st, dt) {
+    var ctx = st.ctx, W = st.W, H = st.H, t = st.t, d = st.dpr, light = st.light;
+    ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1; ctx.drawImage(st.base, 0, 0);
+    // swimming: slices of the painted whale shifted by a travelling wave (larger toward the tail, on the left), blended back softly
+    var Q = st.sw, sx = st.swx, NS = st.small ? 22 : 40, sl = Q.w / NS;
+    sx.globalCompositeOperation = 'source-over'; sx.clearRect(0, 0, Q.w, Q.h + 2 * Q.pad);
+    for (var kq = 0; kq < NS; kq++) {
+      var uq = 1 - (kq + 0.5) / NS;                                         // 0 at the head (right) -> 1 at the tail (left)
+      var wave = Math.sin(6.2832 * (uq * 0.75 - t * 0.13)) * Math.pow(uq, 1.6) * st.rect.h * 0.0105 + Math.sin(t * 0.09) * uq * st.rect.h * 0.003;
+      sx.drawImage(st.base, Q.x + kq * sl, Q.y, sl + 1, Q.h, kq * sl, Q.pad + wave, sl + 1, Q.h);
+    }
+    sx.globalCompositeOperation = 'destination-in'; sx.drawImage(st.swm, 0, 0);
+    ctx.drawImage(st.swc, Q.x, Q.y - Q.pad);
+    // caustics (half-res, masked to fade with depth), two copies drifting opposite ways
+    var cc = st.cctx, cw = st.cw, ch = st.ch, tw = st.caus.width * (st.small ? 1.1 : 0.9);
+    cc.globalCompositeOperation = 'source-over'; cc.clearRect(0, 0, cw, ch);
+    cc.globalCompositeOperation = 'lighter';
+    for (var layer = 0; layer < 2; layer++) {
+      var sc = layer ? 1.35 : 1, sz = tw * sc, ox = ((t * (layer ? -9 : 7) * 0.5) % sz + sz) % sz, oy = ((t * (layer ? 5 : -4) * 0.5) % sz + sz) % sz;
+      cc.globalAlpha = (layer ? 0.55 : 0.8) * (0.8 + 0.2 * Math.sin(t * 0.4 + layer));
+      for (var yy = -oy; yy < ch; yy += sz) for (var xx = -ox; xx < cw; xx += sz) cc.drawImage(st.caus, xx, yy, sz, sz);
+    }
+    cc.globalCompositeOperation = 'destination-in'; cc.globalAlpha = 1; cc.drawImage(st.cfade, 0, 0, cw, ch);
+    ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = light ? 0.07 : 0.13; ctx.drawImage(st.cc, 0, 0, W, H * 0.62);
+    // light shafts from the surface
+    var S = st.src, len = H * 1.25;
+    for (var i = 0; i < st.rays.length; i++) {
+      var R = st.rays[i], a = R.ang + Math.sin(t * R.sp + R.ph) * R.sw, wdt = R.w * (0.85 + 0.15 * Math.sin(t * R.sp * 1.7 + R.ph));
+      var breathe = 0.55 + 0.45 * Math.sin(t * R.sp * 2.3 + R.ph * 1.9);
+      var ex = S.x + Math.sin(a) * len, ey = S.y + Math.cos(a) * len, nx = Math.cos(a), ny = -Math.sin(a);
+      var half = len * wdt * 0.5;
+      var gr = ctx.createLinearGradient(S.x, S.y, ex, ey);
+      gr.addColorStop(0, 'rgba(170,255,240,' + (0.28 * R.a * breathe) + ')'); gr.addColorStop(0.55, 'rgba(90,220,215,' + (0.10 * R.a * breathe) + ')'); gr.addColorStop(1, 'rgba(60,190,200,0)');
+      ctx.globalAlpha = light ? 0.55 : 1; ctx.fillStyle = gr;
+      ctx.beginPath(); ctx.moveTo(S.x - nx * 6 * d, S.y - ny * 6 * d); ctx.lineTo(S.x + nx * 6 * d, S.y + ny * 6 * d);
+      ctx.lineTo(ex + nx * half, ey + ny * half); ctx.lineTo(ex - nx * half, ey - ny * half); ctx.closePath(); ctx.fill();
+    }
+    // marine snow, rising
+    ctx.fillStyle = '#d6f6ff';
+    for (var m = 0; m < st.motes.length; m++) {
+      var P = st.motes[m];
+      P.y -= (5 + 17 * P.z) * d * dt; P.x += Math.sin(t * 0.35 * P.tw + P.ph) * 3.5 * d * dt;
+      if (P.y < -6 * d) { P.y = H + 6 * d; P.x = rnd(0, W); }
+      ctx.globalAlpha = (0.18 + 0.5 * P.z) * (0.55 + 0.45 * Math.sin(t * P.tw + P.ph)) * (light ? 0.7 : 1);
+      var rr = (0.5 + 1.9 * P.z) * d; ctx.beginPath(); ctx.arc(P.x, P.y, rr, 0, 6.2832); ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+    // fish schools gliding
+    for (var s = 0; s < st.schools.length; s++) {
+      var SC = st.schools[s]; SC.x += SC.dir * SC.v * dt;
+      var cy = SC.y + Math.sin(t * 0.15 + SC.ph) * H * 0.045;
+      if ((SC.dir > 0 && SC.x > W + 120 * d) || (SC.dir < 0 && SC.x < -120 * d)) { SC.dir = -SC.dir; SC.y = H * rnd(0.55, 0.9); SC.v = rnd(16, 30) * d; SC.x = SC.dir > 0 ? -100 * d : W + 100 * d; }
+      var heading = Math.atan2(Math.cos(t * 0.15 + SC.ph) * H * 0.045 * 0.15, SC.v) * SC.dir;
+      for (var f = 0; f < SC.fish.length; f++) {
+        var F = SC.fish[f], fx = SC.x + F.ox + Math.sin(t * 0.7 + F.ph) * 9 * d, fy = cy + F.oy + Math.cos(t * 0.6 + F.ph) * 6 * d;
+        var wob = Math.sin(t * 5 + F.fl) * 0.12, flash = 0.5 + 0.5 * Math.sin(t * 0.9 + F.ph * 2);
+        ctx.save(); ctx.translate(fx, fy); ctx.rotate(heading + wob); ctx.scale(SC.dir, 1);
+        ctx.globalAlpha = (light ? 0.35 : 0.5) + 0.3 * flash * flash;
+        ctx.fillStyle = flash > 0.8 ? '#e6fbff' : '#8fd8de';
+        ctx.beginPath(); ctx.ellipse(0, 0, F.sz, F.sz * 0.30, 0, 0, 6.2832); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(-F.sz * 0.85, 0); ctx.lineTo(-F.sz * 1.45, -F.sz * 0.34 + wob * F.sz); ctx.lineTo(-F.sz * 1.45, F.sz * 0.34 + wob * F.sz); ctx.closePath(); ctx.fill();
+        ctx.restore();
+      }
+    }
+    ctx.globalAlpha = 1;
+    // the whale: a long slow crossing, then a long quiet gap
+    var Wh = st.whale, spr = Wh.spr, wl = spr.width;
+    if (!Wh.active) {
+      Wh.wait -= dt;
+      if (Wh.wait <= 0) { Wh.active = true; Wh.dir = -Wh.dir; Wh.speed = (W + wl) / rnd(130, 170); Wh.x = Wh.dir > 0 ? -wl : W; Wh.y = rnd(0.26, 0.36); }
+    } else {
+      Wh.x += Wh.dir * Wh.speed * dt;
+      if ((Wh.dir > 0 && Wh.x > W) || (Wh.dir < 0 && Wh.x < -wl)) { Wh.active = false; Wh.wait = rnd(35, 70); }
+      var fadeIn = Math.min(smooth(-wl, wl * 0.2, Wh.x), smooth(W, W - wl * 1.2, Wh.x));
+      var alpha = (light ? 0.28 : 0.42) * (Wh.dir > 0 ? smooth(-wl, wl * 0.3, Wh.x) * smooth(W + wl * 0.1, W - wl, Wh.x) : smooth(W, W - wl * 0.3, Wh.x) * smooth(-wl * 0.9, wl * 0.1, Wh.x));
+      if (!st.whaleTmp) { st.whaleTmp = document.createElement('canvas'); st.whaleTmp.width = wl; st.whaleTmp.height = Math.round(spr.height * 1.5); }
+      var wt = st.whaleTmp, wx = wt.getContext('2d'), N = 36, sw = wl / N, off = Math.round(spr.height * 0.25);
+      wx.clearRect(0, 0, wt.width, wt.height);                 // slices are composed at full strength, THEN faded as one image (no seams)
+      for (var k = 0; k < N; k++) {
+        var u = k / N, bend = Math.sin(6.2832 * (u * 0.8 - t * 0.16)) * Math.pow(u, 1.5) * spr.height * 0.10 + Math.sin(t * 0.12) * spr.height * 0.03 * u;
+        wx.drawImage(spr, k * sw, 0, sw + 1, spr.height, k * sw, off + bend, sw + 1, spr.height);
+      }
+      var baseY = H * Wh.y - spr.height * 0.5 - off;
+      ctx.globalAlpha = Math.max(0, alpha) * fadeIn; ctx.save();
+      if (Wh.dir < 0) { ctx.translate(Wh.x + wl, 0); ctx.scale(-1, 1); ctx.translate(-Wh.x, 0); }
+      ctx.drawImage(wt, Wh.x, baseY);
+      ctx.restore(); ctx.globalAlpha = 1;
+    }
+  }
+
   /* -------------------------------------------------------------- public API */
   window.T58SceneCanvas = {
     mount: function (kind, layer) {
@@ -368,6 +746,9 @@
         if (!document.createElement('canvas').getContext) return null;
         if (kind === 'ocean') return makeStage('ocean', layer, oceanFrame, oceanSetup);
         if (kind === 'forest') return makeStage('forest', layer, forestFrame, function (st) { st.keepMask = null; forestSetup(st); });
+        if (kind === 'gold') return makeStage('gold', layer, goldFrame, goldSetup, { gl: true });
+        if (kind === 'sakura') return makeStage('sakura', layer, sakuraFrame, sakuraSetup);
+        if (kind === 'abyss') return makeStage('abyss', layer, abyssFrame, abyssSetup);
       } catch (e) {}
       return null;
     }

@@ -90,6 +90,14 @@
     const tag = pair.is_cliff ? '<span style="color:#ffb4b4;">needle (cliff)</span>' : (pair.is_plateau ? '<span style="color:#b4ffcb;">plateau</span>' : 'mixed');
     title.innerHTML = `<strong>${hm.gene_a_label}</strong> &times; <strong>${hm.gene_b_label}</strong> — grid pass rate ${fmt(pair.fraction_of_grid_passing, 0)}% — ${tag}`;
     wrap.appendChild(title);
+    const verdict = document.createElement('div');
+    verdict.style.cssText = 'font-size:12.5px;color:#aaa;margin-bottom:8px;max-width:640px';
+    verdict.textContent = pair.is_cliff
+      ? 'Spike: the starred winner works, but a neighbouring setting fails. That usually means it was fitted to this exact history. Prefer a setting in the middle of a green area.'
+      : (pair.is_plateau
+        ? 'Plateau: the winner and every neighbour pass. Small changes in these two settings do not break it, which is what you want.'
+        : 'Mixed: some neighbours pass and some fail. Treat the winner with caution and look for a broader green area.');
+    wrap.appendChild(verdict);
 
     const table = document.createElement('table');
     table.className = 'heatmap-grid';
@@ -109,7 +117,10 @@
         const val = (cell === null || cell === undefined) ? null : cell;
         const isBase = (i === baseA && j === baseB);
         const color = (val === null) ? '#555' : (val >= 60 ? '#b4ffcb' : (val >= 30 ? '#ffe1a8' : '#ffb4b4'));
-        row += `<td class="${isBase ? 'base-cell' : ''}" style="color:${color};">${val === null ? '—' : fmt(val, 0)}</td>`;
+        // surface shading: red (fails) to green (passes), so a ridge or a lone spike is visible at a glance
+        const hue = val === null ? 0 : Math.max(0, Math.min(120, val * 1.2));
+        const bg = val === null ? 'transparent' : `hsla(${hue},65%,38%,${0.25 + 0.5 * Math.min(1, val / 100)})`;
+        row += `<td class="${isBase ? 'base-cell' : ''}" style="color:${color};background:${bg};">${val === null ? '—' : fmt(val, 0)}</td>`;
       });
       tr.innerHTML = row;
       table.appendChild(tr);

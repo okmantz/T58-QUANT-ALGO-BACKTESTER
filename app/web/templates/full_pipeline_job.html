@@ -102,7 +102,12 @@
     <div class="stat"><div class="label">Risk of ruin</div><div class="value" id="s-ror">-</div></div>
     <div class="stat"><div class="label">Elapsed</div><div class="value" id="s-elapsed">-</div></div>
   </div>
-  <ul class="reasons" id="s-reasons"></ul>
+  <div class="wf" id="s-waterfall" hidden>
+    <div class="wf-head"><b>Why this verdict</b><span id="wf-headline"></span></div>
+    <ol class="wf-steps" id="wf-steps"></ol>
+    <div class="wf-single" id="wf-single" hidden></div>
+  </div>
+  <details class="wf-raw"><summary>Full technical reasons</summary><ul class="reasons" id="s-reasons"></ul></details>
   <p class="note" id="s-refinement-note"></p>
   <p class="note" id="s-library-note"></p>
   <div class="links" id="s-report-links"></div>
@@ -316,6 +321,27 @@
             document.getElementById('s-payout-ci').textContent = mcSub(s.first_payout_ci95, s.any_attempt_first_payout_probability, s.first_payout_probability);
             document.getElementById('s-ror').textContent = fmt(s.risk_of_ruin_pct, 1) + '%';
             document.getElementById('s-elapsed').textContent = fmt(s.elapsed_seconds, 0) + 's';
+
+            // One-screen explanation: raw score -> each gate/cap that fired -> the single change that helps most.
+            (function (w) {
+              const box = document.getElementById('s-waterfall');
+              if (!w || !w.steps) { box.hidden = true; return; }
+              box.hidden = false;
+              document.getElementById('wf-headline').textContent = w.headline || '';
+              const ol = document.getElementById('wf-steps'); ol.innerHTML = '';
+              const tag = { score: 'Score', gate: 'Hard gate', cap: 'Cap', advisory: 'Advisory', info: 'Note', final: 'Verdict' };
+              const esc = x => String(x == null ? '' : x).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+              w.steps.forEach(st => {
+                const li = document.createElement('li');
+                li.className = 'wf-step ' + st.kind + (st.kind === 'final' ? ' ' + String(st.label).replace(' ', '_') : '');
+                li.innerHTML = `<div class="t"><span class="tag">${tag[st.kind] || ''}</span>${esc(st.label)}${st.measured && st.kind !== 'final' ? `<span class="m">${esc(st.measured)}</span>` : ''}</div>` +
+                  (st.detail ? `<div class="d">${esc(st.detail)}</div>` : '') + (st.fix ? `<div class="f"><b>To clear it:</b> ${esc(st.fix)}</div>` : '');
+                ol.appendChild(li);
+              });
+              const one = document.getElementById('wf-single');
+              if (w.single_change) { one.hidden = false; one.innerHTML = `<b>The one change that helps most:</b> ${esc(w.single_change.fix)}<div class="d" style="font-size:12px;color:var(--text-muted);margin-top:2px">${esc(w.single_change.label)}. ${esc(w.single_change.note)}</div>`; }
+              else one.hidden = true;
+            })(s.waterfall);
 
             const reasons = document.getElementById('s-reasons');
             reasons.innerHTML = '';

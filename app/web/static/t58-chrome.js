@@ -28,11 +28,11 @@
     function apply(theme) {
       if (theme === "light") {
         document.documentElement.setAttribute("data-theme", "light");
-        if (icon) icon.innerHTML = "&#9728;"; // sun
+        if (icon) icon.innerHTML = '<svg class="lu"><use href="#lu-sun"/></svg>'; // sun
         if (label) label.textContent = "Light theme";
       } else {
         document.documentElement.removeAttribute("data-theme");
-        if (icon) icon.innerHTML = "&#9789;"; // moon
+        if (icon) icon.innerHTML = '<svg class="lu"><use href="#lu-moon"/></svg>'; // moon
         if (label) label.textContent = "Dark theme";
       }
     }

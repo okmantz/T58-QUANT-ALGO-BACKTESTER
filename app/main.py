@@ -470,7 +470,7 @@ def run_multi_instrument_cli(
     full_mc_sims: int = 3000,
     walk_forward_folds: int = 4,
     robustness_neighbors: int = 6,
-    fitness_metric: str = "eval_pass_probability",
+    fitness_metric: str = "pass_gradient",
     seed: int = 42,
     promote: bool = True,
     cost_stress_enabled: bool = True,
@@ -1217,8 +1217,8 @@ def main():
     parser.add_argument("--refine-population", type=int, default=10, help="Iterative Refinement: configs per generation")
     parser.add_argument("--refine-generations", type=int, default=5, help="Iterative Refinement: number of generations")
     parser.add_argument(
-        "--refine-metric", default="eval_pass_probability",
-        choices=["composite_prop_score", "eval_pass_probability", "first_payout_probability",
+        "--refine-metric", default="pass_gradient",
+        choices=["pass_gradient", "edge_lb_r", "composite_prop_score", "eval_pass_probability", "first_payout_probability",
                  "expected_payout", "net_profit", "profit_factor", "sharpe_ratio"],
         help="Iterative Refinement: fitness metric to optimize for",
     )
@@ -1290,8 +1290,8 @@ def main():
     parser.add_argument("--search-robustness-neighbors", type=int, default=6,
                          help="Stage 3 parameter-neighborhood perturbation samples (0 disables the check).")
     parser.add_argument(
-        "--search-metric", default="eval_pass_probability",
-        choices=["composite_prop_score", "eval_pass_probability", "first_payout_probability",
+        "--search-metric", default="pass_gradient",
+        choices=["pass_gradient", "edge_lb_r", "composite_prop_score", "eval_pass_probability", "first_payout_probability",
                  "expected_payout", "net_profit", "profit_factor", "sharpe_ratio"],
         help="fitness metric used by Stage 2/3.",
     )
@@ -1378,7 +1378,7 @@ def main():
                          help="Walk-forward optimization: fraction of each rolling fold's window used for training")
     parser.add_argument("--wfo-population", type=int, default=8, help="Walk-forward optimization: GA population per fold")
     parser.add_argument("--wfo-generations", type=int, default=3, help="Walk-forward optimization: GA generations per fold")
-    parser.add_argument("--wfo-metric", default="eval_pass_probability", help="Walk-forward optimization: fitness metric")
+    parser.add_argument("--wfo-metric", default="pass_gradient", help="Walk-forward optimization: fitness metric")
     parser.add_argument("--wfo-seed", type=int, default=42, help="Walk-forward optimization: random seed")
 
     parser.add_argument("--cpcv", action="store_true",
@@ -1437,7 +1437,7 @@ def main():
                          help="Walk-forward-aware GA: rolling or anchored fold windows")
     parser.add_argument("--wfga-population", type=int, default=12, help="Walk-forward-aware GA: population size")
     parser.add_argument("--wfga-generations", type=int, default=6, help="Walk-forward-aware GA: generations")
-    parser.add_argument("--wfga-metric", default="eval_pass_probability", help="Walk-forward-aware GA: fitness metric")
+    parser.add_argument("--wfga-metric", default="pass_gradient", help="Walk-forward-aware GA: fitness metric")
     parser.add_argument("--wfga-seed", type=int, default=42, help="Walk-forward-aware GA: random seed")
 
     parser.add_argument("--full-pipeline", action="store_true",
@@ -1449,7 +1449,7 @@ def main():
                          help="Full Pipeline: rolling or anchored GA fold windows")
     parser.add_argument("--fp-population", type=int, default=12, help="Full Pipeline: GA population size")
     parser.add_argument("--fp-generations", type=int, default=6, help="Full Pipeline: GA generations")
-    parser.add_argument("--fp-metric", default="eval_pass_probability", help="Full Pipeline: fitness metric")
+    parser.add_argument("--fp-metric", default="pass_gradient", help="Full Pipeline: fitness metric")
     parser.add_argument("--fp-final-mc-sims", type=int, default=10000, help="Full Pipeline: Monte Carlo sims for the final report")
     parser.add_argument("--fp-seed", type=int, default=42, help="Full Pipeline: random seed")
     parser.add_argument("--fp-no-save-to-library", action="store_true",

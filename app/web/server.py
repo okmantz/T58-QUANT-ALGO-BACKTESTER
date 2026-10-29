@@ -122,7 +122,7 @@ from app.optimize.multi_objective import (    DEFAULT_OBJECTIVES, MultiObjective
 )
 from app.backtest.adaptive_risk import build_limit_aware_preset
 from app.optimize.distribution_summary import compute_distribution_summary
-from app.optimize.refinement import FITNESS_METRICS, OPTIMIZER_MODES, RefinementConfig, RefinementError, run_iterative_refinement
+from app.optimize.refinement import DEFAULT_FITNESS, FITNESS_METRICS, OPTIMIZER_MODES, SPEED_RUN_FITNESS, RefinementConfig, RefinementError, run_iterative_refinement
 from app.optimize.multi_market import AGGREGATION_METHODS, run_multi_market_search
 from app.optimize.walkforward_ga import WalkforwardGACancelled, run_walkforward_aware_refinement
 from app.orchestration.batch_test import BatchTestItem, run_batch_test
@@ -646,9 +646,22 @@ def _prefs_bootstrap_tag() -> str:
         prefs = ui_prefs.load()
     except Exception:  # noqa: BLE001
         prefs = {}
+    locked_bg: list = []
+    locked_th: list = []
+    try:
+        from app import achievements as _ach
+        _st = _ach.unlock_state()
+        locked_bg, locked_th = _st["locked_backgrounds"], _st["locked_themes"]
+        if prefs.get("t58-bg") in locked_bg:
+            prefs.pop("t58-bg", None)
+        if prefs.get("t58-ui-theme") in locked_th:
+            prefs.pop("t58-ui-theme", None)
+    except Exception:  # noqa: BLE001
+        pass
     blob = _json.dumps(prefs).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     csrf = _json.dumps(session.get("csrf_token", "")).replace("<", "\\u003c")
-    return ("<script>window.__T58_PREFS=" + blob + ";window.__T58_CSRF=" + csrf + ";</script>"
+    lock = _json.dumps({"bg": locked_bg, "theme": locked_th})
+    return ("<script>window.__T58_PREFS=" + blob + ";window.__T58_CSRF=" + csrf + ";window.__T58_LOCKED=" + lock + ";</script>"
             '<script src="/static/t58-prefs-sync.js"></script>')
 
 
@@ -1838,6 +1851,37 @@ def _find_library_match_for_current_strategy(strategy_name: str):
     return best_by_display_name
 
 
+def _dashboard_focus_options(current: dict | None, board_rows: list, cards: list) -> tuple[list, str]:
+    """Options for the dashboard's "Your focus" switcher: every saved Strategy Library entry plus any tracked run that is
+    not saved yet. Values are opaque tokens parsed by /current-strategy/set (``lib|type|filename`` or ``run|name|instrument|tf``).
+    Returns (options, value-of-the-current-focus-or-empty)."""
+    options, seen = [], set()
+    for r in board_rows:
+        val = f"lib|{r['strategy_type']}|{r['filename']}"
+        options.append({"value": val, "label": r["display_name"], "group": "Strategy Library",
+                        "stage": r["promotion"]["stage_title"]})
+        seen.add(r["display_name"].strip().lower())
+        if r.get("metadata_name"):
+            seen.add(r["metadata_name"].strip().lower())
+    for c in cards:
+        nm = str(c.get("name") or "")
+        if not nm or nm.strip().lower() in seen:
+            continue
+        options.append({"value": f"run|{nm}|{c.get('instrument') or ''}|{c.get('timeframe') or ''}", "label": nm,
+                        "group": "Tracked runs (not saved to the library)", "stage": c.get("stage") or "Tested"})
+    focus_value = ""
+    if current:
+        match = champion_board.match_current_to_row(current, board_rows)
+        if match is not None:
+            focus_value = f"lib|{match['strategy_type']}|{match['filename']}"
+        else:
+            focus_value = f"run|{current.get('strategy_name', '')}|{current.get('instrument', '')}|{current.get('timeframe', '')}"
+            if not any(o["value"] == focus_value for o in options):
+                options.append({"value": focus_value, "label": current.get("strategy_name", ""),
+                                "group": "Tracked runs (not saved to the library)", "stage": "Tracked"})
+    return options, focus_value
+
+
 def _dashboard_cards_and_flow(stats: dict, board_rows: list) -> tuple[list, dict]:
     """Friendly strategy cards (one per strategy, newest first) + real per-stage counts for the living pipeline diagram.
     Everything comes from saved runs / the Champion Board; nothing is invented."""
@@ -1870,6 +1914,9 @@ def _dashboard_cards_and_flow(stats: dict, board_rows: list) -> tuple[list, dict
             "net": s.get("net_profit") or 0, "sharpe": s.get("sharpe_ratio"), "win": s.get("win_rate"),
             "dd": s.get("max_drawdown_pct"), "trades": s.get("trades"), "passed": bool(s.get("single_run_passed")),
             "verdict": (row or {}).get("verdict"), "plan": plan, "report": s.get("report_html"),
+            "row_type": (row or {}).get("strategy_type"), "row_file": (row or {}).get("filename"),
+            "can_promote": bool(row and row["promotion"].get("can_promote")),
+            "next_stage": (row or {}).get("promotion", {}).get("next_stage_title"),
         })
     for r in board_rows:  # saved but never run: still a card, so nothing hides
         if r["filename"] in used or len(cards) >= 16:
@@ -1879,6 +1926,9 @@ def _dashboard_cards_and_flow(stats: dict, board_rows: list) -> tuple[list, dict
             "stage_idx": champion_board.PROMOTION_STAGES.index(r["promotion"]["stage"]), "spark": [], "up": True,
             "net": None, "sharpe": None, "win": None, "dd": None, "trades": None, "passed": False,
             "verdict": r.get("verdict"), "plan": _ns.resolve(r, None), "report": None,
+            "row_type": r.get("strategy_type"), "row_file": r.get("filename"),
+            "can_promote": bool(r["promotion"].get("can_promote")),
+            "next_stage": r["promotion"].get("next_stage_title"),
         })
     counts = [0] * len(champion_board.PROMOTION_STAGES)
     for r in board_rows:
@@ -1954,8 +2004,16 @@ def dashboard():
     except Exception:  # noqa: BLE001 - the card is informational; never break the dashboard
         _controls = None
     strategy_cards, pipeline_flow = _dashboard_cards_and_flow(dashboard_stats, board_rows)
+    focus_options, focus_value = _dashboard_focus_options(current, board_rows, strategy_cards)
+    for _c in strategy_cards:
+        _c["is_focus"] = bool(focus_value) and focus_value in (
+            f"lib|{_c.get('row_type')}|{_c.get('row_file')}",
+            f"run|{_c.get('name')}|{_c.get('instrument') or ''}|{_c.get('timeframe') or ''}",
+        )
     return render_template(
         "dashboard.html",
+        focus_options=focus_options,
+        focus_value=focus_value,
         strategy_cards=strategy_cards,
         pipeline_flow=pipeline_flow,
         pipeline_controls=_controls,
@@ -2139,7 +2197,28 @@ def set_current_strategy():
     name = (form.get("strategy_name") or "").strip()
     instrument = (form.get("instrument") or "").strip()
     timeframe = (form.get("timeframe") or "").strip()
-    if name and instrument:
+    lib_type = (form.get("library_type") or "").strip()
+    lib_file = (form.get("library_filename") or "").strip()
+    focus = (form.get("focus") or "").strip()      # the dashboard switcher: "lib|type|file" or "run|name|instrument|tf"
+    if focus.startswith("lib|"):
+        parts = focus.split("|", 2)
+        if len(parts) == 3:
+            lib_type, lib_file = parts[1], parts[2]
+    elif focus.startswith("run|"):
+        parts = (focus.split("|") + ["", "", ""])[1:4]
+        name, instrument, timeframe = parts[0], parts[1], parts[2]
+    if lib_type and lib_file:
+        # A saved library entry: resolve a display name + the latest run's instrument/timeframe when there is one.
+        row = next((r for r in champion_board.list_board() if r["strategy_type"] == lib_type and r["filename"] == lib_file), None)
+        if row is not None:
+            name = name or row.get("metadata_name") or row["display_name"]
+            if not instrument:
+                for s_ in run_history.dashboard_data().get("strategies") or []:
+                    if str(s_.get("strategy_name") or "").strip().lower() in (row["display_name"].lower(), (row.get("metadata_name") or "").lower()):
+                        instrument, timeframe = s_.get("instrument") or "", timeframe or s_.get("timeframe") or ""
+                        break
+            strategy_state.set_current_strategy(name, instrument or "", timeframe, library_type=lib_type, library_filename=lib_file)
+    elif name and (instrument or focus.startswith("run|")):
         matched = _find_library_match_for_current_strategy(name)
         strategy_state.set_current_strategy(
             name, instrument, timeframe,
@@ -2724,7 +2803,7 @@ def _run_optimize_simple_job(job_id: str, df, strategy, risk, rules, engines, fo
                         RefinementConfig(enabled=True,
                                          population_size=int(form.get("population_size", 10) or 10),
                                          generations=int(form.get("generations", 5) or 5),
-                                         fitness_metric=form.get("fitness_metric", "eval_pass_probability") or "eval_pass_probability"),
+                                         fitness_metric=form.get("fitness_metric", DEFAULT_FITNESS) or DEFAULT_FITNESS),
                         progress_cb=lambda m: JOB_MANAGER.log(job_id, m),
                     )
                     summary[eng] = {"ran": True, "result": str(res)[:500]}
@@ -5787,7 +5866,7 @@ def refine_start():
 
         cfg = RefinementConfig(
             enabled=True,
-            fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
+            fitness_metric=form.get("fitness_metric", DEFAULT_FITNESS),
             population_size=int(form.get("population_size", 10) or 10),
             generations=int(form.get("generations", 5) or 5),
             elite_count=int(form.get("elite_count", 2) or 2),
@@ -5995,7 +6074,7 @@ def multi_market_start():
         mc_cfg = MonteCarloConfig(n_simulations=int(form.get("n_sims", 2000) or 2000))
         cfg = RefinementConfig(
             enabled=True,
-            fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
+            fitness_metric=form.get("fitness_metric", DEFAULT_FITNESS),
             optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
             population_size=int(form.get("population_size", 10) or 10),
             generations=int(form.get("generations", 5) or 5),
@@ -6423,7 +6502,7 @@ def full_pipeline_start_batch():
             ga_search_mc_sims=int(form.get("ga_search_mc_sims", 200) or 200),
             optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
             adaptive_risk_enabled=form.get("adaptive_risk_enabled") == "on",
-            fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
+            fitness_metric=form.get("fitness_metric", DEFAULT_FITNESS),
             final_mc_sims=int(form.get("final_mc_sims", 10000) or 10000),
             baseline_mc_sims=int(form.get("baseline_mc_sims", 2000) or 2000),
             holdout_frac=float(form.get("holdout_frac", 0.2) or 0.2),
@@ -6631,7 +6710,7 @@ def full_pipeline_schedule_batch():
             ga_search_mc_sims=int(form.get("ga_search_mc_sims", 200) or 200),
             optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
             adaptive_risk_enabled=form.get("adaptive_risk_enabled") == "on",
-            fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
+            fitness_metric=form.get("fitness_metric", DEFAULT_FITNESS),
             final_mc_sims=int(form.get("final_mc_sims", 10000) or 10000),
             baseline_mc_sims=int(form.get("baseline_mc_sims", 2000) or 2000),
             holdout_frac=float(form.get("holdout_frac", 0.2) or 0.2),
@@ -6874,7 +6953,7 @@ def full_pipeline_start():
             ga_search_mc_sims=int(form.get("ga_search_mc_sims", 200) or 200),
             optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
             adaptive_risk_enabled=form.get("adaptive_risk_enabled") == "on",
-            fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
+            fitness_metric=form.get("fitness_metric", DEFAULT_FITNESS),
             final_mc_sims=int(form.get("final_mc_sims", 10000) or 10000),
             baseline_mc_sims=int(form.get("baseline_mc_sims", 2000) or 2000),
             holdout_frac=float(form.get("holdout_frac", 0.2) or 0.2),
@@ -6967,6 +7046,15 @@ def full_pipeline_job_stop(job_id):
     return jsonify({"found": True, "stopping": True})
 
 
+def _verdict_waterfall(result) -> dict | None:
+    """The one-screen 'why this verdict' steps, built from the SAME stored reasons the verdict used (never recomputed)."""
+    try:
+        from app.scoring.verdict_waterfall import build_waterfall
+        return build_waterfall(result.verdict, result.verdict_reasons, getattr(result, "scorecard", None))
+    except Exception:  # noqa: BLE001 -- an explanation must never break the results page
+        return None
+
+
 @app.route("/full-pipeline/job/<job_id>/status.json")
 def full_pipeline_job_status(job_id):
     job = JOB_MANAGER.get(job_id)
@@ -6982,6 +7070,7 @@ def full_pipeline_job_status(job_id):
             "verdict": result.verdict,
             "ladder_stage": _lad or _ladder_filter(result.verdict),
             "verdict_reasons": result.verdict_reasons,
+            "waterfall": _verdict_waterfall(result),
             "baseline_trades": len(result.baseline_bt.trades),
             "baseline_net_profit": result.baseline_bt.statistics.net_profit,
             "final_trades": len(result.final_bt.trades),
@@ -7188,7 +7277,7 @@ def wfo_start():
             population_size=int(form.get("population_size", 8) or 8),
             generations=int(form.get("generations", 3) or 3),
             search_monte_carlo_sims=int(form.get("search_mc_sims", 200) or 200),
-            fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
+            fitness_metric=form.get("fitness_metric", DEFAULT_FITNESS),
         )
 
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
@@ -7569,7 +7658,7 @@ def wfga_start():
             population_size=int(form.get("population_size", 10) or 10),
             generations=int(form.get("generations", 5) or 5),
             search_monte_carlo_sims=int(form.get("search_mc_sims", 200) or 200),
-            fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
+            fitness_metric=form.get("fitness_metric", DEFAULT_FITNESS),
         )
 
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
@@ -9150,7 +9239,7 @@ def quickopt_start():
             # not owned); this route + the template form now override them.
             ga_population=int(form.get("ga_population", 32) or 32),
             ga_generations=int(form.get("ga_generations", 12) or 12),
-            fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
+            fitness_metric=form.get("fitness_metric", DEFAULT_FITNESS),
             optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
             n_folds=int(form.get("n_folds", 4) or 4),
             save_to_library=form.get("save_to_library", "on") == "on",
@@ -10531,6 +10620,14 @@ def forward_test_info():
                            **_alpaca_template_context())
 
 
+def _deploy_requires_saved_strategy(form):
+    """Deploy pages no longer have a manual SMA builder: the person must pick a saved strategy. Returns an error response or None."""
+    mode = (form.get("strategy_mode") or "").strip()
+    if not mode or not (form.get(f"existing_strategy_{mode}") or "").strip():
+        return jsonify({"ok": False, "error": "Select a saved strategy first (the Strategy dropdown). Save one from Create, Optimize or the Library."}), 400
+    return None
+
+
 @app.route("/forward-test/start", methods=["POST"])
 def forward_test_start():
     from app.forward_test.engine import ForwardTestConfig, ForwardTestSession
@@ -10549,6 +10646,9 @@ def forward_test_start():
         if account is None:
             return jsonify({"ok": False, "error": "Select a saved MT5 account first (add one under Settings -> API Keys)."}), 400
 
+        _no_pick = _deploy_requires_saved_strategy(form)
+        if _no_pick:
+            return _no_pick
         try:
             strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
         except (StrategyError, RefinementError) as exc:
@@ -10830,6 +10930,9 @@ def deploy_live_start():
     guard = _web_live_deploy_guard()
     if guard:
         return guard
+    _no_pick = _deploy_requires_saved_strategy(request.form)
+    if _no_pick:
+        return _no_pick
     from app.live_deploy.execution_engine import LiveExecutionConfig, LiveExecutionSession
     from app.live_deploy.broker_registry import build_adapter
     from app.live_deploy.live_settings import load_accounts
@@ -12145,6 +12248,19 @@ def forge_job_status(job_id):
     })
 
 
+@app.route("/trial-ledger")
+def trial_ledger_page():
+    """Plain-language view of how many trials the Deflated Sharpe check corrects for (reads the same ledger the verdict reads)."""
+    from app.validation.trial_ledger_plain import plain_summary
+    return render_template("trial_ledger.html", s=plain_summary(), active_page="graveyard")
+
+
+@app.route("/api/trial-ledger")
+def trial_ledger_api():
+    from app.validation.trial_ledger_plain import plain_summary
+    return jsonify(plain_summary())
+
+
 @app.route("/graveyard")
 def graveyard_view():
     """Strategy Graveyard browser -- Owen's ask: 'this should be open
@@ -12166,12 +12282,25 @@ def graveyard_view():
     for f in files:
         f["label"] = gd.file_label(f)
     selected_path = (request.args.get("path") or "").strip()
-    if selected_path not in {f["path"] for f in files}:
+    all_markets = selected_path == "ALL"
+    if not all_markets and selected_path not in {f["path"] for f in files}:
         selected_path = files[0]["path"] if files else ""
     rows: list[dict] = []
     clusters = []
-    if selected_path:
+    inst_filter = (request.args.get("inst") or "").strip()
+    text_q = (request.args.get("q") or "").strip().lower()
+    if all_markets:
+        # Search across EVERY market's graveyard at once; each row remembers which file it came from so its detail panel still works.
+        for f in files:
+            if inst_filter and f.get("instrument") != inst_filter:
+                continue
+            for r in load_graveyard(f["path"]):
+                r["_path"], r["_market"] = f["path"], f["label"]
+                rows.append(r)
+    elif selected_path:
         rows = load_graveyard(selected_path)
+        for r in rows:
+            r["_path"] = selected_path
         clusters = [c.to_dict() for c in summarize_graveyard(rows, top_n=100)]
     family_filter = (request.args.get("family") or "").strip()
     why_filter = (request.args.get("why") or "").strip()
@@ -12189,16 +12318,27 @@ def graveyard_view():
         why_counts[w] = why_counts.get(w, 0) + 1
     all_families = [{"id": k, "title": gd.family_title(k), "n": v} for k, v in sorted(fam_counts.items())]
     why_options = [{"title": k, "n": v} for k, v in sorted(why_counts.items(), key=lambda kv: -kv[1])]
-    shown = [r for r in rows
-             if (not family_filter or r.get("family") == family_filter)
-             and (not why_filter or (gd.failure_label(r.get("primary_failure")) or "Other") == why_filter)]
+
+    def _matches(r: dict) -> bool:
+        if family_filter and r.get("family") != family_filter:
+            return False
+        if why_filter and (gd.failure_label(r.get("primary_failure")) or "Other") != why_filter:
+            return False
+        if text_q:
+            hay = " ".join(str(x) for x in (gd.family_title(r.get("family")), r.get("family"), gd.friendly_settings(r.get("param_signature")),
+                                            gd.failure_label(r.get("primary_failure")), r.get("_market", ""))).lower()
+            if not all(tok in hay for tok in text_q.split()):
+                return False
+        return True
+
+    shown = [r for r in rows if _matches(r)]
     if sort == "recent":
         shown = list(reversed(shown))
     else:
         shown.sort(key=lambda r: -(r.get("fitness_score") if isinstance(r.get("fitness_score"), (int, float)) else float("-inf")))
     limit = 150
     try:
-        limit = max(25, min(2000, int(request.args.get("limit", "150"))))
+        limit = max(25, min(100000, int(request.args.get("limit", "150"))))
     except ValueError:
         pass
     items = [{
@@ -12209,13 +12349,20 @@ def graveyard_view():
         "oos": r.get("oos_result"),
         "trades": r.get("n_trades"),
         "score": r.get("fitness_score"),
+        "path": r.get("_path", selected_path), "market": r.get("_market", ""),
     } for r in shown[:limit]]
+    instruments = sorted({f.get("instrument") for f in files if f.get("instrument")})
+    try:
+        revive_datasets = [{"name": d["full_name"], "label": d["name"]} for g in list_datasets_grouped_for_picker() for d in g["files"] if not d.get("empty")]
+    except Exception:  # noqa: BLE001 -- the revive picker is optional
+        revive_datasets = []
     memory = _graveyard_memory_context()
     return render_template(
         "graveyard.html", memory=memory,
         files=files, selected_path=selected_path, clusters=clusters,
         total_rows=len(rows), family_filter=family_filter, why_filter=why_filter, sort=sort,
         all_families=all_families, why_options=why_options, items=items, n_shown=len(shown), limit=limit,
+        all_markets=all_markets, inst_filter=inst_filter, text_q=text_q, instruments=instruments, revive_datasets=revive_datasets,
         active_page="graveyard",
     )
 
@@ -12306,6 +12453,11 @@ def graveyard_auto_optimize():
     plan = gd.optimize_plan(row)
     ctx = gd.context_for(row, path)
     lab = gd._lab_context(row)
+    # "Revive on a new market": the same idea, rebuilt for ANOTHER dataset. A setup that died on one market says nothing about another
+    # (each market keeps its own graveyard), so this is a fresh test, not a re-run of the failed one.
+    new_ds = (request.args.get("dataset") or "").strip()
+    if new_ds and not any(new_ds == d["full_name"] for g in list_datasets_grouped_for_picker() for d in g["files"]):
+        return jsonify({"ok": False, "error": "That market is not in your data library."}), 400
     try:
         if lab:
             from app.discovery_lab.codegen import render
@@ -12313,7 +12465,11 @@ def graveyard_auto_optimize():
             text = render({"family": lab["family"], "params": lab["params"], "stop_atr": lab["stop_atr"], "target_r": lab["target_r"],
                            "label": row.get("param_signature") or "", "train": {}, "val": {}, "test": {}}, str(lab["dataset"]),
                           int(lab.get("bar_minutes") or 0), base)
-            stype, ext, dataset = "python", ".py", lab["dataset"]
+            if new_ds:
+                base = safe_filename_stem(f"Revived {gd.family_title(row.get('family'))} {new_ds.split('/')[-1].replace('.csv', '')}", "revived")
+                text = render({"family": lab["family"], "params": lab["params"], "stop_atr": lab["stop_atr"], "target_r": lab["target_r"],
+                               "label": row.get("param_signature") or "", "train": {}, "val": {}, "test": {}}, new_ds, int(lab.get("bar_minutes") or 0), base)
+            stype, ext, dataset = "python", ".py", (new_ds or lab["dataset"])
         else:
             from app.search.strategy_space import FAMILIES
             fam = FAMILIES.get(row.get("family"))
@@ -12322,7 +12478,10 @@ def graveyard_auto_optimize():
             cfg = dict(fam.build(ctx["params"]))
             base = safe_filename_stem(f"Revived {gd.family_title(row.get('family'))} {str(ctx['dataset']).split('/')[-1].replace('.csv', '')}", "revived")
             cfg["name"] = base
-            text, stype, ext, dataset = json.dumps(cfg, indent=2, default=str), "manual", ".json", ctx["dataset"]
+            if new_ds:
+                base = safe_filename_stem(f"Revived {gd.family_title(row.get('family'))} {new_ds.split('/')[-1].replace('.csv', '')}", "revived")
+                cfg["name"] = base
+            text, stype, ext, dataset = json.dumps(cfg, indent=2, default=str), "manual", ".json", (new_ds or ctx["dataset"])
         for k in range(0, 50):
             fn = f"{base}{'' if k == 0 else '_' + str(k + 1)}{ext}"
             try:
@@ -12336,6 +12495,65 @@ def graveyard_auto_optimize():
         return jsonify({"ok": False, "error": f"Couldn't rebuild it: {exc}"}), 500
     q = {"strategy_pick": f"{stype}::{saved.name}", "existing_dataset": dataset, "goal": plan["goal"], "why": plan["why"]}
     return jsonify({"ok": True, "name": saved.name, "url": "/optimize-simple?" + urlencode(q), "goal": plan["title"]})
+
+
+# ---------------------------------------------------------------------------
+# Rescue search -- structural variants of a weak Manual strategy (side, stop/target, exits, hours), picked on the training part of the data and
+# judged on a holdout nobody scored. See app/optimize/rescue.py for the honesty rules.
+# ---------------------------------------------------------------------------
+@app.route("/rescue")
+def rescue_form():
+    ctx = _simple_pickers()
+    ctx["prefill"] = {"strategy_pick": request.args.get("strategy_pick", ""), "existing_dataset": request.args.get("existing_dataset", "")}
+    return render_template("rescue.html", active_page="rescue", **ctx)
+
+
+def _finite_or_none(x):
+    return x if isinstance(x, (int, float)) and x == x and abs(x) != float('inf') else None
+
+
+def _run_rescue_job(job_id: str, df, cfg: dict, risk: RiskConfig, label: str) -> None:
+    from app.optimize.rescue import rescue
+    try:
+        out = rescue(df, cfg, risk, progress=lambda m: JOB_MANAGER.log(job_id, m), ledger_label=f"rescue:{label}"[:80])
+        JOB_MANAGER.finish(job_id, result={
+            "headline": out.headline(), "rescued": out.rescued, "trials": out.trials, "changes": out.changes,
+            "base_train": _finite_or_none(out.base_train), "best_train": _finite_or_none(out.best_train),
+            "base_holdout": _finite_or_none(out.base_holdout), "best_holdout": _finite_or_none(out.best_holdout),
+            "steps": out.steps, "config": out.best_cfg,
+        })
+    except Exception as exc:  # noqa: BLE001
+        JOB_MANAGER.fail(job_id, f"Rescue failed: {exc}")
+
+
+@app.route("/api/rescue/start", methods=["POST"])
+def rescue_start():
+    from app.strategy.manual import ManualStrategy
+    form = request.form
+    try:
+        df, active_label, _note, dataset_error = _resolve_dataset(form, request.files)
+        if dataset_error:
+            return jsonify({"ok": False, "error": dataset_error}), 400
+        strategy = _simple_load_strategy(form)
+        if not isinstance(strategy, ManualStrategy):
+            return jsonify({"ok": False, "error": "Rescue works on Manual Builder strategies, because it edits their rules. Python, PineScript and MQL5 strategies can use the Optimize page instead."}), 400
+        kw = {"initial_balance": 100000.0, "pip_size": 0.0001}
+        kw.update(full_risk_kwargs(form))
+        risk = RiskConfig(**kw)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    job_id = JOB_MANAGER.create(tool="Rescue", page_template="/rescue", log=[f"Loaded {len(df)} bars from {active_label}."], instrument=active_label)
+    JOB_MANAGER.prune(max_age_seconds=6 * 3600)
+    threading.Thread(target=_run_rescue_job, args=(job_id, df, copy.deepcopy(strategy.config), risk, getattr(strategy, "name", "strategy")), daemon=True).start()
+    return jsonify({"ok": True, "job_id": job_id})
+
+
+@app.route("/api/rescue/<job_id>")
+def rescue_status(job_id):
+    job = JOB_MANAGER.get(job_id)
+    if job is None:
+        return jsonify({"found": False}), 404
+    return jsonify({"found": True, "done": job["done"], "error": job["error"], "log": job["log"], "result": job.get("result")})
 
 
 # ---------------------------------------------------------------------------
@@ -12970,7 +13188,7 @@ def speed_run_start():
             max_concurrent_validations=int(form.get("max_concurrent_validations", 2) or 2),
             validation_folds=int(form.get("validation_folds", 3) or 3),
             validation_final_mc_sims=int(form.get("validation_final_mc_sims", 3000) or 3000),
-            fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
+            fitness_metric=form.get("fitness_metric", SPEED_RUN_FITNESS),
             save_winner_to_library=form.get("save_to_library") == "on",
             random_seed=int(form.get("random_seed", 42) or 42),
             reset_on_breach=form.get("reset_on_breach", "on") == "on",
@@ -13455,7 +13673,7 @@ def speed_run_multi_instrument_start():
             max_concurrent_validations=int(form.get("max_concurrent_validations", 2) or 2),
             validation_folds=int(form.get("validation_folds", 3) or 3),
             validation_final_mc_sims=int(form.get("validation_final_mc_sims", 3000) or 3000),
-            fitness_metric=form.get("fitness_metric", "eval_pass_probability"),
+            fitness_metric=form.get("fitness_metric", SPEED_RUN_FITNESS),
             save_winner_to_library=form.get("save_to_library") == "on",
             random_seed=int(form.get("random_seed", 42) or 42),
             reset_on_breach=form.get("reset_on_breach", "on") == "on",

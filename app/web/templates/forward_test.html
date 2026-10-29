@@ -38,7 +38,7 @@
 {% else %}
   <div class="lc-card">
     <h3>No champion yet</h3>
-    <p class="lc-hint">Nothing has earned Validated in <a href="/champion-simple" style="color:var(--lc-acc);">Champion</a> — you can still forward test a Manual Builder setup, but a champion is what belongs here.</p>
+    <p class="lc-hint">Nothing has earned Validated in <a href="/champion-simple" style="color:var(--lc-acc);">Champion</a> — pick any saved strategy below, but a champion is what belongs here.</p>
   </div>
 {% endif %}
 
@@ -94,8 +94,8 @@
   <div class="lc-card">
     <h3>2. Strategy</h3>
     <label class="flabel" for="lc-deploy-strategy-pick">Saved strategy</label>
-    <select class="inp" id="lc-deploy-strategy-pick">
-      <option value="">— use the Manual Strategy Builder below —</option>
+    <select class="inp" id="lc-deploy-strategy-pick" required>
+      <option value="" disabled selected>Select a strategy…</option>
       {% for t, label in [('manual', 'Manual'), ('python', 'Python'), ('pinescript', 'PineScript'), ('mql5', 'MQL5')] %}
       <optgroup label="{{ label }}">
         {% for s in strategies if s.type == t %}
@@ -106,15 +106,7 @@
     </select>
     <input type="hidden" name="strategy_mode" id="ft-strategy-mode" value="manual">
     <input type="hidden" id="ft-existing-strategy" name="existing_strategy_manual" value="">
-    <p class="lc-hint" id="ft-strategy-note" style="margin:6px 0 12px;">Picking a saved strategy is what the forward test runs — the builder below only applies when nothing is picked.</p>
-    <div class="lc-row">
-      <div class="lc-col"><label class="flabel">SMA fast (manual builder)</label><input type="number" name="sma_fast" value="20"></div>
-      <div class="lc-col"><label class="flabel">SMA slow (manual builder)</label><input type="number" name="sma_slow" value="50"></div>
-    </div>
-    <div class="lc-row">
-      <div class="lc-col"><label class="flabel">Stop loss (pips)</label><input type="number" name="sl_pips" value="20"></div>
-      <div class="lc-col"><label class="flabel">Take profit (pips)</label><input type="number" name="tp_pips" value="40"></div>
-    </div>
+    <p class="lc-hint" id="ft-strategy-note" style="margin:6px 0 12px;">Pick the saved strategy to forward test. Stop loss, take profit and the rest of its logic come from the strategy itself.</p>
   </div>
 
   <div class="lc-card">
@@ -209,14 +201,14 @@
         mode.value = 'manual';
         hidden.name = 'existing_strategy_manual';
         hidden.value = '';
-        if (note) note.textContent = 'Forward test will run the Manual Strategy Builder parameters below.';
+        if (note) note.textContent = 'Select a strategy to continue.';
         return;
       }
       var i = v.indexOf('::');
       mode.value = v.slice(0, i);
       hidden.name = 'existing_strategy_' + v.slice(0, i);
       hidden.value = v.slice(i + 2);
-      if (note) note.textContent = 'Forward test will run the saved ' + v.slice(0, i) + ' strategy "' + v.slice(i + 2) + '". The builder fields below are ignored.';
+      if (note) note.textContent = 'Forward test will run the saved ' + v.slice(0, i) + ' strategy "' + v.slice(i + 2) + '".';
     }
     pick.addEventListener('change', sync);
     {% if prefill_strategy %}

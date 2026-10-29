@@ -52,7 +52,9 @@ class MonteCarloConfig:
     # daily-loss limit, the consistency rule and the 5x$200 winning-day count
     # are all per-day rules; resampling single trades (or arbitrary trade
     # blocks) cuts days in half and changes how often those rules bind.
-    day_block_days: int = 3
+    # Calibrated 2026-10-29 (scripts-free experiment, see README 'Monte Carlo'): on processes with a known true pass rate, 1-day blocks
+    # matched the i.i.d. bootstrap's error while 3- and 5-day blocks added 4-8 points of mean absolute error with no bias benefit.
+    day_block_days: int = 1
     # 2026-10 audit: feed each resampled trade's MAE/MFE (dollars) into the account so
     # floating-drawdown / intraday-trailing / floating-daily-loss rules are checked on the
     # open-P&L range, not just closed P&L. The excursions are resampled with the SAME index
@@ -120,11 +122,11 @@ def default_method_for_adaptive_risk(adaptive_risk) -> str:
     supposed to be protecting. `block_bootstrap` preserves local runs of
     consecutive trades instead.
 
-    Returns "block_bootstrap" always now (both branches) -- kept as a
+    Returns "day_block_bootstrap" (one method everywhere, matching MonteCarloConfig.method) -- kept as a
     function (rather than deleted) so every existing caller keeps working
     unchanged. A caller that wants the old i.i.d. behavior regardless can
     still pass method="bootstrap" explicitly."""
-    return "block_bootstrap"
+    return "day_block_bootstrap"
 
 
 @dataclass
@@ -429,7 +431,26 @@ def _resample_indices(rng: np.random.Generator, n: int, method: str, block_size:
 
 def _day_groups(trades) -> tuple[list, list]:
     """Indices of trades per session day (chronological) and the day dates."""
-    from app.data.trading_day import trading_day
+    from app.data.trading_day import trading_day, trading_days
+    # SPEED (2026-10): one vectorized pass instead of a pandas Timestamp + tz conversion per trade. ``trading_days`` is the
+    # elementwise-pinned twin of ``trading_day`` (tests/search/test_v913_progress_explorer_speed.py); any input it cannot
+    # take as one index (mixed timezones, NaT) falls through to the original per-trade loop unchanged.
+    n = len(trades)
+    try:
+        entry = pd.DatetimeIndex([pd.Timestamp(t.entry_time) for t in trades])
+        if n == 0 or entry.isna().any():
+            raise ValueError("needs the scalar path")
+        order = np.argsort(entry.asi8, kind="stable")           # == sorted(range(n), key=Timestamp), ties keep trade order
+        day_dates = trading_days(entry[order], tz="America/Chicago", roll_hour=17)
+        day_ts = pd.DatetimeIndex(pd.to_datetime(list(day_dates)))
+        change = np.ones(n, dtype=bool)
+        change[1:] = day_ts.asi8[1:] != day_ts.asi8[:-1]
+        starts = np.flatnonzero(change)
+        ends = np.append(starts[1:], n)
+        groups_fast = [order[a:b].astype(np.int64) for a, b in zip(starts, ends)]
+        return groups_fast, [pd.Timestamp(day_ts[a]) for a in starts]
+    except Exception:  # noqa: BLE001 -- exact original semantics as the fallback
+        pass
     order = sorted(range(len(trades)), key=lambda i: pd.Timestamp(trades[i].entry_time))
     groups: list[list[int]] = []
     dates: list = []
@@ -937,6 +958,15 @@ def _mc_rows_vectorized(*, n_sims, rng, cfg, rules, base_pnls, base_risks, has_r
 
     fast = use_day_blocks and not use_regime_shuffle and groups is not None
     if fast:
+        # SPEED (2026-10): the slippage stress and the MAE/MFE adjustment are elementwise, so applying them once to the
+        # per-trade arrays and gathering by index gives bit-identical values to applying them to every gathered row
+        # on every simulation step (what this used to do, L times per chunk).
+        st_pnls = _apply_slippage_stress(base_pnls, stress)
+        st_mae = st_mfe = None
+        if base_mae is not None:
+            _d = st_pnls - base_pnls
+            st_mae = np.minimum(base_mae + np.minimum(_d, 0.0), np.minimum(st_pnls, 0.0))
+            st_mfe = np.maximum(base_mfe + np.maximum(_d, 0.0), np.maximum(st_pnls, 0.0))
         nd = len(groups)
         day_tables = build_day_tables(gdates)
         avg_len = max(1, int(len(tables.order)))
@@ -966,12 +996,11 @@ def _mc_rows_vectorized(*, n_sims, rng, cfg, rules, base_pnls, base_risks, has_r
 
             def get_step(t, idx2=idx2, slot2=slot2, last2=last2):
                 ix = idx2[t]
-                pn = _apply_slippage_stress(base_pnls[ix], stress)
+                pn = st_pnls[ix]
                 mae = mfe = None
                 if base_mae is not None:
-                    d = pn - base_pnls[ix]
-                    mae = np.minimum(base_mae[ix] + np.minimum(d, 0.0), np.minimum(pn, 0.0))
-                    mfe = np.maximum(base_mfe[ix] + np.maximum(d, 0.0), np.maximum(pn, 0.0))
+                    mae = st_mae[ix]
+                    mfe = st_mfe[ix]
                 risk = base_risks[ix] if has_risks else None
                 return pn, mae, mfe, risk, slot2[t], last2[t]
 

@@ -95,8 +95,8 @@
   <div class="card">
     <h2>2. Strategy</h2>
     <label>Saved strategy</label>
-    <select id="lc-deploy-strategy-pick">
-      <option value="">— use the Manual Strategy Builder below —</option>
+    <select id="lc-deploy-strategy-pick" required>
+      <option value="" disabled selected>Select a strategy…</option>
       {% for t, label in [('manual', 'Manual'), ('python', 'Python'), ('pinescript', 'PineScript'), ('mql5', 'MQL5')] %}
       <optgroup label="{{ label }}">
         {% for s in strategies if s.type == t %}
@@ -107,15 +107,7 @@
     </select>
     <input type="hidden" name="strategy_mode" id="dl-strategy-mode" value="manual">
     <input type="hidden" id="dl-existing-strategy" name="existing_strategy_manual" value="">
-    <p class="help" id="dl-strategy-note">Picking a saved strategy is what goes live — the Manual Strategy Builder parameters below only apply when nothing is picked.</p>
-    <div class="row">
-      <div><label>SMA fast (manual builder)</label><input type="number" name="sma_fast" value="20"></div>
-      <div><label>SMA slow (manual builder)</label><input type="number" name="sma_slow" value="50"></div>
-    </div>
-    <div class="row">
-      <div><label>Stop loss (pips)</label><input type="number" name="sl_pips" value="20"></div>
-      <div><label>Take profit (pips)</label><input type="number" name="tp_pips" value="40"></div>
-    </div>
+    <p class="help" id="dl-strategy-note">Pick the saved strategy to take live. Stop loss, take profit and the rest of its logic come from the strategy itself.</p>
   </div>
 
   <div class="card">
@@ -186,14 +178,14 @@
         mode.value = 'manual';
         hidden.name = 'existing_strategy_manual';
         hidden.value = '';
-        if (note) note.textContent = 'Deployment will run the Manual Strategy Builder parameters below.';
+        if (note) note.textContent = 'Select a strategy to continue.';
         return;
       }
       var i = v.indexOf('::');
       mode.value = v.slice(0, i);
       hidden.name = 'existing_strategy_' + v.slice(0, i);
       hidden.value = v.slice(i + 2);
-      if (note) note.textContent = 'Deployment will run the saved ' + v.slice(0, i) + ' strategy "' + v.slice(i + 2) + '". The builder fields below are ignored.';
+      if (note) note.textContent = 'Deployment will run the saved ' + v.slice(0, i) + ' strategy "' + v.slice(i + 2) + '".';
     }
     pick.addEventListener('change', sync);
     sync();

@@ -1,3 +1,4 @@
+{% include '_lucide_sprite.html' %}
 <script>
   // Applied inline (not deferred) so the saved theme takes effect before
   // first paint, avoiding a dark-then-light (or vice versa) flash.
@@ -24,6 +25,14 @@
 
 <!-- Always-visible profile circle (top right). Server-rendered so there is no flash; the small menu is wired in t58-chrome.js. -->
 <div class="t58-profile" id="t58-profile" data-csrf="{{ csrf_token() }}">
+  <button type="button" class="t58-bell" id="t58-bell" aria-haspopup="dialog" aria-expanded="false" aria-controls="t58-inbox" title="Inbox">
+    <svg class="lu"><use href="#lu-bell"/></svg><span class="t58-bell-dot" id="t58-bell-dot" hidden></span>
+  </button>
+  <div class="t58-inbox" id="t58-inbox" role="dialog" aria-label="Inbox" hidden>
+    <div class="t58-inbox-head"><b>Inbox</b><span id="t58-inbox-sub">Weekly digests are saved here</span></div>
+    <div class="t58-inbox-list" id="t58-inbox-list"><div class="t58-inbox-empty">Loading...</div></div>
+    <div class="t58-inbox-view" id="t58-inbox-view" hidden></div>
+  </div>
   <button type="button" class="t58-avatar" id="t58-avatar-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="t58-profile-menu" title="{{ t58_profile.name }}" data-initials="{{ t58_profile.initials }}">
     {% if t58_profile.has_picture %}<img id="t58-avatar-img" src="/settings/account/profile-picture/file?v={{ t58_profile.version }}" alt="{{ t58_profile.name }}">{% else %}<span id="t58-avatar-initials">{{ t58_profile.initials }}</span>{% endif %}
   </button>
@@ -55,27 +64,27 @@
   </div>
 
   <a href="/dashboard" class="t58-nav-item top-level {{ 'active' if active_page == 'dashboard' else '' }}">
-    <span class="t58-nav-icon">&#8962;</span><span class="label">Dashboard</span>
+    <span class="t58-nav-icon"><svg class="lu"><use href="#lu-layout-dashboard"/></svg></span><span class="label">Dashboard</span>
   </a>
 
   <a href="/assistant" class="t58-nav-item top-level {{ 'active' if active_page == 'ai_assistant' else '' }}">
-    <span class="t58-nav-icon">&#9737;</span><span class="label">AI Assistant</span>
+    <span class="t58-nav-icon"><svg class="lu"><use href="#lu-bot"/></svg></span><span class="label">AI Assistant</span>
   </a>
 
   <a href="/events/" class="t58-nav-item top-level {{ 'active' if active_page == 'global_events' else '' }}">
-    <span class="t58-nav-icon">&#127760;</span><span class="label">Global Events</span>
+    <span class="t58-nav-icon"><svg class="lu"><use href="#lu-globe"/></svg></span><span class="label">Global Events</span>
   </a>
 
   <a href="/journal" class="t58-nav-item top-level {{ 'active' if active_page == 'journal' else '' }}">
-    <span class="t58-nav-icon">&#9998;</span><span class="label">Trading Journal</span>
+    <span class="t58-nav-icon"><svg class="lu"><use href="#lu-notebook-pen"/></svg></span><span class="label">Trading Journal</span>
   </a>
 
   <a href="/runs" class="t58-nav-item top-level {{ 'active' if active_page == 'runs' else '' }}">
-    <span class="t58-nav-icon">&#9654;</span><span class="label">Runs</span>
+    <span class="t58-nav-icon"><svg class="lu"><use href="#lu-play"/></svg></span><span class="label">Runs</span>
   </a>
 
   <a href="/mobile-access" class="t58-nav-item top-level {{ 'active' if active_page == 'mobile_access' else '' }}">
-    <span class="t58-nav-icon">&#128241;</span><span class="label">Mobile Access</span>
+    <span class="t58-nav-icon"><svg class="lu"><use href="#lu-smartphone"/></svg></span><span class="label">Mobile Access</span>
   </a>
 
   <div class="t58-nav-divider"></div>
@@ -83,7 +92,7 @@
 
   {% set create_pages   = ['forge', 'speed_run', 'speed_run_multi_instrument', 'generate_strategies', 'research_agent', 'research', 'research_loop', 'discover', 'overnight_autopilot', 'discovery_engine', 'start_here_create'] %}
   {% set test_pages     = ['run', 'payout_probability', 'full_pipeline'] %}
-  {% set optimize_pages = ['optimize_hub', 'optimize_simple', 'search', 'search_multi_instrument', 'multi_market', 'refine', 'full_pipeline', 'quick_optimize', 'multi_objective', 'evolution', 'evolution_multi_instrument', 'risk_sweep', 'cross_instrument'] %}
+  {% set optimize_pages = ['optimize_hub', 'optimize_simple', 'rescue', 'search', 'search_multi_instrument', 'multi_market', 'refine', 'full_pipeline', 'quick_optimize', 'multi_objective', 'evolution', 'evolution_multi_instrument', 'risk_sweep', 'cross_instrument'] %}
   {% set validate_pages = ['validate_hub', 'validate_simple', 'wfo', 'wfga', 'cpcv', 'pbo', 'sensitivity', 'parameter_robustness', 'regime_matrix'] %}
   {% set champion_pages = ['champion_simple', 'family_diversity', 'ensemble', 'portfolio', 'universe', 'compare'] %}
 
@@ -100,43 +109,43 @@
   <!-- (1) Create -- v9.8: single link to the consolidated section page;
        its individual tools live on that page (tools grid), not in the sidebar. -->
   <a href="/start-here/create" data-accent="teal" class="t58-nav-item top-level {{ 'active' if active_page in create_pages else '' }}">
-    <span class="t58-num">&#9312;</span> Create
+    <span class="t58-nav-icon"><svg class="lu"><use href="#lu-wand-sparkles"/></svg></span><span class="label">Create</span>
   </a>
 
   <!-- (2) Test -- v9.8: single link to the consolidated section page;
        its individual tools live on that page (tools grid), not in the sidebar. -->
   <a href="/full-pipeline" data-accent="cyan" class="t58-nav-item top-level {{ 'active' if active_page in test_pages else '' }}">
-    <span class="t58-num">&#9313;</span> Test
+    <span class="t58-nav-icon"><svg class="lu"><use href="#lu-flask-conical"/></svg></span><span class="label">Test</span>
   </a>
 
   <!-- (3) Optimize -- v9.8: single link to the consolidated section page;
        its individual tools live on that page (tools grid), not in the sidebar. -->
   <a href="/optimize-simple" data-accent="blue" class="t58-nav-item top-level {{ 'active' if active_page in optimize_pages else '' }}">
-    <span class="t58-num">&#9314;</span> Optimize
+    <span class="t58-nav-icon"><svg class="lu"><use href="#lu-sliders-horizontal"/></svg></span><span class="label">Optimize</span>
   </a>
 
   <!-- (4) Validate -- v9.8: single link to the consolidated section page;
        its individual tools live on that page (tools grid), not in the sidebar. -->
   <a href="/validate-simple" data-accent="violet" class="t58-nav-item top-level {{ 'active' if active_page in validate_pages else '' }}">
-    <span class="t58-num">&#9315;</span> Validate
+    <span class="t58-nav-icon"><svg class="lu"><use href="#lu-shield-check"/></svg></span><span class="label">Validate</span>
   </a>
 
   <!-- (5) Champion -- v9.8: single link to the consolidated section page;
        its individual tools live on that page (tools grid), not in the sidebar. -->
   <a href="/champion-simple" data-accent="gold" class="t58-nav-item top-level {{ 'active' if active_page in champion_pages else '' }}">
-    <span class="t58-num">&#9316;</span> Champion
+    <span class="t58-nav-icon"><svg class="lu"><use href="#lu-trophy"/></svg></span><span class="label">Champion</span>
   </a>
 
   <!-- (6) Deployment -- v9.8: single link to the consolidated section page;
        its individual tools live on that page (tools grid), not in the sidebar. -->
   <a href="/forward-test" data-accent="green" class="t58-nav-item top-level {{ 'active' if active_page in ['forward_test', 'deploy_live', 'live_market', 'replay', 'webhook_relay', 'start_here_deployment'] else '' }}">
-    <span class="t58-num">&#9317;</span> Deploy
+    <span class="t58-nav-icon"><svg class="lu"><use href="#lu-rocket"/></svg></span><span class="label">Deploy</span>
   </a>
 
   <!-- (7) Strategy Graveyard -- v9.8: single link to the consolidated section page;
        its individual tools live on that page (tools grid), not in the sidebar. -->
   <a href="/graveyard" class="t58-nav-item top-level {{ 'active' if active_page in ['graveyard', 'start_here_graveyard'] else '' }}">
-    <span class="t58-num">&#9318;</span> Strategy Graveyard
+    <span class="t58-nav-icon"><svg class="lu"><use href="#lu-skull"/></svg></span><span class="label">Strategy Graveyard</span>
   </a>
 
   <div class="t58-nav-divider"></div>
@@ -144,33 +153,33 @@
 
   <!-- (8) Quant Lab -->
   <details class="t58-nav-group">
-    <summary><span class="t58-num">&#9312;</span> Quant Lab <span class="chev">&#9656;</span></summary>
+    <summary><span class="t58-nav-icon"><svg class="lu"><use href="#lu-sigma"/></svg></span> Quant Lab <span class="chev"><svg class="lu"><use href="#lu-chevron-right"/></svg></span></summary>
     <div class="t58-nav-group-items">
       <a href="/quant-lab" class="t58-nav-item {{ 'active' if active_page == 'quant_lab' else '' }}">
-        <span class="t58-nav-icon">&#9878;</span><span class="label">Quant Lab</span>
+        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-sigma"/></svg></span><span class="label">Quant Lab</span>
       </a>
       <a href="/research-labs" class="t58-nav-item {{ 'active' if active_page == 'research_labs' else '' }}">
-        <span class="t58-nav-icon">&#9879;</span><span class="label">Research Lab</span>
+        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-microscope"/></svg></span><span class="label">Research Lab</span>
       </a>
     </div>
   </details>
 
   <!-- (9) Options -->
   <details class="t58-nav-group">
-    <summary><span class="t58-num">&#9313;</span> Options <span class="chev">&#9656;</span></summary>
+    <summary><span class="t58-nav-icon"><svg class="lu"><use href="#lu-chart-candlestick"/></svg></span> Options <span class="chev"><svg class="lu"><use href="#lu-chevron-right"/></svg></span></summary>
     <div class="t58-nav-group-items">
       <a href="/options-outlook" data-accent="lime" class="t58-nav-item {{ 'active' if active_page == 'options_outlook' else '' }}">
-        <span class="t58-nav-icon">&#9707;</span><span class="label">Options Outlook</span>
+        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-chart-candlestick"/></svg></span><span class="label">Options Outlook</span>
       </a>
     </div>
   </details>
 
   <!-- (10) Hedge Fund Manager -->
   <details class="t58-nav-group">
-    <summary><span class="t58-num">&#9314;</span> Hedge Fund Manager <span class="chev">&#9656;</span></summary>
+    <summary><span class="t58-nav-icon"><svg class="lu"><use href="#lu-landmark"/></svg></span> Hedge Fund Manager <span class="chev"><svg class="lu"><use href="#lu-chevron-right"/></svg></span></summary>
     <div class="t58-nav-group-items">
       <a href="/hedge-fund" class="t58-nav-item {{ 'active' if active_page == 'hedge_fund' else '' }}">
-        <span class="t58-nav-icon">&#9878;</span><span class="label">Research &rarr; Portfolio &rarr; Execution &rarr; Oversight</span>
+        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-briefcase-business"/></svg></span><span class="label">Research &rarr; Portfolio &rarr; Execution &rarr; Oversight</span>
       </a>
     </div>
   </details>
@@ -183,25 +192,25 @@
        Notification Settings, then Support -- per the Sep 2026 Account tab
        pass and the follow-up API-Keys/Support consolidation. -->
   <details class="t58-nav-group">
-    <summary><span class="t58-num">&#9312;</span> Account <span class="chev">&#9656;</span></summary>
+    <summary><span class="t58-nav-icon"><svg class="lu"><use href="#lu-user-round"/></svg></span> Account <span class="chev"><svg class="lu"><use href="#lu-chevron-right"/></svg></span></summary>
     <div class="t58-nav-group-items">
       <a href="/settings/account" class="t58-nav-item {{ 'active' if active_page == 'account_settings' else '' }}">
-        <span class="t58-nav-icon">&#9881;</span><span class="label">Account Settings</span>
+        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-settings"/></svg></span><span class="label">Account Settings</span>
       </a>
       <a href="/settings/api-keys" class="t58-nav-item {{ 'active' if active_page == 'api_keys_settings' else '' }}">
-        <span class="t58-nav-icon">&#128273;</span><span class="label">API Keys</span>
+        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-key-round"/></svg></span><span class="label">API Keys</span>
       </a>
       <a href="/data-center" class="t58-nav-item {{ 'active' if active_page == 'data_center' else '' }}">
-        <span class="t58-nav-icon">&#128202;</span><span class="label">Data Center</span>
+        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-database"/></svg></span><span class="label">Data Center</span>
       </a>
       <a href="/library" class="t58-nav-item {{ 'active' if active_page == 'strategy_library' else '' }}">
-        <span class="t58-nav-icon">&#128218;</span><span class="label">Strategy Library</span>
+        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-library"/></svg></span><span class="label">Strategy Library</span>
       </a>
       <a href="/achievements" class="t58-nav-item {{ 'active' if active_page == 'achievements' else '' }}">
-        <span class="t58-nav-icon">&#127942;</span><span class="label">Achievements</span>
+        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-award"/></svg></span><span class="label">Achievements</span>
       </a>
       <a href="/support" class="t58-nav-item {{ 'active' if active_page == 'support' else '' }}">
-        <span class="t58-nav-icon">&#128172;</span><span class="label">Support</span>
+        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-life-buoy"/></svg></span><span class="label">Support</span>
       </a>
     </div>
   </details>
@@ -209,22 +218,22 @@
   <!-- (12) Education -- Education (Course), Resources, Playground, Library, then the
        User Manual last (all siblings, same left alignment). -->
   <details class="t58-nav-group">
-    <summary><span class="t58-num">&#9313;</span> Education <span class="chev">&#9656;</span></summary>
+    <summary><span class="t58-nav-icon"><svg class="lu"><use href="#lu-graduation-cap"/></svg></span> Education <span class="chev"><svg class="lu"><use href="#lu-chevron-right"/></svg></span></summary>
     <div class="t58-nav-group-items">
       <a href="/education" class="t58-nav-item {{ 'active' if active_page == 'education' else '' }}">
-        <span class="t58-nav-icon">&#127979;</span><span class="label">Education (Course)</span>
+        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-school"/></svg></span><span class="label">Education (Course)</span>
       </a>
       <a href="/resources" class="t58-nav-item {{ 'active' if active_page == 'resources' else '' }}">
-        <span class="t58-nav-icon">&#127891;</span><span class="label">Resources</span>
+        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-book-open-check"/></svg></span><span class="label">Resources</span>
       </a>
       <a href="/playground" class="t58-nav-item {{ 'active' if (active_page or '').startswith('playground') else '' }}">
-        <span class="t58-nav-icon">&#127918;</span><span class="label">Playground</span>
+        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-gamepad-2"/></svg></span><span class="label">Playground</span>
       </a>
       <a href="/playground/library" class="t58-nav-item {{ 'active' if active_page == 'books_library' else '' }}">
-        <span class="t58-nav-icon">&#128218;</span><span class="label">Library</span>
+        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-book-marked"/></svg></span><span class="label">Library</span>
       </a>
       <a href="/user-manual" class="t58-nav-item {{ 'active' if active_page == 'user_manual' else '' }}">
-        <span class="t58-nav-icon">&#128214;</span><span class="label">User Manual</span>
+        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-book-open"/></svg></span><span class="label">User Manual</span>
       </a>
     </div>
   </details>
@@ -235,7 +244,7 @@
     style="display:flex;align-items:center;gap:8px;margin:6px 10px 4px;padding:9px 10px;border-radius:8px;
            border:1px solid var(--border-light);background:var(--panel-3);color:var(--text-muted);
            font-size:13px;cursor:pointer;">
-    <span id="t58-theme-icon" aria-hidden="true">&#9789;</span>
+    <span id="t58-theme-icon" aria-hidden="true"><svg class="lu"><use href="#lu-moon"/></svg></span>
     <span id="t58-theme-label">Dark theme</span>
   </button>
 </div>
@@ -246,6 +255,7 @@
 <script src="/static/api-source.js" defer></script>
 <script src="/static/t58-livepnl.js" defer></script>
 <script src="/static/t58-achievements.js" defer></script>
+<script src="/static/t58-inbox.js" defer></script>
 <script src="/static/t58-nextstep.js" defer></script>
 
 {% include '_project_chat_widget.html' %}

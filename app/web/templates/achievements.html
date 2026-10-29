@@ -36,7 +36,15 @@
   .ach-badge[hidden], .ach-empty[hidden] { display: none !important; }
   .ach-empty { grid-column: 1 / -1; padding: 22px; text-align: center; color: var(--text-muted); border: 1px dashed var(--border-light); border-radius: 12px; font-size: 13px; }
   .ach-count { font-size: 12px; color: var(--text-muted); margin: 0 0 8px; }
-  .ach-sep { flex: 1; }
+  .ach-filters { display: grid; gap: 4px; margin: 6px 0 8px; }
+  .ach-fg { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .ach-fg .ach-chips { margin: 3px 0; }
+  .ach-fl { width: 70px; flex: none; font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--text-muted); }
+  .ach-tiers .ach-chip { display: inline-flex; align-items: center; gap: 7px; }
+  .ach-tiers .ach-chip i { width: 10px; height: 10px; border-radius: 50%; background: radial-gradient(circle at 30% 25%, #fff8, var(--k) 55%); }
+  .t-easy { --k: #c97c3b; } .t-medium { --k: #b8c2d0; } .t-hard { --k: #f2b934; } .t-elite { --k: #9fd4f5; }
+  .ach-tiers .ach-chip.on i { box-shadow: 0 0 0 2px var(--on-teal); }
+  @media (max-width: 560px) { .ach-fl { width: 100%; } }
   .ach-badge[data-tier="medium"] { --c: var(--tier-medium); } .ach-badge[data-tier="hard"] { --c: var(--tier-hard); } .ach-badge[data-tier="elite"] { --c: var(--tier-elite); }
   .ach-badge .top { display: flex; align-items: center; gap: 10px; }
   .ach-medal { flex: none; width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; font-size: 18px; border: 2px solid var(--c); color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); }
@@ -100,16 +108,21 @@
 {% endif %}
 
 <h3>All achievements</h3>
-<div class="ach-chips" id="ach-chips" role="group" aria-label="Filter achievements">
-  <button class="ach-chip on" data-g="status" data-f="all" type="button" aria-pressed="true">All</button>
-  <button class="ach-chip" data-g="status" data-f="todo" type="button" aria-pressed="false">In progress</button>
-  <button class="ach-chip" data-g="status" data-f="done" type="button" aria-pressed="false">Unlocked</button>
-  {% for cat, v in model.categories.items() %}<button class="ach-chip" data-g="cat" data-f="{{ cat }}" type="button" aria-pressed="false">{{ cat }} {{ v.done }}/{{ v.total }}</button>{% endfor %}
-  <span class="ach-sep"></span>
-  <button class="ach-chip" data-g="tier" data-f="easy" type="button" aria-pressed="false">Easy</button>
-  <button class="ach-chip" data-g="tier" data-f="medium" type="button" aria-pressed="false">Medium</button>
-  <button class="ach-chip" data-g="tier" data-f="hard" type="button" aria-pressed="false">Hard</button>
-  <button class="ach-chip" data-g="tier" data-f="elite" type="button" aria-pressed="false">Elite</button>
+<div class="ach-filters" id="ach-chips" role="group" aria-label="Filter achievements">
+  <div class="ach-fg"><span class="ach-fl">Status</span><div class="ach-chips">
+    <button class="ach-chip on" data-g="status" data-f="all" type="button" aria-pressed="true">All</button>
+    <button class="ach-chip" data-g="status" data-f="todo" type="button" aria-pressed="false">In progress</button>
+    <button class="ach-chip" data-g="status" data-f="done" type="button" aria-pressed="false">Unlocked</button>
+  </div></div>
+  <div class="ach-fg"><span class="ach-fl">Difficulty</span><div class="ach-chips ach-tiers">
+    <button class="ach-chip t-easy" data-g="tier" data-f="easy" type="button" aria-pressed="false"><i></i>Easy</button>
+    <button class="ach-chip t-medium" data-g="tier" data-f="medium" type="button" aria-pressed="false"><i></i>Medium</button>
+    <button class="ach-chip t-hard" data-g="tier" data-f="hard" type="button" aria-pressed="false"><i></i>Hard</button>
+    <button class="ach-chip t-elite" data-g="tier" data-f="elite" type="button" aria-pressed="false"><i></i>Elite</button>
+  </div></div>
+  <div class="ach-fg"><span class="ach-fl">Category</span><div class="ach-chips">
+    {% for cat, v in model.categories.items() %}<button class="ach-chip" data-g="cat" data-f="{{ cat }}" type="button" aria-pressed="false">{{ cat }} {{ v.done }}/{{ v.total }}</button>{% endfor %}
+  </div></div>
 </div>
 <p class="ach-count" id="ach-count" role="status" aria-live="polite"></p>
 <div class="ach-grid" id="ach-grid">

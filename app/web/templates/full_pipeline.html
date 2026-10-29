@@ -160,7 +160,7 @@
         <div class="lc-adv-field"><label class="flabel">Fitness metric</label>
           <select name="fitness_metric">
             {% for key, label in fitness_metrics.items() %}
-            <option value="{{ key }}" {{ 'selected' if key == 'eval_pass_probability' else '' }}>{{ label }}</option>
+            <option value="{{ key }}" {{ 'selected' if key == 'pass_gradient' else '' }}>{{ label }}</option>
             {% endfor %}
           </select>
           <div class="why">Not trading a prop-firm evaluation? Pick "Long-Term Net Profit" — it scores candidates purely on total P&amp;L and ignores prop-firm drawdown/payout rules entirely.</div></div>

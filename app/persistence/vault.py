@@ -57,7 +57,7 @@ INCLUDE_DIRS = (
 )
 # Single files (relative to the app base dir) that live outside the directories above.
 INCLUDE_FILES = (
-    "account_settings.json", "data/run_history.json", "data/achievements.json", "data/briefing.json", "data/ui_prefs.json",
+    "account_settings.json", "data/run_history.json", "data/achievements.json", "data/briefing.json", "data/ui_prefs.json", "data/inbox.json",
     "data/library/paper_state.json", "data/library/focus_sessions.json",
 )
 # The small "profile" subset: copied far more often than the (potentially large) runs, so a name, a picture, a colour or an

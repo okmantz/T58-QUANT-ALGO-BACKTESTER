@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Trial ledger — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<style>
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  .tl-big { display: flex; gap: 22px; flex-wrap: wrap; margin: 6px 0 4px; }
+  .tl-big div { min-width: 140px; } .tl-big b { display: block; font-size: 30px; line-height: 1.1; color: var(--teal); } .tl-big span { font-size: 12.5px; color: var(--text-muted); }
+  .tl-explain { margin: 10px 0 0; padding-left: 18px; color: var(--text-muted); font-size: 13.5px; line-height: 1.55; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; } th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,.06); }
+  th { color: var(--t-faint2); text-transform: uppercase; font-size: 11px; letter-spacing: .03em; } td.n { font-variant-numeric: tabular-nums; text-align: right; } th.n { text-align: right; }
+  .tl-bar { height: 6px; border-radius: 99px; background: rgba(var(--teal-rgb), .14); overflow: hidden; min-width: 80px; } .tl-bar i { display: block; height: 100%; background: var(--teal); }
+  .more-link { color: var(--teal); font-size: 13px; }
+</style>
+</head>
+<body>
+{% set active_page = 'graveyard' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+<h1>Trial ledger</h1>
+<p>Every idea any search or optimizer has scored is counted here. The Deflated Sharpe check uses this number to ask how good the best of that many tries would look by luck alone.</p>
+</div>
+
+<div class="card">
+  <h2>The number the check corrects for</h2>
+  <div class="tl-big">
+    <div><b>{{ '{:,}'.format(s.total_tried) }}</b><span>ideas tried, all time</span></div>
+    <div><b>{{ '{:,}'.format(s.total_counted) }}</b><span>counted by the check today</span></div>
+    <div><b>{{ s.n_families }}</b><span>strategy types searched</span></div>
+  </div>
+  <p style="margin:10px 0 0">{{ s.headline }}</p>
+  <ul class="tl-explain">{% for e in s.explain %}<li>{{ e }}</li>{% endfor %}</ul>
+</div>
+
+{% if s.breakdown %}
+<div class="card">
+  <h2>What the tries were</h2>
+  <table><tbody>{% for b in s.breakdown %}<tr><td>{{ b.label|capitalize }}</td><td class="n">{{ '{:,}'.format(b.n) }}</td></tr>{% endfor %}</tbody></table>
+</div>
+{% endif %}
+
+{% for title, rows in (('By strategy type', s.families), ('By named strategy', s.strategies)) %}
+{% if rows %}
+<div class="card">
+  <h2>{{ title }}</h2>
+  <table>
+    <thead><tr><th>Name</th><th class="n">Tried</th><th class="n">Counted today</th><th>Last booked</th><th></th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr><td>{{ r.name|capitalize }}</td><td class="n">{{ '{:,}'.format(r.tried) }}</td><td class="n">{{ '{:,}'.format(r.counted) }}</td><td>{{ r.last }}</td>
+        <td><div class="tl-bar"><i style="width:{{ (100 * r.tried / rows[0].tried)|round|int }}%"></i></div></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endfor %}
+
+{% if not s.families and not s.strategies %}<div class="card"><p>No searches have been booked yet. Run Discovery, the Optimizer or Full Pipeline and this page fills in.</p></div>{% endif %}
+<p><a class="more-link" href="/graveyard">&larr; Strategy Graveyard</a></p>
+</div>
+</div>
+</body>
+</html>

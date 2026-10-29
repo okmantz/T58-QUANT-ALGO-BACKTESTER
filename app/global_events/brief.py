@@ -58,6 +58,36 @@ def deterministic_brief(facts: dict) -> str:
     return "\n".join(lines)
 
 
+def structured_brief(facts: dict) -> dict:
+    """The same facts as deterministic_brief(), shaped for a readable card layout: a one-line takeaway plus typed sections
+    (events / theaters / headlines / markets) that the page renders as lists, bars and chips instead of one text block."""
+    ev, hl = facts["events"], facts["headlines"]
+    hot = sorted(facts["theaters"], key=lambda t: t["score"], reverse=True)[:4]
+    quotes = [q for q in facts["quotes"] if q.get("chg_pct") is not None]
+    h = facts["health"]
+    bits = []
+    if ev:
+        bits.append(f"{len(ev)} scheduled event{'s' if len(ev) != 1 else ''} in the next 24h")
+    if hot:
+        bits.append(f"hottest theater: {hot[0]['short']}")
+    if quotes:
+        mv = max(quotes, key=lambda q: abs(q["chg_pct"]))
+        bits.append(f"biggest mover: {mv['symbol']} {mv['chg_pct']:+.2f}%")
+    takeaway = ("; ".join(bits).capitalize() + ".") if bits else "Quiet: nothing notable in the local store right now."
+    sections = []
+    sections.append({"type": "events", "title": "Coming up (next 24h)", "empty": "No high or medium impact events scheduled in the next 24 hours.",
+                     "items": [{"when": e["when"], "country": e.get("country") or "", "name": e["name"], "impact": e.get("impact")} for e in ev[:5]]})
+    sections.append({"type": "theaters", "title": "Hottest theaters", "empty": "No theater scores yet.",
+                     "items": [{"name": t.get("short") or t.get("name"), "score": round(float(t["score"]))} for t in hot],
+                     "note": "Experimental score, 0-100."})
+    sections.append({"type": "headlines", "title": "Top headlines", "empty": "No impact 2+ headlines in the last 12 hours.",
+                     "items": [{"title": x["title"], "publisher": x.get("publisher") or ""} for x in hl[:4]]})
+    sections.append({"type": "markets", "title": "Markets vs open", "empty": "No quotes available.",
+                     "items": [{"symbol": q["symbol"], "chg_pct": round(float(q["chg_pct"]), 2)} for q in quotes]})
+    return {"takeaway": takeaway, "sections": sections,
+            "health": {"overall": h.get("overall"), "age": _fmt_age(h.get("freshest_age_sec"))}}
+
+
 def build_prompt(facts: dict) -> str:
     return "FACTS (all figures come from the app's local store):\n" + deterministic_brief(facts) + "\n\nWrite the session brief now."
 
@@ -65,7 +95,7 @@ def build_prompt(facts: dict) -> str:
 def make_brief() -> dict:
     facts = build_facts()
     text = deterministic_brief(facts)
-    out = {"text": text, "ai": None, "error": None, "label": "Summary of the listed headlines and figures"}
+    out = {"text": text, "brief": structured_brief(facts), "ai": None, "error": None, "label": "Summary of the listed headlines and figures"}
     try:
         from app.ai import ollama_transport
         from app.ai.ollama_settings import load_settings

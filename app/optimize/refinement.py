@@ -85,14 +85,20 @@ CODE_EXTENSIONS = {"python": ".py", "pinescript": ".pine", "mql5": ".mq5"}
 # buy-and-hold-style retail trading where there is no prop firm evaluation to
 # pass -- you just want the configuration that made the most money over the
 # full test period, full stop.
+# ONE default fitness for every optimizer / pipeline entry point (2026-10 audit: the code defaulted to eval_pass_probability while the
+# labels said pass_gradient was recommended). pass_gradient = pass odds + a small smooth edge term, so the search always has a slope.
+# Speed Run is the one deliberate exception: it ranks on the shared Discovery objective (edge_lb_r).
+DEFAULT_FITNESS = "pass_gradient"
+SPEED_RUN_FITNESS = "edge_lb_r"
+
 FITNESS_METRICS: dict[str, str] = {
-    "eval_pass_probability": "Eval Pass Probability -- reach target before hitting a limit (recommended for prop firms)",
+    "eval_pass_probability": "Eval Pass Probability -- reach target before hitting a limit (pure pass odds; flat at 0% for strategies not yet close)",
     # 2026-10-28: per-attempt pass probability PLUS a small smooth edge term (Sharpe / profit factor). Plain
     # eval_pass_probability is 0.0 for every candidate of a strategy that is not yet close to passing, so the search had
     # no gradient and always returned the original settings ("no optimized parameter found"). The smooth term only
     # separates candidates when pass odds are tied/near zero; it adds at most 8 points, so it never outranks a real
     # difference in pass odds.
-    "pass_gradient": "Pass odds with edge gradient -- eval-pass probability, tie-broken by Sharpe / profit factor so the search always has a slope to climb (recommended)",
+    "pass_gradient": "Pass odds with edge gradient -- eval-pass probability, tie-broken by Sharpe / profit factor so the search always has a slope to climb (default)",
     "prop_guide_score": "Prop-Oriented Guide Score",
     "composite_prop_score": "Composite Prop Score",
     "first_payout_probability": "First Payout Probability",
@@ -102,7 +108,7 @@ FITNESS_METRICS: dict[str, str] = {
     # reaches a payout inside the window -- measured on rolling fresh-account
     # windows over the candidate's own (out-of-sample) trades, blended with
     # the Monte Carlo per-attempt pass probability as a smooth tie-breaker.
-    "payout_30d": "Payout-in-30-Days -- rolling fresh-account windows reaching a payout within 30 days (recommended for fast payouts)",
+    "payout_30d": "Payout-in-30-Days -- rolling fresh-account windows reaching a payout within 30 days (for fast payouts)",
     # 2026-10-20 (report section 4, two-stage optimizer): Stage A ranks on EDGE, not on prop outcomes. Fitness = lower confidence
     # bound of mean R per trade (day-block bootstrap), scaled by the share of calendar years with a positive mean R. Run it on a
     # risk config whose costs are already stressed (spread/slippage x2) to get "after 2x costs"; sizing is chosen later in Stage B.
@@ -879,7 +885,9 @@ def _evaluate(
     if not math.isfinite(fitness):
         fitness = float("-inf")
 
-    if cost_stress_multiplier and cost_stress_penalty_weight > 0 and math.isfinite(fitness):
+    # SPEED (2026-10): apply_cost_stress_penalty returns `nominal` untouched when nominal <= 0, so the (expensive) stressed
+    # re-backtest can only ever change the result of a candidate that is actually positive at nominal cost.
+    if cost_stress_multiplier and cost_stress_penalty_weight > 0 and math.isfinite(fitness) and fitness > 0:
         stressed_risk = _stressed_risk_config(risk, cost_stress_multiplier)
         stressed_bt = run_backtest(df, strategy, stressed_risk, adaptive_risk=adaptive_risk)
         if stressed_bt.trades:
@@ -1028,11 +1036,19 @@ def _select_plateau_robust(
     best_candidate = raw_best
     best_score = float("-inf")
     probe_count = 0
+    # Finalists sit close together, so their neighbourhoods overlap heavily.
+    # Memoize probes by rounded genome: identical genomes score identically
+    # (evaluate_cheap is deterministic), so results are unchanged. probe_count
+    # still counts every probe requested to keep trial accounting conservative.
+    probe_memo: dict[tuple, float] = {}
     for candidate in pool:
         neighbor_genomes = _neighbor_genomes(candidate.genome, genes, cfg.plateau_neighbor_step_frac)
         neighbor_fitnesses = []
         for g in neighbor_genomes:
-            neighbor_fitnesses.append(evaluate_cheap(g).fitness)
+            pk = tuple(round(v, 6) for v in g)
+            if pk not in probe_memo:
+                probe_memo[pk] = evaluate_cheap(g).fitness
+            neighbor_fitnesses.append(probe_memo[pk])
             probe_count += 1
         score = _plateau_robustness_score(candidate.fitness, neighbor_fitnesses)
         if score > best_score:

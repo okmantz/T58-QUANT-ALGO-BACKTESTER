@@ -57,6 +57,42 @@
   @media (prefers-reduced-motion: reduce) { .pz-tile { transition: none; } .pz-tile:hover { transform: none; } }
   .pz-tile.on { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), 0.2); }
   .pz-tile:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+
+  .pz-tile[data-bg="obsidian-gold"] { background-image: url("/static/backgrounds/obsidian-gold-thumb.webp"); }
+  .pz-tile[data-bg="sakura-reverie"] { background-image: url("/static/backgrounds/sakura-reverie-thumb.webp"); }
+  .pz-tile[data-bg="abyssal-blue"] { background-image: url("/static/backgrounds/abyssal-blue-thumb.webp"); }
+  .pz-tile.locked { cursor: not-allowed; border-color: var(--border); }
+  .pz-tile.locked::before { content: ""; position: absolute; inset: 0; background: rgba(2, 6, 10, .66); z-index: 1; }
+  .pz-tile .pz-lock { display: none; position: absolute; top: 7px; right: 7px; z-index: 2; width: 26px; height: 26px; border-radius: 50%; place-items: center; background: rgba(0, 0, 0, .7); color: #fff; }
+  .pz-tile.locked .pz-lock { display: grid; }
+  .pz-tile .pz-lock .lu { width: 14px; height: 14px; }
+  .pz-tile.locked span { z-index: 2; }
+  #pz-tip { position: fixed; z-index: 9500; max-width: 280px; padding: 9px 12px; border-radius: 10px; font-size: 12.5px; line-height: 1.45; background: var(--pop-bg); color: var(--text); border: 1px solid var(--pop-bd); box-shadow: 0 12px 30px rgba(0, 0, 0, .45); pointer-events: none; }
+  #pz-tip[hidden] { display: none; }
+  #pz-tip b { display: block; margin-bottom: 2px; }
+  /* research profile */
+  .rp-top { display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: center; }
+  .rp-medal { width: 84px; height: 84px; border-radius: 50%; display: grid; place-items: center; position: relative; color: var(--mi, #2b1a0a);
+    background: radial-gradient(circle at 30% 25%, var(--ml, #ffe9a0), var(--mm, #f2b934) 52%, var(--md, #9a6a07)); box-shadow: 0 0 0 3px rgba(255,255,255,.08), 0 10px 26px -8px var(--mm, #f2b934); }
+  .rp-medal::after { content: ""; position: absolute; inset: 9px; border-radius: 50%; border: 2px solid currentColor; opacity: .3; }
+  .rp-medal b { font-size: 26px; line-height: 1; position: relative; }
+  .rp-top h3 { margin: 0; font-size: 17px; } .rp-top .sub { font-size: 12.5px; color: var(--text-muted); margin: 2px 0 8px; }
+  .rp-bar { height: 8px; border-radius: 99px; background: rgba(var(--teal-rgb), .14); overflow: hidden; } .rp-bar i { display: block; height: 100%; background: var(--teal); border-radius: inherit; }
+  .rp-row { margin-top: 14px; } .rp-row > label { margin-bottom: 6px; }
+  .rp-show { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  .rp-slot { padding: 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel-3); text-align: center; min-width: 0; }
+  .rp-slot .bd { width: 52px; height: 52px; margin: 0 auto 6px; border-radius: 50%; display: grid; place-items: center; font-size: 22px; color: var(--mi, #2b1a0a);
+    background: radial-gradient(circle at 30% 25%, var(--ml), var(--mm) 52%, var(--md)); }
+  .rp-slot.rare .bd { box-shadow: 0 0 0 3px rgba(255,255,255,.1), 0 0 18px -2px var(--mm); animation: rp-shine 3.4s ease-in-out infinite; }
+  @keyframes rp-shine { 50% { filter: brightness(1.22) saturate(1.1); } } @media (prefers-reduced-motion: reduce) { .rp-slot.rare .bd { animation: none; } }
+  .rp-slot b { display: block; font-size: 12.5px; overflow-wrap: anywhere; } .rp-slot small { color: var(--text-muted); font-size: 11px; }
+  .rp-slot select { margin-top: 6px; width: 100%; font-size: 12px; padding: 5px 6px; }
+  .rp-metals { display: flex; flex-wrap: wrap; gap: 6px; }
+  .rp-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 99px; border: 1px solid var(--border-light); font-size: 12px; background: var(--panel-3); }
+  .rp-chip i { width: 10px; height: 10px; border-radius: 50%; background: radial-gradient(circle at 30% 25%, var(--ml), var(--mm) 55%, var(--md)); }
+  .rp-share { display: flex; flex-wrap: wrap; gap: 8px; }
+  .rp-share .secondary-btn { margin-top: 0; }
+  @media (max-width: 520px) { .rp-show { grid-template-columns: 1fr; } }
   .pz-tile[data-bg="mountains"] { background-image: url("/static/dashboard-mountains.webp"); }
   html[data-theme="light"] .pz-tile[data-bg="mountains"] { background-image: url("/static/dashboard-mountains-light.webp"); }
   .pz-tile[data-bg="spring"] { background-image: url("/static/backgrounds/spring-dark.webp"); }
@@ -224,6 +260,34 @@
     </div>
   </form>
 
+  <!-- ================= RESEARCH PROFILE (rank, titles, collectible badges, showcase) =================
+       Shown here only. Everything is derived from work the app counted (see Achievements); nothing claims a strategy is profitable. -->
+  <div class="card" id="research-profile">
+    <h2>Research profile</h2>
+    <p class="help">Your rank, special titles and the three badges you are proudest of. Earned by running tests, validating and keeping a tidy library &mdash; never by how much a strategy made.</p>
+    <div class="rp-top">
+      <div class="rp-medal" id="rp-medal" aria-hidden="true"><b id="rp-lvl">1</b></div>
+      <div>
+        <h3 id="rp-rank">Bronze rank</h3>
+        <div class="sub" id="rp-sub">Loading&hellip;</div>
+        <div class="rp-bar"><i id="rp-bar" style="width:0%"></i></div>
+      </div>
+    </div>
+    <div class="rp-row"><label for="rp-title">Special title</label>
+      <select id="rp-title"><option value="">No title</option></select>
+      <p class="field-note" id="rp-title-note">Titles are earned by mastering a feature. Locked ones show what to do.</p></div>
+    <div class="rp-row"><label>Showcase &mdash; your three proudest achievements</label>
+      <div class="rp-show" id="rp-show"></div></div>
+    <div class="rp-row"><label>Collection</label><div class="rp-metals" id="rp-metals"></div></div>
+    <div class="rp-row"><label>Share</label>
+      <div class="rp-share">
+        <button type="button" class="secondary-btn" id="rp-cert">Research certificate</button>
+        <button type="button" class="secondary-btn" id="rp-cert-png">Certificate (PNG)</button>
+        <a class="secondary-btn" href="/achievements" style="text-decoration:none">All achievements</a>
+      </div>
+      <p class="field-note">Each showcase badge has a shareable card (SVG or PNG). The certificate lists your counted activity and carries a note that it is not a performance record.</p></div>
+  </div>
+
   <!-- ================= PERSONALIZE ================= -->
   <div class="card pz-card" id="personalize">
     <h2>Personalize</h2>
@@ -272,9 +336,27 @@
         <button type="button" class="pz-tile" data-bg="silent-sanctuary" role="radio"><span>Silent Sanctuary</span></button>
         <button type="button" class="pz-tile" data-bg="misty-forest" role="radio"><span>Misty Forest</span></button>
       </div>
+      <div class="pz-group">Unlockable scenes <span class="field-note" style="font-weight:400">&mdash; earned through achievements; hover a locked one to see what to do</span></div>
+      <div class="pz-grid">
+        <button type="button" class="pz-tile" data-bg="obsidian-gold" role="radio"><span>Obsidian Gold</span><i class="pz-lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
+        <button type="button" class="pz-tile" data-bg="sakura-reverie" role="radio"><span>Sakura Reverie</span><i class="pz-lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
+        <button type="button" class="pz-tile" data-bg="abyssal-blue" role="radio"><span>Abyssal Blue</span><i class="pz-lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
+      </div>
     </div>
     <label class="pz-switch"><input type="checkbox" id="pz-fx"> Gentle background motion (scenes, snow, leaves, petals, fireflies)</label>
     <p class="field-note">Slow, subtle movement behind the app: drifting nebula, rolling waves, rain, fog, fireflies and more. It never moves your content, pauses when the tab is hidden, and switches itself off if your device asks for reduced motion or data saving.</p>
+
+    <hr class="divider">
+    <label>Interface theme</label>
+    <p class="field-note" style="margin-top:0">A whole-interface style (colours, corners, type). Unlocked by milestones; the light/dark switch is replaced while a theme is on.</p>
+    <div class="ut-grid" id="ut-grid" role="radiogroup" aria-label="Interface theme">
+      <button type="button" class="ut-tile" data-ut="" role="radio"><span class="sw" style="background:linear-gradient(135deg,#0d1017,#35e0b0)"></span><span class="nm">Standard</span></button>
+      <button type="button" class="ut-tile" data-ut="obsidian-gold" role="radio"><span class="sw" style="background:linear-gradient(135deg,#070605 30%,#7a5d17 70%,#e2b84d)"></span><span class="nm">Obsidian Gold</span><i class="lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
+      <button type="button" class="ut-tile" data-ut="arctic-glass" role="radio"><span class="sw" style="background:linear-gradient(135deg,#eaf3fa,#bcd8ea 55%,#1c6fa8)"></span><span class="nm">Arctic Glass</span><i class="lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
+      <button type="button" class="ut-tile" data-ut="terminal-green" role="radio"><span class="sw" style="background:repeating-linear-gradient(0deg,#000 0 3px,#031a0d 3px 4px),#000;box-shadow:inset 0 0 0 2px #19ff7a"></span><span class="nm">Terminal Green</span><i class="lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
+      <button type="button" class="ut-tile" data-ut="deep-space" role="radio"><span class="sw" style="background:radial-gradient(circle at 70% 20%,#5a46d6,#0c0c22 62%)"></span><span class="nm">Deep Space</span><i class="lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
+      <button type="button" class="ut-tile" data-ut="crimson-protocol" role="radio"><span class="sw" style="background:linear-gradient(135deg,#080304 40%,#8a1424 75%,#ff3d57)"></span><span class="nm">Crimson Protocol</span><i class="lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
+    </div>
 
     <hr class="divider">
     <label class="pz-switch"><input type="checkbox" id="pz-verse"> Show a Bible verse at the top of every page</label>
@@ -410,6 +492,7 @@
 </div>
 </div>
 </div>
+<div id="pz-tip" role="tooltip" hidden></div>
 <script src="/static/t58-chrome.js" defer></script>
 <script>
 (function () {
@@ -417,7 +500,7 @@
     var P = window.T58Personalize; if (!P) return;
     var tiles = [].slice.call(document.querySelectorAll('#pz-grid .pz-tile'));
     function mark() { tiles.forEach(function (t) { var on = t.dataset.bg === P.bg(); t.classList.toggle('on', on); t.setAttribute('aria-checked', on ? 'true' : 'false'); }); }
-    tiles.forEach(function (t) { t.addEventListener('click', function () { P.setBg(t.dataset.bg); mark(); }); });
+    tiles.forEach(function (t) { t.addEventListener('click', function () { if (t.classList.contains('locked')) return; P.setBg(t.dataset.bg); mark(); }); });
     var cb = document.getElementById('pz-verse'); cb.checked = P.verse();
     cb.addEventListener('change', function () { P.setVerse(cb.checked); });
     var fx = document.getElementById('pz-fx'); fx.checked = P.fx();
@@ -440,7 +523,99 @@
     window.addEventListener('t58-accent-change', markAc);
     markAc();
     mark();
+    initUnlocks();
   }
+
+  /* ---- unlockable scenes + interface themes + research profile ---- */
+  var METAL = { bronze: ['#f0b27a', '#c97c3b', '#7a4a1d', '#2b1a0a'], silver: ['#f4f7fb', '#b8c2d0', '#6b7685', '#1c222b'], gold: ['#ffe9a0', '#f2b934', '#9a6a07', '#2a1c02'],
+    platinum: ['#eaf6ff', '#9fd4f5', '#4a86b3', '#0a1e2e'], obsidian: ['#ffe9a0', '#c9a24a', '#2a2418', '#f5e6b8'] };
+  function metalVars(el, m) { var c = METAL[m] || METAL.bronze; el.style.setProperty('--ml', c[0]); el.style.setProperty('--mm', c[1]); el.style.setProperty('--md', c[2]); el.style.setProperty('--mi', c[3]); }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function csrfH() { var h = { 'Content-Type': 'application/json' }; if (window.__T58_CSRF) h['X-CSRF-Token'] = window.__T58_CSRF; else { var r = document.getElementById('t58-profile'); if (r) h['X-CSRF-Token'] = r.getAttribute('data-csrf') || ''; } return h; }
+  function postJ(u, b) { return fetch(u, { method: 'POST', headers: csrfH(), body: JSON.stringify(b || {}), credentials: 'same-origin' }).then(function (r) { return r.json().catch(function () { return {}; }); }); }
+  var tip = document.getElementById('pz-tip');
+  function showTip(el, title, text) {
+    tip.innerHTML = '<b>' + esc(title) + '</b>' + esc(text); tip.hidden = false;
+    var r = el.getBoundingClientRect(), tw = tip.offsetWidth, th = tip.offsetHeight;
+    var x = Math.min(Math.max(8, r.left + r.width / 2 - tw / 2), window.innerWidth - tw - 8), y = r.top - th - 8; if (y < 8) y = r.bottom + 8;
+    tip.style.left = x + 'px'; tip.style.top = y + 'px';
+  }
+  function hideTip() { tip.hidden = true; }
+  function wireTip(el, title, text) {
+    el.addEventListener('mouseenter', function () { showTip(el, title, text); }); el.addEventListener('mouseleave', hideTip);
+    el.addEventListener('focus', function () { showTip(el, title, text); }); el.addEventListener('blur', hideTip);
+    el.addEventListener('click', function () { showTip(el, title, text); setTimeout(hideTip, 4000); });
+  }
+  function initUnlocks() {
+    var P = window.T58Personalize; if (!P) return;
+    fetch('/api/unlocks', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (u) {
+      // scenes
+      [].forEach.call(document.querySelectorAll('#pz-grid .pz-tile'), function (t) {
+        var meta = (u.backgrounds || {})[t.dataset.bg]; if (!meta) return;
+        if (meta.unlocked) { t.classList.remove('locked'); t.removeAttribute('aria-disabled'); return; }
+        t.classList.add('locked'); t.setAttribute('aria-disabled', 'true'); t.setAttribute('aria-label', meta.label + ' (locked). ' + meta.text);
+        wireTip(t, meta.label + ' \u00b7 locked', meta.text);
+      });
+      // interface themes
+      var grid = document.getElementById('ut-grid'), tiles = [].slice.call(grid.querySelectorAll('.ut-tile'));
+      function markUt() { var cur = P.uiTheme(); tiles.forEach(function (t) { var on = t.dataset.ut === cur; t.classList.toggle('on', on); t.setAttribute('aria-checked', on ? 'true' : 'false'); }); }
+      tiles.forEach(function (t) {
+        var name = t.dataset.ut, meta = name ? (u.themes || {})[name] : null;
+        if (meta && !meta.unlocked) { t.classList.add('locked'); t.setAttribute('aria-disabled', 'true'); wireTip(t, meta.label + ' \u00b7 locked', meta.text); return; }
+        t.addEventListener('click', function () { P.setUiTheme(name); markUt(); });
+      });
+      markUt();
+    }).catch(function () {});
+  }
+  function initProfile() {
+    fetch('/api/profile', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (p) {
+      var medal = document.getElementById('rp-medal'); metalVars(medal, p.rank.metal);
+      document.getElementById('rp-lvl').textContent = p.level.level;
+      document.getElementById('rp-rank').textContent = p.rank.metal_label + ' rank \u00b7 ' + p.level.title + (p.title ? ' \u00b7 ' + p.title : '');
+      document.getElementById('rp-sub').textContent = 'Level ' + p.level.level + ' \u00b7 ' + p.xp + ' XP \u00b7 ' + p.unlocked + ' of ' + p.total + ' badges \u00b7 ' + (p.level.span - p.level.into) + ' XP to the next level';
+      document.getElementById('rp-bar').style.width = p.level.pct + '%';
+      // titles
+      var sel = document.getElementById('rp-title'); sel.innerHTML = '<option value="">No title</option>';
+      p.titles.forEach(function (t) { var o = document.createElement('option'); o.value = t.id; o.textContent = t.unlocked ? t.title : t.title + ' (locked)'; o.disabled = !t.unlocked; sel.appendChild(o); });
+      sel.value = p.title_id || '';
+      var locked = p.titles.filter(function (t) { return !t.unlocked; });
+      document.getElementById('rp-title-note').textContent = locked.length ? 'Next: ' + locked[0].title + ' \u2014 ' + locked[0].needs + '.' : 'Every title earned.';
+      sel.onchange = function () { postJ('/api/profile/title', { id: sel.value }).then(initProfile); };
+      // showcase
+      var box = document.getElementById('rp-show'); box.innerHTML = '';
+      var earned = p.badges, ids = p.showcase_ids.slice();
+      for (var i = 0; i < 3; i++) {
+        (function (i) {
+          var b = p.showcase[i], slot = document.createElement('div'); slot.className = 'rp-slot' + (b && b.rare ? ' rare' : '');
+          if (b) { metalVars(slot, b.metal); }
+          slot.innerHTML = '<div class="bd">' + (b ? '&#9733;' : '&middot;') + '</div><b>' + (b ? esc(b.title) : 'Empty slot') + '</b><small>' + (b ? esc(b.metal_label) + (b.rare ? ' \u00b7 rare' : '') : 'Pick a badge below') + '</small>';
+          var s2 = document.createElement('select'); s2.setAttribute('aria-label', 'Showcase slot ' + (i + 1));
+          s2.innerHTML = '<option value="">' + (b ? 'Change\u2026' : 'Choose\u2026') + '</option>' + earned.map(function (e) { return '<option value="' + esc(e.id) + '">' + esc(e.title) + ' (' + esc(e.metal_label) + ')</option>'; }).join('');
+          s2.onchange = function () { if (!s2.value) return; var n = ids.slice(); n[i] = s2.value; n = n.filter(function (v, k, a) { return v && a.indexOf(v) === k; }).slice(0, 3); postJ('/api/profile/showcase', { ids: n }).then(initProfile); };
+          slot.appendChild(s2);
+          if (b) { var row = document.createElement('div'); row.style.cssText = 'display:flex;gap:6px;justify-content:center;margin-top:6px;flex-wrap:wrap';
+            row.innerHTML = '<a class="rp-chip" href="/achievements/card/' + esc(b.id) + '.svg?download=1">SVG</a><a class="rp-chip" href="#" data-png="' + esc(b.id) + '">PNG</a><a class="rp-chip" target="_blank" rel="noopener" href="/achievements/card/' + esc(b.id) + '.svg">View</a>';
+            slot.appendChild(row); }
+          box.appendChild(slot);
+        })(i);
+      }
+      [].forEach.call(box.querySelectorAll('[data-png]'), function (a) { a.addEventListener('click', function (e) { e.preventDefault(); svgToPng('/achievements/card/' + a.dataset.png + '.svg', 1200, 630, 't58-badge-' + a.dataset.png + '.png'); }); });
+      // collection
+      var mt = document.getElementById('rp-metals'); mt.innerHTML = '';
+      ['bronze', 'silver', 'gold', 'platinum'].forEach(function (m) { var n = (p.collection || {})[m] || 0, c = document.createElement('span'); c.className = 'rp-chip'; metalVars(c, m); c.innerHTML = '<i></i>' + m.charAt(0).toUpperCase() + m.slice(1) + ' \u00d7 ' + n; mt.appendChild(c); });
+    }).catch(function () { document.getElementById('rp-sub').textContent = 'Could not load your profile right now.'; });
+  }
+  function svgToPng(url, w, h, name) {
+    fetch(url).then(function (r) { return r.text(); }).then(function (svg) {
+      var img = new Image(), blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }), u = URL.createObjectURL(blob);
+      img.onload = function () { var c = document.createElement('canvas'); c.width = w; c.height = h; c.getContext('2d').drawImage(img, 0, 0, w, h); URL.revokeObjectURL(u);
+        c.toBlob(function (b) { var a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = name; document.body.appendChild(a); a.click(); a.remove(); }, 'image/png'); };
+      img.src = u;
+    });
+  }
+  document.getElementById('rp-cert').addEventListener('click', function () { location.href = '/achievements/certificate.svg?download=1'; });
+  document.getElementById('rp-cert-png').addEventListener('click', function () { svgToPng('/achievements/certificate.svg', 1600, 1131, 't58-research-certificate.png'); });
+  initProfile();
   if (window.T58Personalize) init(); else window.addEventListener('load', init);
 })();
 </script>
