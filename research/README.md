@@ -65,3 +65,9 @@ Markdown documents (the app reads `.pdf`, `.txt` and `.md`; drop more in any tim
 
 The reading lists link out to the papers rather than bundling them; open
 each link and confirm it before relying on it.
+
+
+## Reading lists
+
+`research/NN_*/Reading_List.md` hold 225 papers across 12 topic folders, each with a one-line role and links (the first four folders came from the original report; folders 05 to 12 cover execution, volatility, sizing, machine learning, multiple testing, regimes, trend and mean reversion, and prop-firm behaviour).
+Links were compiled without being opened. Run `python scripts/check_paper_links.py` to find dead ones, and add `--download` to save the arXiv PDFs into `research/papers/`, which the AI assist then reads.
