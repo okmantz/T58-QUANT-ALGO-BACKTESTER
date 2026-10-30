@@ -57,7 +57,7 @@
       {% for s in strategies %}
       <label><input type="checkbox" name="strategy_pick" value="{{ s.type }}::{{ s.name }}"> [{{ s.type }}] {{ s.name }}</label>
       {% endfor %}
-      {% if not strategies %}<p style="color:var(--text-muted);font-size:13px;">No saved strategies yet -- save some from Run &amp; Report first.</p>{% endif %}
+      {% if not strategies %}<p style="color:var(--text-muted);font-size:13px;">No saved strategies yet -- save some from Full Pipeline first.</p>{% endif %}
     </div>
   </div>
 
@@ -85,7 +85,7 @@
 
   <div class="card">
     <details>
-      <summary>4. Risk &amp; prop-firm rules (same as Run &amp; Report -- optional to change)</summary>
+      <summary>4. Risk &amp; prop-firm rules (same as Full Pipeline -- optional to change)</summary>
     </details>
   </div>
 

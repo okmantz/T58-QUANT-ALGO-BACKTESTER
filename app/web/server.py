@@ -1535,18 +1535,9 @@ def _alpaca_redirect(notice: str, kind: str):
 
 @app.route("/")
 def index():
-    return render_template(
-        "index.html",
-        stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-        saved_strategies_json=_saved_strategies_json(),
-        strategy_notice=request.args.get("strategy_notice"),
-        alpaca_notice=request.args.get("alpaca_notice"),
-        alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"),
-        lse_notice=request.args.get("lse_notice"),
-        lse_notice_kind=request.args.get("lse_notice_kind", "info"),
-        strategy_statuses=STRATEGY_STATUSES,
-        **_alpaca_template_context(), **_lse_template_context(),
-    )
+    """The old Run & Report page is retired: Full Pipeline replaces it. Anything that still points at "/" lands there."""
+    qs = {k: v for k, v in request.args.items() if k in ("strategy_notice", "alpaca_notice", "alpaca_notice_kind", "lse_notice", "lse_notice_kind")}
+    return redirect(url_for("full_pipeline_form", **qs), 302)
 
 
 def _lse_redirect(notice: str, kind: str):
@@ -4466,6 +4457,8 @@ def api_pwa_enable_https():
 
 @app.route("/run", methods=["POST"])
 def run_pipeline():
+    # The Run & Report PAGE is retired (GET / redirects to Full Pipeline); this POST stays as the single-backtest backend
+    # for old bookmarks, scripts and automated tests, but nothing in the app links to it any more.
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(request.form, request.files)
         if dataset_error:

@@ -4,89 +4,116 @@
 <title>Support — T58 Quant Algo Backtester</title>
 {% include '_head_common.html' %}
 <style>
-  * { box-sizing: border-box; }
-  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 14px; max-width: 640px; }
-  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 8px; }
-  .card p { font-size: 14px; color: var(--t-soft); line-height: 1.55; margin: 0 0 12px; }
-  .btn {
-    display: inline-flex; align-items: center; gap: 8px; padding: 12px 18px; border-radius: 10px;
-    border: 1px solid var(--teal); background: var(--teal); color: var(--on-teal); font-weight: 700;
-    font-size: 14px; text-decoration: none; cursor: pointer;
-  }
-  .btn.secondary { background: transparent; color: var(--teal); }
-  .btn.discord { border-color: #5865F2; background: #5865F2; color: #fff; }
-  details { border: 1px solid var(--border-light); border-radius: 8px; padding: 10px 14px; margin-bottom: 8px; }
-  details summary { font-size: 14px; font-weight: 600; cursor: pointer; color: var(--t-soft2); }
-  details p { margin: 10px 0 0; font-size: 13.5px; color: var(--t-soft3); }
-  textarea {
-    width: 100%; min-height: 120px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-light);
-    background: var(--panel-3); color: var(--text); font-size: 14px; font-family: inherit;
-  }
-  input[type=text] {
-    width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-light);
-    background: var(--panel-3); color: var(--text); font-size: 14px; margin-bottom: 8px;
-  }
-  .saved-note { color: var(--teal); font-size: 13px; margin-top: 8px; display: none; }
+  .sp { max-width: 1060px; }
+  .sp-hero { display: flex; gap: 16px; align-items: center; padding: 20px 22px; border-radius: 16px; border: 1px solid var(--border);
+    background: linear-gradient(135deg, rgba(var(--teal-rgb), .16), rgba(var(--teal-rgb), .03) 60%), var(--panel-2); margin-bottom: 16px; }
+  .sp-hero .ic { flex: none; width: 52px; height: 52px; border-radius: 14px; display: grid; place-items: center; background: rgba(var(--teal-rgb), .18); color: var(--teal); }
+  .sp-hero .ic .lu { width: 26px; height: 26px; }
+  .sp-hero h2 { margin: 0 0 3px; font-size: 18px; text-transform: none; letter-spacing: 0; color: var(--text); }
+  .sp-hero p { margin: 0; font-size: 13.5px; color: var(--text-muted); line-height: 1.5; }
+  .sp-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .sp-tile { display: flex; flex-direction: column; gap: 8px; padding: 16px; border-radius: 14px; border: 1px solid var(--border); background: var(--panel-2); text-decoration: none; color: inherit; transition: transform .15s, border-color .15s; }
+  .sp-tile:hover { transform: translateY(-2px); border-color: rgba(var(--teal-rgb), .6); }
+  .sp-tile .ic { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; background: rgba(var(--teal-rgb), .14); color: var(--teal); }
+  .sp-tile.discord .ic { background: rgba(88, 101, 242, .2); color: #8e98ff; }
+  .sp-tile .ic .lu { width: 20px; height: 20px; }
+  .sp-tile b { font-size: 15px; } .sp-tile span.d { font-size: 12.5px; color: var(--text-muted); line-height: 1.45; flex: 1; }
+  .sp-tile .go { font-size: 12.5px; font-weight: 700; color: var(--teal); }
+  .sp-h { font-size: 12px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: var(--text-muted); margin: 6px 0 10px; }
+  .sp-cols { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 880px) { .sp-cols { grid-template-columns: 1fr; } }
+  .sp-faq details { border: 1px solid var(--border); border-radius: 12px; background: var(--panel-2); margin-bottom: 8px; overflow: hidden; }
+  .sp-faq summary { list-style: none; cursor: pointer; padding: 13px 16px; font-size: 14px; font-weight: 650; display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+  .sp-faq summary::-webkit-details-marker { display: none; }
+  .sp-faq summary::after { content: "+"; flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; background: rgba(var(--teal-rgb), .14); color: var(--teal); font-weight: 800; }
+  .sp-faq details[open] summary::after { content: "\2212"; }
+  .sp-faq details[open] { border-color: rgba(var(--teal-rgb), .45); }
+  .sp-faq details p { margin: 0; padding: 0 16px 14px; font-size: 13.5px; color: var(--text-muted); line-height: 1.6; }
+  .sp-form { padding: 16px; border-radius: 14px; border: 1px solid var(--border); background: var(--panel-2); position: sticky; top: 12px; }
+  .sp-form h2 { margin: 0 0 4px; font-size: 16px; text-transform: none; letter-spacing: 0; color: var(--text); }
+  .sp-form .sub { margin: 0 0 12px; font-size: 12.5px; color: var(--text-muted); line-height: 1.5; }
+  .sp-form label { display: block; font-size: 11.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--text-muted); margin: 10px 0 4px; }
+  .sp-form input, .sp-form textarea { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font: inherit; font-size: 14px; }
+  .sp-form textarea { min-height: 130px; resize: vertical; }
+  .sp-form input:focus, .sp-form textarea:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), .2); }
+  .sp-btn { margin-top: 12px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 11px 16px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: var(--on-teal); font-weight: 700; font-size: 14px; cursor: pointer; }
+  .sp-btn:hover { filter: brightness(1.08); }
+  .saved-note { color: var(--teal); font-size: 13px; margin-top: 8px; display: none; font-weight: 650; }
+  .sp-fine { margin: 12px 0 0; font-size: 11.5px; color: var(--text-dim); line-height: 1.5; }
 </style>
 </head>
 <body>
 {% set active_page = 'support' %}
 <div class="t58-shell">
 {% include '_sidebar.html' %}
-<div class="t58-main">
+<div class="t58-main"><div class="sp">
 <div class="t58-page-header">
   <h1>Support</h1>
-  <p>Get help from the community, learn the app, or log an issue.</p>
+  <p>Get unstuck fast: learn the app, ask the community, or log an issue.</p>
 </div>
 
-<div class="card">
-  <h2>Learn the app</h2>
-  <p>The Education tab walks through building your first strategy and reading a backtest report, step by step.</p>
-  <a class="btn" href="/education">Go to Education</a>
+<div class="sp-hero">
+  <div class="ic"><svg class="lu"><use href="#lu-life-buoy"/></svg></div>
+  <div><h2>How can we help?</h2><p>Most questions are answered in the FAQ below. For anything else, the Discord community is the quickest way to get a human answer, and the report box keeps a private log of anything you want to follow up on.</p></div>
 </div>
 
-<div class="card">
-  <h2>Community</h2>
-  <p>Join the Discord for help, discussion, and updates.</p>
-  <a class="btn discord" href="https://discord.gg/3MbKm3S2zG" target="_blank" rel="noopener">Join Discord</a>
+<div class="sp-tiles">
+  <a class="sp-tile" href="/education">
+    <div class="ic"><svg class="lu"><use href="#lu-school"/></svg></div>
+    <b>Learn the app</b><span class="d">Step-by-step lessons: build your first strategy and read a backtest report.</span><span class="go">Open Education &rarr;</span>
+  </a>
+  <a class="sp-tile discord" href="https://discord.gg/3MbKm3S2zG" target="_blank" rel="noopener">
+    <div class="ic"><svg class="lu"><use href="#lu-globe"/></svg></div>
+    <b>Join the community</b><span class="d">Ask questions, share results and get updates in the T58 Discord.</span><span class="go">Join Discord &rarr;</span>
+  </a>
+  <a class="sp-tile" href="/resources">
+    <div class="ic"><svg class="lu"><use href="#lu-library"/></svg></div>
+    <b>Browse resources</b><span class="d">Papers, books and references that the app's research tools draw on.</span><span class="go">Open Resources &rarr;</span>
+  </a>
 </div>
 
-<div class="card">
-  <h2>FAQ</h2>
-  <details>
-    <summary>How do I create a strategy?</summary>
-    <p>Use Forge Strategy under the Create tab to build one from scratch (Manual, Python, PineScript, or MQL5), or start from a template in the Strategy Library.</p>
-  </details>
-  <details>
-    <summary>What's the difference between Quick Optimize and Full Pipeline?</summary>
-    <p>Quick Optimize runs the walk-forward-aware GA search on its own for a fast iteration loop. Full Pipeline runs the complete 15-step process -- baseline, search, final Monte Carlo, out-of-sample checks, and a READY/MARGINAL/NOT READY verdict -- and is what you'd run before trusting a result.</p>
-  </details>
-  <details>
-    <summary>Why does a search say a candidate has zero trades?</summary>
-    <p>The strategy's entry conditions never fired on that dataset/timeframe combination -- widen the parameter ranges, check the timeframe matches what the strategy expects, or try a different instrument.</p>
-  </details>
-  <details>
-    <summary>What do Search Lab, Evolution Lab, and Iterative Refinement each do differently?</summary>
-    <p>Search Lab tries many different STRATEGY FAMILIES/hypotheses. Evolution Lab runs a longer, multi-generation search within families. Iterative Refinement takes a strategy you already have and tunes its existing numeric parameters via a genetic algorithm (or TPE/CMA-ES).</p>
-  </details>
-  <details>
-    <summary>Can I use MT5, cTrader, Tradovate, TradeLocker, or DXtrade?</summary>
-    <p>Yes -- add an account under Settings &rarr; API Keys &rarr; Brokers/Prop Firms, then use Forward Test (demo) or Deploy Live from the Strategy Library's Deployments tab.</p>
-  </details>
+<div class="sp-cols">
+  <div class="sp-faq">
+    <div class="sp-h">Frequently asked questions</div>
+    <details>
+      <summary>How do I create a strategy?</summary>
+      <p>Use Forge Strategy under the Create tab to build one from scratch (Manual, Python, PineScript, or MQL5), or start from a template in the Strategy Library.</p>
+    </details>
+    <details>
+      <summary>What's the difference between Quick Optimize and Full Pipeline?</summary>
+      <p>Quick Optimize runs the walk-forward-aware GA search on its own for a fast iteration loop. Full Pipeline runs the complete 15-step process (baseline, search, final Monte Carlo, out-of-sample checks, and a READY / MARGINAL / NOT READY verdict) and is what you'd run before trusting a result.</p>
+    </details>
+    <details>
+      <summary>Why does a search say a candidate has zero trades?</summary>
+      <p>The strategy's entry conditions never fired on that dataset/timeframe combination. Widen the parameter ranges, check the timeframe matches what the strategy expects, or try a different instrument.</p>
+    </details>
+    <details>
+      <summary>What do Search Lab, Evolution Lab, and Iterative Refinement each do differently?</summary>
+      <p>Search Lab tries many different strategy families and hypotheses. Evolution Lab runs a longer, multi-generation search within families. Iterative Refinement takes a strategy you already have and tunes its existing numeric parameters with a genetic algorithm (or TPE / CMA-ES).</p>
+    </details>
+    <details>
+      <summary>Can I use MT5, cTrader, Tradovate, TradeLocker, or DXtrade?</summary>
+      <p>Yes. Add an account under Settings &rarr; API Keys &rarr; Brokers/Prop Firms, then use Forward Test (demo) or Deploy Live from the Strategy Library's Deployments tab.</p>
+    </details>
+    <details>
+      <summary>Where is my data saved?</summary>
+      <p>Your runs, strategies, achievements and settings are saved on this computer and mirrored to a private vault filed under your license key, so they come back after a reinstall. Market-data files are not mirrored; re-import them from the Data section.</p>
+    </details>
+  </div>
+
+  <div class="sp-form">
+    <h2>Report an issue</h2>
+    <p class="sub">There is no ticket desk behind this form. Your note is saved to a file on this computer (<code>data/config/issue_reports.jsonl</code>) so you have a running log you can paste into an email or GitHub issue.</p>
+    <label for="issue-title">Summary</label>
+    <input type="text" id="issue-title" placeholder="e.g. Evolution Lab crashes on multi-instrument runs">
+    <label for="issue-body">What happened?</label>
+    <textarea id="issue-body" placeholder="What happened, what you expected instead, and any steps to reproduce it..."></textarea>
+    <button class="sp-btn" type="button" onclick="saveIssue()">Save report</button>
+    <p class="saved-note" id="issue-saved-note">Saved locally.</p>
+  </div>
 </div>
 
-<div class="card">
-  <h2>Report an issue</h2>
-  <p>This app has no external support backend -- there's no ticket system on the other end of this form. What you type here is saved to a local file
-  (<code>data/config/issue_reports.jsonl</code>) on this machine, so you have a running log of things to fix or follow up on yourself, or to paste
-  elsewhere (an email, a GitHub issue, a message to whoever's helping you build this) when you're ready.</p>
-  <input type="text" id="issue-title" placeholder="Short summary (e.g. 'Evolution Lab crashes on multi-instrument runs')">
-  <textarea id="issue-body" placeholder="What happened, what you expected instead, and any steps to reproduce it..."></textarea>
-  <button class="btn" style="margin-top:10px;" onclick="saveIssue()">Save Report</button>
-  <p class="saved-note" id="issue-saved-note">Saved locally.</p>
-</div>
-
-</div>
+</div></div>
 </div>
 
 <script>

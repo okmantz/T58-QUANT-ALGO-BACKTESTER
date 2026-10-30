@@ -321,7 +321,8 @@ def _start_lab(df, label, effort, form, back):
             settings={"dataset": label, "timeframe": tf, "effort": effort, "prop": prop_label, "risk_pct": risk_pct, "mode": "lab"})
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         threading.Thread(target=_run_lab_job, daemon=True, args=(job_id, df, risk, rules, label, effort, risk_pct, balance, seed, cancel,
-                                                                 (form.get("bar_size") or "auto"), form.get("fresh_start") != "on")).start()
+                                                                 (form.get("bar_size") or "auto"), form.get("fresh_start") != "on",
+                                                                 form.get("use_papers", "on") == "on", form.get("use_ai", "on") == "on")).start()
         return redirect(f"/discovery-engine/job/{job_id}")
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_DISCOVERY_ENGINE)
@@ -358,7 +359,7 @@ def _bury_near_misses(res, label, minutes, risk_pct):
         record_rejections(ents, graveyard_path_for(inst_key.lower(), tf))
 
 
-def _run_lab_job(job_id, df, risk, rules, label, effort, risk_pct, balance, seed, cancel, bar_size, use_memory=True):
+def _run_lab_job(job_id, df, risk, rules, label, effort, risk_pct, balance, seed, cancel, bar_size, use_memory=True, use_papers=True, use_ai=True):
     from app.orchestration.resource_guard import HEAVY_JOB_GUARD
     from app.reports.crash_log import log_crash
     from app.web.job_manager import JOB_MANAGER
@@ -418,6 +419,14 @@ def _run_lab_job(job_id, df, risk, rules, label, effort, risk_pct, balance, seed
                 JOB_MANAGER.log(job_id, f"Search memory unavailable ({exc}); running without it.")
         else:
             JOB_MANAGER.log(job_id, "Fresh start: ignoring the search memory for this run (variants are not skipped or recorded).")
+        try:
+            from app.discovery_lab.research_seeds import build_seeds
+            seeds, seed_notes = build_seeds(use_papers=use_papers, use_ai=use_ai)
+            cfg.seed_candidates = seeds
+            for n_ in seed_notes:
+                JOB_MANAGER.log(job_id, n_)
+        except Exception as exc:  # noqa: BLE001 -- seeds are a bonus; the search still runs
+            JOB_MANAGER.log(job_id, f"Couldn't load starting ideas from papers/AI ({type(exc).__name__}); searching without them.")
         verifier = None
         try:
             verifier = make_verifier(df, {m: f for m, f, _ in frames}, risk, _symbol_for(label))

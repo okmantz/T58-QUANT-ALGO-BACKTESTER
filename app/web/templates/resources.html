@@ -8,246 +8,133 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <style>
   * { box-sizing: border-box; }
+  .rs { max-width: 1060px; }
+  .rs-jump { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 18px; }
+  .rs-jump a { padding: 6px 14px; border-radius: 99px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 12.5px; font-weight: 650; text-decoration: none; }
+  .rs-jump a:hover { border-color: var(--teal); color: var(--teal); }
+  .rs-h { display: flex; align-items: baseline; gap: 10px; margin: 26px 0 10px; scroll-margin-top: 12px; }
+  .rs-h h2 { margin: 0; font-size: 17px; text-transform: none; letter-spacing: 0; color: var(--text); }
+  .rs-h span { font-size: 12.5px; color: var(--text-muted); }
 
-  .guide-card {
-    position: relative;
-    background: linear-gradient(155deg, var(--panel-2) 0%, var(--panel) 100%);
-    border: 1px solid var(--border-light);
-    border-radius: 16px;
-    padding: 28px 24px;
-    margin-bottom: 22px;
-    overflow: hidden;
-  }
-  .guide-card::before {
-    content: "";
-    position: absolute; inset: -40% -20% auto auto; width: 340px; height: 340px;
-    background: radial-gradient(circle, rgba(var(--teal-rgb), 0.16) 0%, transparent 70%);
-    pointer-events: none;
-  }
-  .guide-eyebrow {
-    display: inline-flex; align-items: center; gap: 6px;
-    font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em;
-    color: var(--teal); border: 1px solid var(--teal-dim); background: rgba(var(--teal-rgb), 0.08);
-    border-radius: 999px; padding: 4px 10px; margin-bottom: 14px;
-  }
-  .guide-title {
-    font-size: 22px; font-weight: 700; margin: 0 0 8px; color: var(--text);
-    position: relative;
-  }
-  .guide-sub {
-    font-size: 13.5px; color: var(--text-muted); line-height: 1.6; margin: 0 0 20px; max-width: 640px;
-    position: relative;
-  }
+  /* the three-step path */
+  .rs-path { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+  .rs-step { position: relative; display: flex; flex-direction: column; gap: 10px; padding: 20px 20px 18px; border-radius: 16px; border: 1px solid var(--border-light); overflow: hidden;
+    background: linear-gradient(155deg, var(--panel-2) 0%, var(--panel) 100%); }
+  .rs-step::before { content: ""; position: absolute; inset: -45% -25% auto auto; width: 260px; height: 260px; background: radial-gradient(circle, rgba(var(--teal-rgb), .16), transparent 70%); pointer-events: none; }
+  .rs-num { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 14px; background: var(--teal); color: var(--on-teal); position: relative; }
+  .rs-eyebrow { font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--teal); font-weight: 800; position: relative; }
+  .rs-step h3 { margin: 0; font-size: 17px; line-height: 1.25; color: var(--text); position: relative; }
+  .rs-step p { margin: 0; font-size: 13px; color: var(--text-muted); line-height: 1.55; flex: 1; position: relative; }
+  .rs-cta { position: relative; align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 10px; text-decoration: none; font-weight: 700; font-size: 13.5px; background: var(--teal); color: var(--on-teal); }
+  .rs-cta:hover { filter: brightness(1.07); }
+  .rs-cta.discord { background: #5865F2; color: #fff; }
+  .rs-meta { position: relative; font-size: 11.5px; color: var(--text-dim); margin-top: -2px; }
 
-  .mslsd-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 22px; position: relative; }
-  .mslsd-chip {
-    display: flex; align-items: center; gap: 7px;
-    background: var(--panel-3); border: 1px solid var(--border-light); border-radius: 10px;
-    padding: 8px 12px; font-size: 12px; color: var(--t-soft);
-  }
-  .mslsd-chip .letter {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 20px; height: 20px; border-radius: 6px; font-size: 11px; font-weight: 700;
-    color: var(--on-teal);
-  }
-  .mslsd-chip:nth-child(1) .letter { background: var(--neon-cyan, var(--teal)); }
-  .mslsd-chip:nth-child(2) .letter { background: var(--neon-lime, #b6ff3c); }
-  .mslsd-chip:nth-child(3) .letter { background: var(--neon-amber, #ffb547); }
-  .mslsd-chip:nth-child(4) .letter { background: var(--neon-violet, #8a5cff); color: #fff; }
+  /* MS-LSD framework */
+  .rs-card { border: 1px solid var(--border); border-radius: 16px; background: var(--panel-2); padding: 20px; }
+  .rs-letters { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin: 12px 0 14px; }
+  .rs-letter { display: flex; gap: 12px; align-items: center; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel-3); }
+  .rs-letter i { flex: none; width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; font-style: normal; font-weight: 800; color: #07121a; }
+  .rs-letter:nth-child(1) i { background: var(--neon-cyan, var(--teal)); } .rs-letter:nth-child(2) i { background: var(--neon-lime, #b6ff3c); }
+  .rs-letter:nth-child(3) i { background: var(--neon-amber, #ffb547); } .rs-letter:nth-child(4) i { background: var(--neon-violet, #8a5cff); color: #fff; }
+  .rs-letter b { display: block; font-size: 13.5px; } .rs-letter span { font-size: 12px; color: var(--text-muted); }
+  .rs-flow { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; margin: 6px 0 14px; counter-reset: s; }
+  .rs-flow div { flex: 1 1 190px; position: relative; padding: 12px 14px 12px 44px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel-3); font-size: 12.5px; font-weight: 600; line-height: 1.4; counter-increment: s; }
+  .rs-flow div::before { content: counter(s); position: absolute; left: 12px; top: 50%; transform: translateY(-50%); width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 11.5px; font-weight: 800; background: rgba(var(--teal-rgb), .18); color: var(--teal); }
+  .rs-quote { margin: 0 0 12px; font-size: 13.5px; color: var(--text-muted); line-height: 1.6; max-width: 760px; }
+  .rs-weeks { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 4px; }
+  .rs-week { padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel-3); }
+  .rs-week small { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .07em; color: var(--text-dim); margin-bottom: 4px; }
+  .rs-week b { font-size: 13px; line-height: 1.35; }
 
-  .week-grid {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: 10px; margin-bottom: 24px; position: relative;
-  }
-  .week-cell {
-    background: var(--panel-3); border: 1px solid var(--border); border-radius: 12px;
-    padding: 14px 12px; text-align: left;
-  }
-  .week-num {
-    font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); margin-bottom: 6px;
-  }
-  .week-label { font-size: 13px; color: var(--text); line-height: 1.4; font-weight: 600; }
-
-  .guide-cta {
-    display: inline-flex; align-items: center; gap: 10px;
-    background: var(--teal); color: var(--on-teal); font-weight: 700; font-size: 14.5px;
-    padding: 13px 22px; border-radius: 10px; text-decoration: none;
-    box-shadow: 0 0 24px rgba(var(--teal-rgb), 0.35);
-    position: relative;
-  }
-  .guide-cta:hover { filter: brightness(1.05); }
-  .guide-cta .arrow { transition: transform .15s; }
-  .guide-cta:hover .arrow { transform: translateX(3px); }
-  .guide-meta {
-    margin-top: 12px; font-size: 11.5px; color: var(--text-dim); position: relative;
-  }
-
-  .section-label {
-    font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted);
-    margin: 26px 0 12px;
-  }
-
-  .more-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
-  .more-card {
-    background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 15px;
-    text-decoration: none; color: var(--text); display: block; transition: border-color .15s;
-  }
-  .more-card:hover { border-color: var(--border-light); }
-  .more-card .badge {
-    display: inline-block; font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em;
-    color: var(--text-dim); border: 1px solid var(--border-light); border-radius: 4px;
-    padding: 1px 6px; margin-bottom: 8px;
-  }
-  .more-card h3 { margin: 0 0 5px; font-size: 13.5px; color: var(--text); }
-  .more-card p { margin: 0; font-size: 12px; color: var(--text-muted); line-height: 1.5; }
-
-  .disclaimer {
-    margin-top: 26px; font-size: 11.5px; color: var(--text-dim); line-height: 1.6;
-    border-top: 1px solid var(--border); padding-top: 14px;
-  }
-
-  .mslsd-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 18px; position: relative; }
-  .mslsd-step { background: var(--panel-3); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
-  .mslsd-step .num { font-size: 10px; color: var(--teal); font-weight: 700; letter-spacing: .05em; margin-bottom: 4px; }
-  .mslsd-step .lbl { font-size: 12.5px; color: var(--text); font-weight: 600; line-height: 1.4; }
-
-  .mslsd-detail { margin-bottom: 16px; position: relative; }
-  .mslsd-detail h4 { margin: 0 0 6px; font-size: 13.5px; color: var(--text); }
-  .mslsd-detail p, .mslsd-detail li { font-size: 12.5px; color: var(--text-muted); line-height: 1.65; }
-  .mslsd-detail ul { margin: 4px 0 0; padding-left: 18px; }
-
-  .discord-card {
-    display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
-    background: linear-gradient(155deg, var(--panel-2) 0%, var(--panel) 100%);
-    border: 1px solid var(--border-light); border-radius: 16px; padding: 22px 24px; margin-bottom: 22px;
-  }
-  .discord-card .txt h3 { margin: 0 0 4px; font-size: 16px; color: var(--text); }
-  .discord-card .txt p { margin: 0; font-size: 12.5px; color: var(--text-muted); max-width: 480px; line-height: 1.5; }
-  .discord-cta {
-    display: inline-flex; align-items: center; gap: 8px; white-space: nowrap;
-    background: #5865F2; color: #fff; font-weight: 700; font-size: 13.5px;
-    padding: 11px 20px; border-radius: 10px; text-decoration: none;
-  }
-  .discord-cta:hover { filter: brightness(1.08); }
+  /* free places */
+  .rs-more { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+  .rs-link { display: flex; flex-direction: column; gap: 6px; padding: 16px; border-radius: 14px; border: 1px solid var(--border); background: var(--panel-2); text-decoration: none; color: var(--text); transition: transform .15s, border-color .15s; }
+  .rs-link:hover { transform: translateY(-2px); border-color: rgba(var(--teal-rgb), .6); }
+  .rs-tag { align-self: flex-start; font-size: 10px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: var(--teal); background: rgba(var(--teal-rgb), .12); border-radius: 99px; padding: 3px 9px; }
+  .rs-link h3 { margin: 0; font-size: 14.5px; } .rs-link p { margin: 0; font-size: 12.5px; color: var(--text-muted); line-height: 1.5; flex: 1; }
+  .rs-link .go { font-size: 12.5px; font-weight: 700; color: var(--teal); }
+  .rs-note { margin-top: 28px; font-size: 11.5px; color: var(--text-dim); line-height: 1.6; border-top: 1px solid var(--border); padding-top: 14px; }
 </style>
 </head>
 <body>
 {% set active_page = 'resources' %}
 <div class="t58-shell">
 {% include '_sidebar.html' %}
-<div class="t58-main">
+<div class="t58-main"><div class="rs">
 <div class="t58-page-header">
   <h1>Resources</h1>
-  <p>A running start on trading fundamentals before you backtest your first strategy — no engine, no upload, just reading.</p>
+  <p>A running start on trading fundamentals before you backtest your first strategy. No engine, no upload, just reading.</p>
 </div>
 
-<div class="guide-card">
-  <div class="guide-eyebrow">&#9733; T58 guide</div>
-  <div class="guide-title">30-Day Trading Quickstart Guide</div>
-  <p class="guide-sub">
-    From zero to sim trading in 30 days. Built around T58's own MS-LSD framework —
-    the same market-reading model behind this app's Manual Strategy Builder's
-    advanced conditions (Break of Structure, Liquidity Sweep, Fair Value Gap,
-    Order Block, and the rest).
-  </p>
+<nav class="rs-jump" aria-label="Jump to a section">
+  <a href="#start">Start here</a><a href="#framework">The MS-LSD framework</a><a href="#free">Free learning</a>
+</nav>
 
-  <div class="mslsd-row">
-    <div class="mslsd-chip"><span class="letter">M</span> Market Structure</div>
-    <div class="mslsd-chip"><span class="letter">L</span> Liquidity</div>
-    <div class="mslsd-chip"><span class="letter">S</span> Supply &amp; Demand</div>
-    <div class="mslsd-chip"><span class="letter">D</span> Entry Models</div>
+<div class="rs-h" id="start"><h2>Start here</h2><span>Three steps, in order</span></div>
+<div class="rs-path">
+  <div class="rs-step">
+    <div class="rs-num">1</div><div class="rs-eyebrow">T58 guide</div>
+    <h3>30-Day Trading Quickstart Guide</h3>
+    <p>From zero to sim trading in 30 days, built around T58's own MS-LSD market-reading model: setup and structure, liquidity, supply and demand, then entry models.</p>
+    <a class="rs-cta" href="https://docs.google.com/document/d/17tdRY_tzpHOdw8_a1EpAgOmradTbu02Dlo6BOAnK0Wg/edit?usp=drivesdk" target="_blank" rel="noopener">Open the guide &rarr;</a>
+    <div class="rs-meta">Google Docs &middot; opens in a new tab</div>
   </div>
-
-  <div class="week-grid">
-    <div class="week-cell">
-      <div class="week-num">Week 1</div>
-      <div class="week-label">Setup &amp; Market Structure</div>
-    </div>
-    <div class="week-cell">
-      <div class="week-num">Week 2</div>
-      <div class="week-label">Liquidity</div>
-    </div>
-    <div class="week-cell">
-      <div class="week-num">Week 3</div>
-      <div class="week-label">Supply &amp; Demand</div>
-    </div>
-    <div class="week-cell">
-      <div class="week-num">Week 4</div>
-      <div class="week-label">Entry Models &amp; Sim Trading</div>
-    </div>
+  <div class="rs-step">
+    <div class="rs-num">2</div><div class="rs-eyebrow">T58 strategy</div>
+    <h3>MS-LSD Strategy Doc</h3>
+    <p>The full write-up: timeframe alignment, reading market structure, the three types of liquidity, what makes a valid order block, and both entry models. Always the latest version.</p>
+    <a class="rs-cta" href="https://docs.google.com/document/d/14jubETVbumncdLJrTrw2ke-NxFPXkT34qzH4_Q1BguA/edit?usp=drivesdk" target="_blank" rel="noopener">Open the MS-LSD strategy doc &rarr;</a>
+    <div class="rs-meta">Google Docs &middot; opens in a new tab</div>
   </div>
-
-  <a class="guide-cta" href="https://docs.google.com/document/d/17tdRY_tzpHOdw8_a1EpAgOmradTbu02Dlo6BOAnK0Wg/edit?usp=drivesdk" target="_blank" rel="noopener">
-    Open the guide <span class="arrow">&#8594;</span>
-  </a>
-  <div class="guide-meta">Opens in Google Docs, in a new tab.</div>
-</div>
-
-<div class="guide-card">
-  <div class="guide-eyebrow">&#9733; T58 strategy</div>
-  <div class="guide-title">MS-LSD Strategy (Market Structure + Liquidity + Supply &amp; Demand)</div>
-  <p class="guide-sub">
-    "Never predict the markets. Instead, participate in probability." Price moves because of
-    liquidity and order flow through banks, institutions, and news — MS-LSD is the framework for
-    reading that flow, and it's the same logic wired into this app's Manual Strategy Builder's
-    advanced conditions.
-  </p>
-
-  <div class="mslsd-steps">
-    <div class="mslsd-step"><div class="num">STEP 1</div><div class="lbl">HTF directional bias</div></div>
-    <div class="mslsd-step"><div class="num">STEP 2</div><div class="lbl">Key liquidity</div></div>
-    <div class="mslsd-step"><div class="num">STEP 3</div><div class="lbl">Area of interest (S&amp;D zone below liquidity)</div></div>
-    <div class="mslsd-step"><div class="num">STEP 4</div><div class="lbl">Standard confirmation entry (LTF ChoCh)</div></div>
-  </div>
-
-  <p class="guide-sub" style="margin-top:2px;">
-    The full write-up — timeframe alignment, how to read market structure, the three types of
-    liquidity, what makes a valid order block, and both entry models in detail — lives in T58's
-    strategy doc rather than pasted here, so it always reflects the latest version.
-  </p>
-
-  <a class="guide-cta" href="https://docs.google.com/document/d/14jubETVbumncdLJrTrw2ke-NxFPXkT34qzH4_Q1BguA/edit?usp=drivesdk" target="_blank" rel="noopener">
-    Open the MS-LSD strategy doc <span class="arrow">&#8594;</span>
-  </a>
-  <div class="guide-meta">Opens in Google Docs, in a new tab. This is T58's own framework — the same one this app's engine tests strategies against.</div>
-</div>
-
-<div class="discord-card">
-  <div class="txt">
+  <div class="rs-step">
+    <div class="rs-num">3</div><div class="rs-eyebrow">Community</div>
     <h3>T58 Trading Discord</h3>
-    <p>Join the T58 Trading community to discuss MS-LSD setups, prop-firm evals, and get support directly from T58.</p>
+    <p>Talk through MS-LSD setups and prop-firm evaluations, and get support directly from T58.</p>
+    <a class="rs-cta discord" href="https://whop.com/t58-trading/t58-trading-discord/" target="_blank" rel="noopener">Join the Discord &rarr;</a>
+    <div class="rs-meta">Opens in a new tab</div>
   </div>
-  <a class="discord-cta" href="https://whop.com/t58-trading/t58-trading-discord/" target="_blank" rel="noopener">
-    Join the Discord &#8594;
+</div>
+
+<div class="rs-h" id="framework"><h2>The MS-LSD framework at a glance</h2><span>The same logic behind the Manual Strategy Builder's advanced conditions</span></div>
+<div class="rs-card">
+  <p class="rs-quote">&ldquo;Never predict the markets. Instead, participate in probability.&rdquo; Price moves because of liquidity and order flow through banks, institutions and news. MS-LSD is the framework for reading that flow.</p>
+  <div class="rs-letters">
+    <div class="rs-letter"><i>M</i><div><b>Market Structure</b><span>Break of Structure, trend and range</span></div></div>
+    <div class="rs-letter"><i>L</i><div><b>Liquidity</b><span>Where stops rest; sweeps</span></div></div>
+    <div class="rs-letter"><i>S</i><div><b>Supply &amp; Demand</b><span>Order blocks and fair value gaps</span></div></div>
+    <div class="rs-letter"><i>D</i><div><b>Entry Models</b><span>How and when to pull the trigger</span></div></div>
+  </div>
+  <div class="rs-flow">
+    <div>HTF directional bias</div><div>Key liquidity</div><div>Area of interest (S&amp;D zone below liquidity)</div><div>Standard confirmation entry (LTF ChoCh)</div>
+  </div>
+  <div class="rs-weeks">
+    <div class="rs-week"><small>Week 1</small><b>Setup &amp; Market Structure</b></div>
+    <div class="rs-week"><small>Week 2</small><b>Liquidity</b></div>
+    <div class="rs-week"><small>Week 3</small><b>Supply &amp; Demand</b></div>
+    <div class="rs-week"><small>Week 4</small><b>Entry Models &amp; Sim Trading</b></div>
+  </div>
+</div>
+
+<div class="rs-h" id="free"><h2>More free places to build your foundation</h2><span>Third-party sites</span></div>
+<div class="rs-more">
+  <a class="rs-link" href="https://www.babypips.com/learn/forex" target="_blank" rel="noopener">
+    <span class="rs-tag">Course &middot; beginner</span><h3>BabyPips: School of Pipsology</h3>
+    <p>The standard free, self-paced forex course. Starts from absolute basics and builds up.</p><span class="go">Open &rarr;</span>
+  </a>
+  <a class="rs-link" href="https://www.investopedia.com/trading-4689660" target="_blank" rel="noopener">
+    <span class="rs-tag">Reference &middot; any level</span><h3>Investopedia: Trading</h3>
+    <p>A reliable reference for looking up any term, order type or concept as it comes up.</p><span class="go">Open &rarr;</span>
+  </a>
+  <a class="rs-link" href="https://www.cmegroup.com/education.html" target="_blank" rel="noopener">
+    <span class="rs-tag">Education &middot; intermediate</span><h3>CME Group Education</h3>
+    <p>Free courses on futures, options and risk management from a major exchange operator.</p><span class="go">Open &rarr;</span>
   </a>
 </div>
 
-<div class="section-label">More free places to build your foundation</div>
-<div class="more-grid">
-  <a class="more-card" href="https://www.babypips.com/learn/forex" target="_blank" rel="noopener">
-    <div class="badge">Course</div>
-    <h3>BabyPips — School of Pipsology</h3>
-    <p>The standard free, self-paced forex course — starts from absolute basics and builds up.</p>
-  </a>
-  <a class="more-card" href="https://www.investopedia.com/trading-4689660" target="_blank" rel="noopener">
-    <div class="badge">Reference</div>
-    <h3>Investopedia — Trading</h3>
-    <p>A reliable reference for looking up any term, order type, or concept as it comes up.</p>
-  </a>
-  <a class="more-card" href="https://www.cmegroup.com/education.html" target="_blank" rel="noopener">
-    <div class="badge">Education</div>
-    <h3>CME Group Education</h3>
-    <p>Free courses on futures, options, and risk management from a major exchange operator.</p>
-  </a>
-</div>
+<p class="rs-note">Educational content only, not financial advice. The same disclaimer that applies to every simulated result elsewhere in this app applies here too. External links go to third-party sites this app doesn't control.</p>
 
-<p class="disclaimer">
-  Educational content only, not financial advice — the same disclaimer that applies to every
-  simulated result elsewhere in this app applies here too. External links go to third-party
-  sites this app doesn't control.
-</p>
-
-</div>
+</div></div>
 </div>
 <script src="/static/t58-chrome.js" defer></script>
 <script>

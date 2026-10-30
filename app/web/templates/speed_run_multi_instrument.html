@@ -49,7 +49,7 @@
 <form method="post" action="/speed-run/multi-instrument/start">
   <div class="card">
     <h2>1. Instruments (pick 2 or more)</h2>
-    <p class="help">Every dataset you've previously uploaded or fetched shows up here -- upload more from the Run &amp; Report or Search Lab pages first if what you want isn't listed yet.</p>
+    <p class="help">Every dataset you've previously uploaded or fetched shows up here -- upload more from the Full Pipeline or Search Lab pages first if what you want isn't listed yet.</p>
     {% if stored_datasets %}
     <div class="dataset-list">
       {% for g in dataset_groups %}
@@ -65,7 +65,7 @@
     </div>
     <div class="selected-count" id="selected-count">0 selected</div>
     {% else %}
-    <div class="empty-note">No stored datasets yet -- upload at least two on the Run &amp; Report or Search Lab pages first, then come back here.</div>
+    <div class="empty-note">No stored datasets yet -- upload at least two on the Full Pipeline or Search Lab pages first, then come back here.</div>
     {% endif %}
   </div>
 

@@ -1,10 +1,10 @@
-"""One-time clean slate for the owner (master key).
+"""Clean slate for the owner (master key).
 
-The first time the master key signs in on a device, the app starts like a brand-new install: saved runs, achievements,
+EVERY time the master key is entered (and the first time it is found saved on a device), the app starts like a brand-new install: saved runs, achievements,
 look-and-feel choices, journal, AI memory and the account vault copy are MOVED (never deleted) into a dated backup folder.
-After that a marker file is written and everything saves normally -- this never runs again on that device.
+After that a marker file is written and everything saves normally until the master key is entered again.
 
-Kept on purpose: strategies (your code), data/raw (price files), data/config (API keys / broker settings) and the license.
+The strategy library goes back to the strategies committed to the repo. Kept on purpose: data/raw (price files), data/config (API keys / broker settings) and the license.
 Delete `fresh_start_done.json` in the user-data folder to get another clean start.
 """
 from __future__ import annotations
@@ -54,8 +54,9 @@ def _move(src: Path, dest_root: Path, base: Path) -> int:
     return 1
 
 
-def run_if_needed() -> bool:
-    """Run the clean slate if it hasn't run on this device. Never raises. Returns True when it ran now."""
+def run_if_needed(force: bool = False) -> bool:
+    """Run the clean slate if it hasn't run on this device (or always, with force=True -- used every time the master key is entered).
+    Never raises. Returns True when it ran now."""
     try:
         import os
         # Never during tests or when explicitly disabled (T58_NO_FRESH_START=1).
@@ -63,7 +64,7 @@ def run_if_needed() -> bool:
             return False
         if "PYTEST_CURRENT_TEST" in os.environ and os.environ.get("T58_FORCE_FRESH_START") != "1":
             return False
-        if not needed():
+        if not force and not needed():
             return False
         from app.data.storage import get_app_base_dir, user_data_dir
         base = get_app_base_dir()
@@ -93,6 +94,12 @@ def run_if_needed() -> bool:
                     shutil.move(str(acct), str(dest))
         except Exception:  # noqa: BLE001
             pass
+        try:    # back to the 5 default strategies; everything else is parked in the same backup folder
+            from app.strategy import default_library
+            moved += default_library.reset_to_defaults(backup / "strategies")
+            default_library.forget_account()
+        except Exception:  # noqa: BLE001
+            pass
         user_data_dir().mkdir(parents=True, exist_ok=True)
         _marker().write_text(json.dumps({
             "epoch": uuid.uuid4().hex[:12], "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -101,3 +108,35 @@ def run_if_needed() -> bool:
         return True
     except Exception:  # noqa: BLE001
         return False
+
+
+def clear_for_account_switch() -> int:
+    """A DIFFERENT account is signing in on this device: park the previous account's runs, settings and achievements in a dated
+    backup folder (their own vault copy keeps them for their next sign-in) so the new account starts from the defaults.
+    Strategies are handled separately by app.strategy.default_library. Never raises; returns files/folders moved."""
+    try:
+        import os
+        if "PYTEST_CURRENT_TEST" in os.environ and os.environ.get("T58_FORCE_FRESH_START") != "1":
+            return 0
+        from app.data.storage import get_app_base_dir, user_data_dir
+        base = get_app_base_dir()
+        backup = user_data_dir() / f"account_switch_backup_{time.strftime('%Y%m%d-%H%M%S')}"
+        moved = 0
+        for rel in _MOVE_FILES:
+            moved += _move(base / rel, backup, base)
+        for rel in _MOVE_DIRS:
+            p = base / rel
+            if not p.is_dir():
+                continue
+            if rel == "reports":
+                for child in list(p.iterdir()):
+                    moved += _move(child, backup, base)
+            else:
+                moved += _move(p, backup, base)
+        # the browser clears its own saved look-and-feel once when the epoch changes
+        user_data_dir().mkdir(parents=True, exist_ok=True)
+        _marker().write_text(json.dumps({"epoch": uuid.uuid4().hex[:12], "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                                         "backup": str(backup), "moved": moved, "reason": "account switch"}), encoding="utf-8")
+        return moved
+    except Exception:  # noqa: BLE001
+        return 0

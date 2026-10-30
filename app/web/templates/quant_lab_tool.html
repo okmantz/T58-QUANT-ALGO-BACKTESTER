@@ -5,60 +5,71 @@
 {% include '_head_common.html' %}
 <style>
   * { box-sizing: border-box; }
-  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
-  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
+  .qt { max-width: 980px; }
+  a.back-link { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12.5px; font-weight: 650; text-decoration: none; margin-bottom: 8px; }
+  a.back-link:hover { color: var(--teal); }
+  .qt-head { padding: 18px 20px; border-radius: 16px; border: 1px solid var(--border); margin-bottom: 14px;
+    background: linear-gradient(135deg, rgba(var(--teal-rgb), .13), rgba(var(--teal-rgb), .02) 65%), var(--panel-2); }
+  .qt-head h1 { margin: 0 0 5px; font-size: 21px; }
+  .qt-head p.lede { color: var(--text-muted); font-size: 13.5px; margin: 0; line-height: 1.55; max-width: 760px; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 14px; padding: 18px; margin-bottom: 14px; }
+  .card h2 { display: flex; align-items: center; gap: 10px; font-size: 15px; text-transform: none; letter-spacing: 0; color: var(--text); margin: 0 0 8px; }
+  .card h2 .sn { flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 800; background: var(--teal); color: var(--on-teal); }
   .card p.help { font-size: 12.5px; color: var(--text-muted); margin: 0 0 14px; line-height: 1.5; }
-  label { display: block; font-size: 13px; color: var(--t-soft); margin: 10px 0 4px; }
-  input[type=text], input[type=number], select, textarea {
-    width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border-light);
-    background: var(--panel-3); color: var(--text); font-size: 14px;
+  label { display: block; font-size: 12px; font-weight: 650; color: var(--text-muted); margin: 12px 0 4px; }
+  input[type=text], input[type=number], select, textarea, input[type=file] {
+    width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font: inherit; font-size: 14px;
   }
-  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), 0.15); }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), 0.18); }
   textarea { min-height: 100px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
-  .row { display: flex; gap: 10px; flex-wrap: wrap; }
-  .row > div { flex: 1; min-width: 140px; }
+  .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
   .checkbox-row { display: flex; align-items: center; gap: 8px; margin: 12px 0 4px; }
   .checkbox-row input { width: auto; }
-  .submit-btn {
-    width: 100%; padding: 13px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal);
-    color: var(--on-teal); font-weight: 700; font-size: 14px; margin-top: 14px; cursor: pointer;
-  }
-  .result-ok { border-left: 3px solid var(--teal); }
-  .result-error { border-left: 3px solid var(--coral); color: var(--coral); white-space: pre-wrap; font-size: 13px; }
-  pre.result-summary { white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; color: var(--text); margin: 0; }
-  h1 { font-size: 18px; margin: 0 0 4px; }
-  p.lede { color: var(--text-muted); font-size: 13px; margin: 0 0 16px; }
-  a.back-link { color: var(--text-muted); font-size: 12.5px; text-decoration: none; }
-  a.back-link:hover { color: var(--teal); }
+  .submit-btn { display: inline-flex; align-items: center; gap: 8px; padding: 12px 26px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal);
+    color: var(--on-teal); font-weight: 800; font-size: 14.5px; margin-top: 16px; cursor: pointer; box-shadow: 0 0 20px rgba(var(--teal-rgb), .25); }
+  .submit-btn:hover { filter: brightness(1.07); } .submit-btn[disabled] { opacity: .6; cursor: progress; }
+  .result-ok { border-color: rgba(var(--teal-rgb), .5); box-shadow: 0 0 0 1px rgba(var(--teal-rgb), .12) inset; }
+  .result-error { border-left: 4px solid var(--coral); color: var(--coral); white-space: pre-wrap; font-size: 13px; }
+  pre.result-summary { white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; color: var(--text); margin: 0; line-height: 1.6; }
+  .card table { border-collapse: collapse; font-size: 12.5px; } .card td, .card th { padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: left; }
 </style>
 </head>
 <body>
 {% set active_page = 'quant_lab' %}
 <div class="t58-shell">
 {% include '_sidebar.html' %}
-<div class="t58-main">
-  <a class="back-link" href="/quant-lab">&larr; Quant Lab</a>
-  <h1>{{ title }}</h1>
-  <p class="lede">{{ description }}</p>
+<div class="t58-main"><div class="qt">
+  <a class="back-link" href="/quant-lab">&larr; All Quant Lab tools</a>
+  <div class="qt-head">
+    <h1>{{ title }}</h1>
+    <p class="lede">{{ description }}</p>
+  </div>
 
-  <form method="POST" enctype="multipart/form-data">
+  <form method="POST" enctype="multipart/form-data" id="qt-form">
     <div class="card">
-      <h2>Inputs</h2>
+      <h2><span class="sn">1</span> Inputs</h2>
       {{ form_html|safe }}
-      <button class="submit-btn" type="submit">Run</button>
+      <button class="submit-btn" type="submit" id="qt-run">Run &rarr;</button>
     </div>
   </form>
 
   {% if error %}
   <div class="card result-error">{{ error }}</div>
   {% elif result_html %}
-  <div class="card result-ok">
-    <h2>Result</h2>
+  <div class="card result-ok" id="qt-result">
+    <h2><span class="sn">2</span> Result</h2>
     {{ result_html|safe }}
   </div>
+  <script>try { document.getElementById('qt-result').scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {}</script>
   {% endif %}
+</div></div>
 </div>
-</div>
+<script>
+  document.getElementById('qt-form').addEventListener('submit', function () {
+    var b = document.getElementById('qt-run'); b.disabled = true; b.textContent = 'Running…';
+  });
+</script>
 <script src="/static/t58-chrome.js" defer></script>
 </body>
 </html>

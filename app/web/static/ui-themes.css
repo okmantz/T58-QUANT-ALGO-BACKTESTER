@@ -1,8 +1,7 @@
 /* T58 interface themes -- unlockable whole-interface styles (Account -> Personalize -> Interface theme).
  * Each one re-skins the app by overriding the design tokens in theme.css (colours, radius, shadows, a typeface where it fits),
  * so every page follows with no per-page code. Chosen with <html data-ui-theme="...">, set by t58-personalize.js. A theme that is
- * still locked is never applied (the server drops it from the synced preferences). Arctic Glass sits on the light base
- * (data-theme="light" is forced by the script); the others sit on the dark base.
+ * still locked is never applied (the server drops it from the synced preferences). Every theme sits on the dark base.
  * The accent colour picked in Personalize still wins over a theme's accent (it is written as inline custom properties). */
 
 /* the light/dark toggle makes no sense while a theme owns the palette */
@@ -22,21 +21,22 @@ html[data-ui-theme="obsidian-gold"] .t58-card, html[data-ui-theme="obsidian-gold
 html[data-ui-theme="obsidian-gold"] h1, html[data-ui-theme="obsidian-gold"] h2 { letter-spacing: .01em; }
 html[data-ui-theme="obsidian-gold"] h1 { background: linear-gradient(100deg, #fff1c9, #e2b84d 55%, #b98a22); -webkit-background-clip: text; background-clip: text; color: transparent; }
 
-/* ------------------------------------------------------------------ Arctic Glass: frosted, bright, cool */
-html[data-ui-theme="arctic-glass"] {
-  --bg: #e4eef6; --bg-1: #e4eef6; --panel: rgba(255, 255, 255, .62); --panel-2: rgba(255, 255, 255, .66); --panel-3: rgba(235, 244, 251, .8); --panel-elevated: rgba(255, 255, 255, .8);
-  --border: rgba(110, 150, 185, .34); --border-light: rgba(80, 120, 160, .5); --text: #0f2230; --text-muted: #3d5668; --text-dim: #54697a;
-  --teal: #1c6fa8; --teal-dim: #165a89; --teal-rgb: 28, 111, 168; --on-teal: #ffffff; --on-teal2: #ffffff; --on-teal3: #ffffff;
-  --pop-bg: rgba(255, 255, 255, .94); --pop-bg-2: #eef5fa; --pop-bd: rgba(80, 120, 160, .45);
-  --glass-bg: rgba(255, 255, 255, .6); --glass-border: rgba(255, 255, 255, .8);
-  --radius-sm: 8px; --radius-md: 14px; --radius-lg: 20px;
-  --shadow-md: 0 8px 28px rgba(40, 80, 120, .16); --shadow-lg: 0 16px 48px rgba(40, 80, 120, .2);
+/* ------------------------------------------------------------------ Midnight Azure: deep navy, glacier-blue light (pairs with Abyssal Blue, Ocean and Sakura) */
+html[data-ui-theme="midnight-azure"] {
+  --bg: #050b18; --bg-1: #050b18; --panel: rgba(10, 22, 44, .82); --panel-2: rgba(13, 28, 54, .84); --panel-3: #0f2140; --panel-elevated: #12284c;
+  --border: #1b3560; --border-light: #2c5088; --text: #e6f1ff; --text-muted: #92b2d8; --text-dim: #6486b0;
+  --teal: #4cb4ff; --teal-dim: #1d6fb8; --teal-rgb: 76, 180, 255; --on-teal: #04121f; --on-teal2: #04121f; --on-teal3: #04121f;
+  --pop-bg: #0b1a33; --pop-bg-2: #102345; --pop-bd: rgba(76, 180, 255, .4);
+  --glass-bg: rgba(10, 22, 44, .72); --glass-border: rgba(76, 180, 255, .18);
+  --radius-sm: 8px; --radius-md: 12px; --radius-lg: 18px;
+  --shadow-md: 0 8px 28px rgba(0, 6, 24, .6); --shadow-lg: 0 16px 52px rgba(0, 6, 24, .7);
+  --glow-teal: 0 0 0 1px rgba(76, 180, 255, .22), 0 0 28px rgba(76, 180, 255, .12);
 }
-html[data-ui-theme="arctic-glass"] body { background: linear-gradient(160deg, #eaf3fa 0%, #d8e8f3 45%, #e8f1f8 100%) fixed; }
-html[data-ui-theme="arctic-glass"] .t58-card, html[data-ui-theme="arctic-glass"] .card, html[data-ui-theme="arctic-glass"] .t58-sidebar {
-  -webkit-backdrop-filter: blur(14px) saturate(1.25); backdrop-filter: blur(14px) saturate(1.25); border-color: rgba(255, 255, 255, .85);
-  box-shadow: 0 6px 24px rgba(40, 80, 120, .12), inset 0 1px 0 rgba(255, 255, 255, .9);
-}
+html[data-ui-theme="midnight-azure"] body {
+  background: radial-gradient(1100px 650px at 85% -10%, rgba(40, 120, 220, .24), transparent 60%), radial-gradient(900px 600px at 0% 110%, rgba(20, 170, 200, .14), transparent 60%), #050b18 fixed; }
+html[data-ui-theme="midnight-azure"] .t58-card, html[data-ui-theme="midnight-azure"] .card, html[data-ui-theme="midnight-azure"] .t58-sidebar {
+  -webkit-backdrop-filter: blur(12px) saturate(1.2); backdrop-filter: blur(12px) saturate(1.2); border-color: rgba(76, 180, 255, .16); }
+html[data-ui-theme="midnight-azure"] h1 { background: linear-gradient(100deg, #e9f6ff, #4cb4ff 60%, #2a7fd6); -webkit-background-clip: text; background-clip: text; color: transparent; }
 
 /* ------------------------------------------------------------------ Terminal Green: phosphor on black, monospace, square corners */
 html[data-ui-theme="terminal-green"] {

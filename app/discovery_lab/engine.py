@@ -71,6 +71,7 @@ class LabConfig:
     ledger_scope: str = ""                  # the market being searched, e.g. "ES1!"
     vary_seed: bool = True
     warm_start: bool = True
+    seed_candidates: list = field(default_factory=list)   # starting ideas from papers / AI (app.discovery_lab.research_seeds); evaluated like any other idea
 
 
 @dataclass
@@ -564,6 +565,15 @@ def _search_one_size(ctx: _Ctx, fams: list, cfg: LabConfig, budget: int, rng: ra
             cfg.ledger.warm_started += len(warm)
         except Exception as exc:  # noqa: BLE001 -- the memory is a bonus, never a reason to fail a search
             notes.append(f"Search memory could not be read ({type(exc).__name__}); searching without it.")
+    # --- 0b. starting ideas from the Resource Library papers and the AI: evaluated first, exactly like any random idea (they count as tried)
+    for seed_c in (cfg.seed_candidates or []):
+        if stopped():
+            break
+        sc = {k: v for k, v in seed_c.items() if k in ("family", "params", "flt", "stop_atr", "target_r", "hold")}
+        if sc.get("stop_atr") is None:
+            sc["stop_atr"] = ctx.stops[len(ctx.stops) // 2]
+        if sc["family"] in F.FAMILIES:
+            evaluate(sc)
     # --- 1. random search
     guard = 0
     while tally["tested"] - start_tested < n_sample and guard < n_sample * 6 and not stopped():

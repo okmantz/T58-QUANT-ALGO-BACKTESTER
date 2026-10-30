@@ -5,59 +5,94 @@
 {% include '_head_common.html' %}
 <style>
   * { box-sizing: border-box; }
-  .qlab-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
-  .qlab-card {
-    background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 16px;
-    text-decoration: none; color: var(--text); display: block; transition: border-color .15s;
-  }
-  .qlab-card:hover { border-color: var(--teal); }
-  .qlab-card h3 { margin: 0 0 6px; font-size: 14px; color: var(--teal); }
-  .qlab-card p { margin: 0; font-size: 12.5px; color: var(--text-muted); line-height: 1.5; }
-  .qlab-badge {
-    display: inline-block; font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
-    color: var(--text-dim); border: 1px solid var(--border-light); border-radius: 4px; padding: 1px 6px; margin-bottom: 8px;
-  }
-  h1 { font-size: 18px; margin: 0 0 4px; }
-  p.lede { color: var(--text-muted); font-size: 13px; margin: 0 0 20px; }
-  .qlab-intro {
-    background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px;
-    padding: 14px 16px; margin: 0 0 18px;
-  }
-  .qlab-intro h2 { font-size: 13px; margin: 0 0 6px; color: var(--text); letter-spacing: .02em; }
-  .qlab-intro p { margin: 0 0 8px; font-size: 13px; color: var(--text-muted); line-height: 1.55; }
-  .qlab-intro ul { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--text-muted); line-height: 1.6; }
+  .ql { max-width: 1120px; }
+  .ql-hero { display: grid; grid-template-columns: 1fr; gap: 6px; padding: 20px 22px; border-radius: 16px; border: 1px solid var(--border);
+    background: linear-gradient(135deg, rgba(var(--teal-rgb), .15), rgba(var(--teal-rgb), .02) 62%), var(--panel-2); margin-bottom: 16px; }
+  .ql-hero h1 { margin: 0; font-size: 22px; }
+  .ql-hero p { margin: 0; font-size: 13.5px; color: var(--text-muted); line-height: 1.55; max-width: 760px; }
+  .ql-hero .tag { font-size: 12.5px; font-weight: 700; color: var(--teal); margin-bottom: 2px; }
+  .ql-more { margin-top: 8px; }
+  .ql-more > summary { cursor: pointer; font-size: 12.5px; font-weight: 650; color: var(--teal); }
+  .ql-more ul { margin: 8px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--text-muted); line-height: 1.65; }
+  .ql-tools { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 0 0 12px; }
+  .ql-search { flex: 1 1 260px; position: relative; }
+  .ql-search input { width: 100%; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--border-light); background: var(--panel-2); color: var(--text); font: inherit; font-size: 14px; }
+  .ql-search input:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), .2); }
+  .ql-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 14px; }
+  .ql-chip { padding: 5px 13px; border-radius: 99px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font: inherit; font-size: 12.5px; font-weight: 650; cursor: pointer; }
+  .ql-chip.on { background: var(--teal); border-color: var(--teal); color: var(--on-teal); }
+  .ql-count { font-size: 12px; color: var(--text-muted); margin: 0 0 10px; }
+  .qlab-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 14px; }
+  .qlab-card { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 16px 16px 14px; border-radius: 14px; border: 1px solid var(--border); background: var(--panel-2);
+    text-decoration: none; color: var(--text); transition: transform .15s, border-color .15s, box-shadow .15s; }
+  .qlab-card:hover { transform: translateY(-2px); border-color: rgba(var(--teal-rgb), .65); box-shadow: 0 10px 28px -14px rgba(var(--teal-rgb), .5); }
+  .qlab-card[hidden], .ql-empty[hidden] { display: none !important; }
+  .qlab-top { display: flex; align-items: center; gap: 10px; }
+  .qlab-ic { flex: none; width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; font-weight: 800; font-size: 14px; color: var(--teal); background: rgba(var(--teal-rgb), .14); }
+  .qlab-badge { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; color: var(--teal); background: rgba(var(--teal-rgb), .12); border-radius: 99px; padding: 3px 9px; }
+  .qlab-card h3 { margin: 0; font-size: 14.5px; line-height: 1.3; color: var(--text); }
+  .qlab-card p { margin: 0; font-size: 12.5px; color: var(--text-muted); line-height: 1.55; flex: 1; }
+  .qlab-go { font-size: 12.5px; font-weight: 700; color: var(--teal); opacity: .85; }
+  .qlab-card:hover .qlab-go { opacity: 1; }
+  .ql-empty { padding: 26px; text-align: center; color: var(--text-muted); border: 1px dashed var(--border-light); border-radius: 14px; font-size: 13.5px; }
 </style>
 </head>
 <body>
 {% set active_page = 'quant_lab' %}
 <div class="t58-shell">
 {% include '_sidebar.html' %}
-<div class="t58-main">
-  <h1>Quant Lab</h1>
-  <p class="lede">Standalone quant-finance tools -- each one a real, tested backend module, wired up here for direct use without the desktop app or a script.</p>
-  {% if what_this_is and what_this_is.description %}
-  <div class="qlab-intro">
-    <h2>What this section is for</h2>
-    {% if what_this_is.tagline %}<p><b>{{ what_this_is.tagline }}</b></p>{% endif %}
-    <p>{{ what_this_is.description }}</p>
-    {% if what_this_is.roadmap %}
-    <ul>
-      {% for item in what_this_is.roadmap %}<li>{{ item }}</li>{% endfor %}
-    </ul>
+<div class="t58-main"><div class="ql">
+  <div class="ql-hero">
+    {% if what_this_is and what_this_is.tagline %}<div class="tag">{{ what_this_is.tagline }}</div>{% endif %}
+    <h1>Quant Lab</h1>
+    <div class="tag" style="margin-bottom:6px;">What this section is for</div>
+    <p>{% if what_this_is and what_this_is.description %}{{ what_this_is.description }}{% else %}Standalone quant-finance tools. Each one is a real, tested backend module you can use directly, without the desktop app or a script.{% endif %}</p>
+    {% if what_this_is and what_this_is.roadmap %}
+    <details class="ql-more"><summary>What&rsquo;s planned</summary>
+      <ul>{% for item in what_this_is.roadmap %}<li>{{ item }}</li>{% endfor %}</ul>
+    </details>
     {% endif %}
   </div>
-  {% endif %}
-  <div class="qlab-grid">
+
+  <div class="ql-tools">
+    <div class="ql-search"><input type="search" id="ql-q" placeholder="Search {{ tools|length }} tools (e.g. options, pairs, regime)&hellip;" aria-label="Search tools" autocomplete="off"></div>
+  </div>
+  <div class="ql-chips" id="ql-chips" role="group" aria-label="Filter by type">
+    <button type="button" class="ql-chip on" data-f="">All</button>
+    {% for b in tools|map(attribute='badge')|unique|sort %}<button type="button" class="ql-chip" data-f="{{ b }}">{{ b }}</button>{% endfor %}
+  </div>
+  <p class="ql-count" id="ql-count" role="status" aria-live="polite"></p>
+
+  <div class="qlab-grid" id="ql-grid">
     {% for tool in tools %}
-    <a class="qlab-card" href="{{ tool.url }}">
-      <div class="qlab-badge">{{ tool.badge }}</div>
+    <a class="qlab-card" href="{{ tool.url }}" data-badge="{{ tool.badge }}" data-text="{{ (tool.title ~ ' ' ~ tool.badge ~ ' ' ~ tool.description)|lower }}">
+      <div class="qlab-top"><div class="qlab-ic" aria-hidden="true">{{ tool.title[:1] }}</div><span class="qlab-badge">{{ tool.badge }}</span></div>
       <h3>{{ tool.title }}</h3>
       <p>{{ tool.description }}</p>
+      <span class="qlab-go">Open &rarr;</span>
     </a>
     {% endfor %}
   </div>
+  <div class="ql-empty" id="ql-empty" hidden>No tools match. Clear the search or pick &ldquo;All&rdquo;.</div>
+</div></div>
 </div>
-</div>
+<script>
+(function () {
+  var cards = [].slice.call(document.querySelectorAll('#ql-grid .qlab-card')), q = document.getElementById('ql-q'),
+      chips = [].slice.call(document.querySelectorAll('#ql-chips .ql-chip')), count = document.getElementById('ql-count'), empty = document.getElementById('ql-empty'), badge = '';
+  function apply() {
+    var term = (q.value || '').toLowerCase().trim(), n = 0;
+    cards.forEach(function (c) {
+      var ok = (!badge || c.dataset.badge === badge) && (!term || c.dataset.text.indexOf(term) >= 0);
+      c.hidden = !ok; if (ok) n++;
+    });
+    count.textContent = 'Showing ' + n + ' of ' + cards.length + ' tools';
+    empty.hidden = n !== 0;
+  }
+  chips.forEach(function (c) { c.addEventListener('click', function () { badge = c.dataset.f; chips.forEach(function (x) { x.classList.toggle('on', x === c); }); apply(); }); });
+  q.addEventListener('input', apply); apply();
+})();
+</script>
 <script src="/static/t58-chrome.js" defer></script>
 </body>
 </html>

@@ -42,7 +42,7 @@
   }
 
   /* -------------------------------------------------------------- shared canvas plumbing */
-  var IMAGE_OF = { ocean: 'midnight-ocean', forest: 'misty-forest', gold: 'obsidian-gold', sakura: 'sakura-reverie', abyss: 'abyssal-blue' };
+  var IMAGE_OF = { ocean: 'midnight-ocean', forest: 'misty-forest', gold: 'obsidian-gold', sakura: 'sakura-reverie-wide', abyss: 'abyssal-blue' };
 
   function makeStage(kind, layer, drawFrame, setup, opts) {
     opts = opts || {};
@@ -431,20 +431,30 @@
      water in the picture is re-drawn in strips pushed by travelling waves, plus the odd widening ring), and petals drift
      diagonally across the scene from the blossom tree. */
   var SAKURA_LAKE = 0.60;                    // water starts here, as a fraction of the picture's height
-  var PAGODA = { x: 0.317, y: 0.50 };        // paper-lantern windows
-  var SK_PHASES = [                          // [name, hold seconds, ease-in seconds, multiply top, multiply bottom, screen top, screen bottom]
-    ['sunset',  70, 25, [255, 255, 255], [255, 255, 255], [0, 0, 0],       [0, 0, 0]],
-    ['night',   50, 25, [58, 74, 142],   [44, 58, 112],   [4, 8, 26],      [0, 0, 8]],
-    ['morning', 40, 25, [255, 238, 246], [255, 244, 248], [72, 40, 62],    [40, 24, 34]],
-    ['noon',    50, 25, [214, 232, 255], [246, 251, 255], [96, 136, 196],  [24, 36, 52]]
+  var PAGODA = { x: 0.1 + 0.8 * 0.317, y: 0.50 };        // paper-lantern windows
+  // The picture is a sunset; every other time of day is a colour wash over it. A full day takes about eight minutes:
+  // sunrise -> morning -> noon -> afternoon -> sunset -> evening -> night -> (sunrise again).
+  // [name, hold s, ease-in s, multiply top, multiply bottom, screen top, screen bottom, night amount (stars, lanterns, fireflies)]
+  var SK_PHASES = [
+    ['sunrise',   30, 20, [255, 226, 214], [255, 238, 228], [64, 30, 38],    [38, 20, 24],   0.10],
+    ['morning',   40, 22, [255, 240, 246], [255, 246, 250], [72, 40, 62],    [40, 24, 34],   0],
+    ['noon',      50, 22, [214, 232, 255], [246, 251, 255], [96, 136, 196],  [24, 36, 52],   0],
+    ['afternoon', 40, 22, [255, 244, 224], [255, 249, 236], [70, 58, 22],    [30, 22, 8],    0],
+    ['sunset',    60, 22, [255, 255, 255], [255, 255, 255], [0, 0, 0],       [0, 0, 0],      0],
+    ['evening',   35, 22, [156, 132, 198], [128, 116, 170], [22, 14, 48],    [8, 6, 26],     0.45],
+    ['night',     50, 24, [58, 74, 142],   [44, 58, 112],   [4, 8, 26],      [0, 0, 8],      1]
   ];
+  var SK_START = 4;                          // start the day on the sunset (the picture as painted)
   var SK_TOTAL = SK_PHASES.reduce(function (a, p) { return a + p[1] + p[2]; }, 0);
+  var SKX = function (x) { return 0.1 + 0.8 * x; };   // the wide picture holds the square painting in its middle 80%
   function lerp(a, b, k) { return a + (b - a) * k; }
   function mix3(a, b, k) { return [lerp(a[0], b[0], k), lerp(a[1], b[1], k), lerp(a[2], b[2], k)]; }
   function rgb3(c) { return 'rgb(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0) + ')'; }
   // -> { mt, mb, stp, sb, night } at time t of the day cycle
   function skyAt(t) {
-    var T = ((t % SK_TOTAL) + SK_TOTAL) % SK_TOTAL, i, acc = 0, n = SK_PHASES.length;
+    var off = 0; for (var q = 0; q < SK_START; q++) off += SK_PHASES[q][1] + SK_PHASES[q][2];
+    off += SK_PHASES[SK_START][2];   // begin on the sunset hold
+    var T = (((t + off) % SK_TOTAL) + SK_TOTAL) % SK_TOTAL, i, acc = 0, n = SK_PHASES.length;
     for (i = 0; i < n; i++) {
       var P = SK_PHASES[i], prev = SK_PHASES[(i + n - 1) % n], ease = P[2];
       // each phase = ease from the previous phase, then hold
@@ -457,7 +467,7 @@
   }
   function blend(a, b, k) {
     return { mt: mix3(a[3], b[3], k), mb: mix3(a[4], b[4], k), stp: mix3(a[5], b[5], k), sb: mix3(a[6], b[6], k),
-      night: lerp(a[0] === 'night' ? 1 : 0, b[0] === 'night' ? 1 : 0, k) };
+      night: lerp(a[7], b[7], k) };
   }
   function petalSprite(c1, c2) {
     var c = document.createElement('canvas'); c.width = 32; c.height = 20;
@@ -479,7 +489,7 @@
     st.petalSprites = st.light ? [petalSprite('#ffffff', '#f6b6cc'), petalSprite('#fff0f5', '#f08fb0')] : [petalSprite('#ffe3ec', '#f7a9c4'), petalSprite('#ffd3e1', '#f28fb3'), petalSprite('#fff1f5', '#f9b9cf')];
     var n = st.small ? 14 : 30;
     st.petals = []; for (var i = 0; i < n; i++) st.petals.push(newPetal(st, true));
-    st.flies = []; for (var f = 0; f < (st.small ? 6 : 12); f++) st.flies.push({ x: rnd(0.05, 0.95), y: rnd(0.45, 0.85), ph: rnd(0, 6.28), sp: rnd(0.2, 0.5), rr: rnd(0.01, 0.035) });
+    st.flies = []; for (var f = 0; f < (st.small ? 6 : 12); f++) st.flies.push({ x: rnd(0.14, 0.86), y: rnd(0.45, 0.85), ph: rnd(0, 6.28), sp: rnd(0.2, 0.5), rr: rnd(0.01, 0.035) });
     st.rings = []; st.nextRing = 2;
     st.mask = null;
     var wk = document.createElement('canvas'); wk.width = 2; wk.height = 2; st.tint = wk;
@@ -487,7 +497,7 @@
   function newPetal(st, anywhere) {
     var r = st.rect, W = st.W, H = st.H, d = st.dpr;
     var fromTree = Math.random() < 0.7;
-    var x = fromTree ? r.x + r.w * rnd(0.50, 0.92) : rnd(0, W * 1.1);
+    var x = fromTree ? r.x + r.w * SKX(rnd(0.50, 0.90)) : rnd(0, W * 1.1);
     var y = fromTree ? r.y + r.h * rnd(0.26, 0.62) : rnd(-0.1 * H, 0.3 * H);
     if (anywhere) { x = rnd(0, W * 1.1); y = rnd(-0.05 * H, H); }
     return { x: x, y: y, vx: -rnd(14, 34) * d, vy: rnd(10, 24) * d, rot: rnd(0, 6.28), vr: rnd(-1.4, 1.4), flip: rnd(0, 6.28), vf: rnd(1.2, 3.2),
@@ -495,7 +505,7 @@
   }
   function sakuraFrame(st, dt) {
     var ctx = st.ctx, W = st.W, H = st.H, M = st.M, t = st.t, d = st.dpr, ly = st.lakeY, base = st.base;
-    var sky = skyAt(t + SK_PHASES[0][2]);   // start the day on the sunset hold
+    var sky = skyAt(t);
     // land + sky: the picture
     ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
     ctx.drawImage(base, M, 0, W, ly, 0, 0, W, ly);
@@ -574,8 +584,8 @@
 
   /* -------------------------------------------------------------- ABYSSAL BLUE
      Deep water, lit from above: soft turquoise light shafts that sway and breathe, caustic ripples near the surface, marine
-     snow drifting UP, a distant whale that crosses the whole screen very slowly (its body undulates, tail beating), and small
-     fish schools gliding past. Everything is drawn behind a readable scrim and kept slow on purpose. */
+     snow drifting UP, a distant whale that crosses the whole screen very slowly (its body undulates, tail beating), and
+     schools of realistic painted fish (sardines, mackerel, glowing lanternfish) with the odd tuna gliding past. Everything is drawn behind a readable scrim and kept slow on purpose. */
   function causticTexture(n) {
     var c = document.createElement('canvas'); c.width = n; c.height = n;
     var g = c.getContext('2d'), img = g.createImageData(n, n), px = img.data, TAU = 6.2832;
@@ -616,6 +626,107 @@
     o.drawImage(c, 0, 0); o.filter = 'none';
     return out;
   }
+
+  /* ---- realistic fish: each species is painted once onto a small canvas (countershaded body, scales, iridescent sheen, fins with
+     rays, gill plate, eye with a catch-light) and then swims by swinging a separate tail around the tail-stock and rolling the body a
+     little, so a school moves the way real fish do instead of sliding past as flat shapes. Always faces RIGHT; mirrored when swimming left. */
+  var FISH_KINDS = {
+    sardine:  { len: 1, depth: 0.27, back: ['#0a2c48', '#2d78a0'], flank: ['#b9dbe6', '#e8f6fa'], belly: '#ffffff', sheen: ['rgba(120,255,235,.38)', 'rgba(150,140,255,.30)'], stripe: 'rgba(40,110,150,.55)', bars: 0, eye: '#f4d27a', tail: 'fork', fin: 'rgba(170,210,225,.55)' },
+    mackerel: { len: 1.15, depth: 0.25, back: ['#06324a', '#1f8a9a'], flank: ['#9fd0d8', '#e2f3f4'], belly: '#f6fdfd', sheen: ['rgba(90,255,200,.30)', 'rgba(80,170,255,.28)'], stripe: 'rgba(5,40,60,.0)', bars: 9, eye: '#e8c15c', tail: 'fork', fin: 'rgba(40,110,130,.6)' },
+    lantern:  { len: 0.85, depth: 0.30, back: ['#0b1736', '#27407e'], flank: ['#3a5da0', '#7d9fd8'], belly: '#b7c9ee', sheen: ['rgba(140,170,255,.35)', 'rgba(200,120,255,.30)'], stripe: 'rgba(0,0,0,0)', bars: 0, eye: '#9ff5ff', tail: 'fan', fin: 'rgba(80,110,190,.55)', glow: true },
+    tuna:     { len: 1.6, depth: 0.23, back: ['#04182c', '#14507a'], flank: ['#7fb6cf', '#dcecf2'], belly: '#f2f7f9', sheen: ['rgba(70,200,255,.30)', 'rgba(120,120,255,.22)'], stripe: 'rgba(240,200,60,.55)', bars: 0, eye: '#d9b44a', tail: 'lunate', fin: 'rgba(30,70,100,.8)', finlets: true }
+  };
+  function fishSprite(kind, Lpx) {
+    var K = FISH_KINDS[kind], L = Math.max(24, Math.round(Lpx)), Hh = L * K.depth * 0.5, pad = Math.ceil(L * 0.28), cy = Hh + pad;
+    var body = document.createElement('canvas'); body.width = L + pad; body.height = Math.ceil(2 * (Hh + pad));
+    var g = body.getContext('2d'), ox = 0;         // x: 0 = tail-stock, L = snout
+    function outline() {
+      g.beginPath(); g.moveTo(L, cy + Hh * 0.10);
+      g.bezierCurveTo(L * 0.93, cy - Hh * 0.55, L * 0.72, cy - Hh * 1.02, L * 0.46, cy - Hh * 1.0);
+      g.bezierCurveTo(L * 0.24, cy - Hh * 0.97, L * 0.10, cy - Hh * 0.34, ox, cy - Hh * 0.17);
+      g.lineTo(ox, cy + Hh * 0.17);
+      g.bezierCurveTo(L * 0.11, cy + Hh * 0.40, L * 0.24, cy + Hh * 0.92, L * 0.46, cy + Hh * 0.94);
+      g.bezierCurveTo(L * 0.74, cy + Hh * 0.96, L * 0.93, cy + Hh * 0.55, L, cy + Hh * 0.10); g.closePath();
+    }
+    // fins behind the body: dorsal, anal, pelvic (with rays)
+    function fin(x1, y1, x2, y2, x3, y3, rays) {
+      g.fillStyle = K.fin; g.beginPath(); g.moveTo(x1, y1); g.quadraticCurveTo(x2, y2, x3, y3); g.lineTo(x1, y1); g.fill();
+      g.strokeStyle = 'rgba(255,255,255,.25)'; g.lineWidth = Math.max(0.5, L * 0.004);
+      for (var i = 1; i < rays; i++) { var f = i / rays; g.beginPath(); g.moveTo(x1 + (x3 - x1) * f, y1 + (y3 - y1) * f); g.lineTo(x2 + (x3 - x2) * 0.2 * f + (x1 - x3) * 0.0, y2 + (y3 - y2) * 0.05 + (y2 - y1) * 0.0); g.stroke(); }
+    }
+    fin(L * 0.56, cy - Hh * 0.98, L * 0.46, cy - Hh * 1.65, L * 0.34, cy - Hh * 0.99, 7);            // dorsal
+    if (kind === 'tuna' || kind === 'mackerel') fin(L * 0.27, cy - Hh * 0.97, L * 0.22, cy - Hh * 1.35, L * 0.16, cy - Hh * 0.62, 5);    // second dorsal
+    fin(L * 0.36, cy + Hh * 0.92, L * 0.28, cy + Hh * 1.45, L * 0.18, cy + Hh * 0.6, 5);              // anal
+    if (K.finlets) {                                                                                  // tuna finlets along the tail-stock
+      g.fillStyle = 'rgba(240,200,60,.9)';
+      for (var fl = 0; fl < 5; fl++) { var fx = L * (0.04 + fl * 0.035); g.beginPath(); g.moveTo(fx, cy - Hh * 0.2); g.lineTo(fx - L * 0.012, cy - Hh * 0.52); g.lineTo(fx + L * 0.02, cy - Hh * 0.2); g.fill(); g.beginPath(); g.moveTo(fx, cy + Hh * 0.2); g.lineTo(fx - L * 0.012, cy + Hh * 0.5); g.lineTo(fx + L * 0.02, cy + Hh * 0.2); g.fill(); }
+    }
+    // body: countershading (dark back -> silver flank -> pale belly)
+    outline(); var cg = g.createLinearGradient(0, cy - Hh, 0, cy + Hh);
+    cg.addColorStop(0, K.back[0]); cg.addColorStop(0.26, K.back[1]); cg.addColorStop(0.46, K.flank[0]); cg.addColorStop(0.68, K.flank[1]); cg.addColorStop(1, K.belly);
+    g.fillStyle = cg; g.fill();
+    g.save(); outline(); g.clip();
+    // scales: overlapping arcs, faint dark edge + a bright upper lip, rows offset like real scale rows
+    var sc = Math.max(2.4, L * 0.032), row = 0;
+    g.lineWidth = Math.max(0.4, L * 0.0035);
+    for (var yy = cy - Hh * 1.0; yy < cy + Hh; yy += sc * 0.72, row++) {
+      for (var xx = L * 0.12 + (row % 2) * sc * 0.5; xx < L * 0.80; xx += sc) {
+        g.strokeStyle = 'rgba(10,40,60,.16)'; g.beginPath(); g.arc(xx, yy, sc * 0.55, 0.15 * Math.PI, 0.85 * Math.PI); g.stroke();
+        g.strokeStyle = 'rgba(255,255,255,.10)'; g.beginPath(); g.arc(xx, yy - sc * 0.08, sc * 0.55, 1.15 * Math.PI, 1.85 * Math.PI); g.stroke();
+      }
+    }
+    if (K.bars) {                                         // mackerel: wavy dark bars over the back
+      g.strokeStyle = 'rgba(2,28,44,.7)'; g.lineWidth = Math.max(0.8, L * 0.012);
+      for (var b = 0; b < K.bars; b++) { var bx = L * (0.14 + b * 0.075); g.beginPath(); g.moveTo(bx, cy - Hh * 1.0); for (var q = 1; q <= 5; q++) g.lineTo(bx + Math.sin(q * 1.7 + b) * L * 0.012, cy - Hh * 1.0 + q * Hh * 0.12); g.stroke(); }
+    }
+    if (K.stripe && K.stripe !== 'rgba(0,0,0,0)' && !/\.0\)$/.test(K.stripe)) {   // lateral line / tuna's yellow flank stripe
+      g.strokeStyle = K.stripe; g.lineWidth = Math.max(0.8, L * (kind === 'tuna' ? 0.02 : 0.012)); g.beginPath(); g.moveTo(L * 0.05, cy - Hh * 0.05); g.quadraticCurveTo(L * 0.5, cy - Hh * 0.18, L * 0.82, cy - Hh * 0.06); g.stroke();
+    }
+    // iridescent sheen (cyan -> violet) and a soft top light
+    var sh = g.createLinearGradient(0, cy - Hh, L, cy + Hh * 0.2); sh.addColorStop(0, K.sheen[0]); sh.addColorStop(0.55, 'rgba(255,255,255,0)'); sh.addColorStop(1, K.sheen[1]);
+    g.globalCompositeOperation = 'lighter'; g.fillStyle = sh; g.fillRect(0, 0, L + pad, body.height);
+    g.globalCompositeOperation = 'source-over';
+    var hl = g.createLinearGradient(0, cy - Hh, 0, cy - Hh * 0.2); hl.addColorStop(0, 'rgba(255,255,255,.28)'); hl.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = hl; g.fillRect(0, cy - Hh, L, Hh * 0.8);
+    var hd = g.createLinearGradient(L * 0.60, 0, L, 0); hd.addColorStop(0, 'rgba(0,10,24,0)'); hd.addColorStop(1, 'rgba(0,10,24,.28)');   // head a touch darker
+    g.fillStyle = hd; g.fillRect(L * 0.6, cy - Hh, L * 0.4, Hh * 2);
+    if (K.glow) {                                         // lanternfish photophores: rows of tiny lights along the belly and flank
+      for (var ph = 0; ph < 11; ph++) { var px = L * (0.18 + ph * 0.057), py = cy + Hh * (0.38 + 0.12 * Math.sin(ph * 0.9));
+        var gg = g.createRadialGradient(px, py, 0, px, py, L * 0.03); gg.addColorStop(0, 'rgba(190,255,255,.95)'); gg.addColorStop(1, 'rgba(60,200,255,0)'); g.fillStyle = gg; g.fillRect(px - L * 0.03, py - L * 0.03, L * 0.06, L * 0.06); }
+    }
+    g.restore();
+    // gill plate, mouth, pectoral fin, eye
+    g.strokeStyle = 'rgba(5,30,48,.45)'; g.lineWidth = Math.max(0.6, L * 0.008);
+    g.beginPath(); g.arc(L * 0.70, cy - Hh * 0.02, Hh * 0.78, 1.25 * Math.PI, 0.75 * Math.PI, true); g.stroke();
+    g.beginPath(); g.moveTo(L, cy + Hh * 0.10); g.lineTo(L * 0.935, cy + Hh * 0.16); g.stroke();
+    g.fillStyle = K.fin; g.beginPath(); g.moveTo(L * 0.66, cy + Hh * 0.26); g.quadraticCurveTo(L * 0.54, cy + Hh * 0.78, L * 0.46, cy + Hh * 0.72); g.quadraticCurveTo(L * 0.54, cy + Hh * 0.40, L * 0.66, cy + Hh * 0.26); g.fill();
+    var er = Math.max(1.3, Hh * 0.30), ex = L * 0.855, ey = cy - Hh * 0.16;
+    g.fillStyle = K.eye; g.beginPath(); g.arc(ex, ey, er * 1.18, 0, 6.2832); g.fill();
+    g.fillStyle = '#04080c'; g.beginPath(); g.arc(ex, ey, er * 0.82, 0, 6.2832); g.fill();
+    g.fillStyle = 'rgba(255,255,255,.9)'; g.beginPath(); g.arc(ex - er * 0.28, ey - er * 0.30, er * 0.28, 0, 6.2832); g.fill();
+    // tail: its own canvas, pivot at its left edge
+    var tl = Math.round(L * (K.tail === 'lunate' ? 0.42 : 0.30)), th = Math.round(Hh * (K.tail === 'lunate' ? 3.1 : K.tail === 'fan' ? 1.9 : 2.5));
+    var tail = document.createElement('canvas'); tail.width = tl + 2; tail.height = th + 2; var t2 = tail.getContext('2d'), tcy = (th + 2) / 2;
+    t2.beginPath(); t2.moveTo(0, tcy - Hh * 0.16);
+    if (K.tail === 'fan') { t2.bezierCurveTo(tl * 0.5, tcy - th * 0.46, tl * 0.95, tcy - th * 0.38, tl, tcy - th * 0.12); t2.bezierCurveTo(tl * 0.92, tcy, tl * 0.92, tcy, tl, tcy + th * 0.12); t2.bezierCurveTo(tl * 0.95, tcy + th * 0.38, tl * 0.5, tcy + th * 0.46, 0, tcy + Hh * 0.16); }
+    else { t2.bezierCurveTo(tl * 0.35, tcy - th * 0.12, tl * 0.7, tcy - th * 0.46, tl, tcy - th * 0.5); t2.bezierCurveTo(tl * 0.72, tcy - th * 0.14, tl * 0.58, tcy - th * 0.04, tl * 0.56, tcy);
+      t2.bezierCurveTo(tl * 0.58, tcy + th * 0.04, tl * 0.72, tcy + th * 0.14, tl, tcy + th * 0.5); t2.bezierCurveTo(tl * 0.7, tcy + th * 0.46, tl * 0.35, tcy + th * 0.12, 0, tcy + Hh * 0.16); }
+    t2.closePath(); var tg = t2.createLinearGradient(0, 0, tl, 0); tg.addColorStop(0, K.back[1]); tg.addColorStop(1, K.fin); t2.fillStyle = tg; t2.fill();
+    t2.save(); t2.clip(); t2.strokeStyle = 'rgba(255,255,255,.22)'; t2.lineWidth = Math.max(0.5, L * 0.004);
+    for (var r = -5; r <= 5; r++) { t2.beginPath(); t2.moveTo(0, tcy + r * Hh * 0.03); t2.lineTo(tl, tcy + r * th * 0.09); t2.stroke(); }
+    t2.restore();
+    return { body: body, tail: tail, L: L, cy: cy, tcy: tcy, tl: tl };
+  }
+  // draws one fish centred on (x, y), heading right (dir=1) or left (dir=-1), tail beat phase `ph`, rolled by `roll`
+  function drawFish(ctx, sp, x, y, dir, ph, roll, alpha, sc) {
+    ctx.save(); ctx.translate(x, y); ctx.scale(dir * (sc || 1), sc || 1); ctx.rotate(roll); ctx.globalAlpha = alpha;
+    var sw = Math.sin(ph) * 0.42, bx = -sp.L * 0.5, by = -sp.cy;
+    ctx.drawImage(sp.body, bx, by);
+    ctx.save(); ctx.translate(bx + 1, 0); ctx.scale(-1, 1); ctx.rotate(sw);   // the tail trails behind the tail-stock and swings about it
+    ctx.drawImage(sp.tail, 0, -sp.tcy); ctx.restore();
+    ctx.restore();
+  }
+
   function abyssSetup(st) {
     var W = st.W, H = st.H, d = st.dpr, r = coverRect(st.img.naturalWidth, st.img.naturalHeight, W, H, scenePos());
     var base = document.createElement('canvas'); base.width = W; base.height = H;
@@ -642,12 +753,16 @@
     st.motes = []; var nm = st.small ? 46 : 110;
     for (var m = 0; m < nm; m++) st.motes.push({ x: rnd(0, W), y: rnd(0, H), z: rnd(0.3, 1), ph: rnd(0, 6.28), tw: rnd(0.3, 1.1) });
     st.whale = { spr: whaleSprite(Math.round(W * 0.22), Math.round(W * 0.22 * 0.34)), x: 0, dir: Math.random() < 0.5 ? 1 : -1, wait: 6, active: false, y: 0.74, speed: 0 };
-    st.schools = []; var ns = st.small ? 2 : 3;
+    var fs = st.small ? 0.8 : 1;
+    st.fishSp = { sardine: fishSprite('sardine', 30 * d * fs), mackerel: fishSprite('mackerel', 40 * d * fs), lantern: fishSprite('lantern', 24 * d * fs), tuna: fishSprite('tuna', Math.max(90 * d, W * 0.085)) };
+    st.schools = []; var kinds = ['sardine', 'mackerel', 'lantern'], ns = st.small ? 2 : 3;
     for (var s = 0; s < ns; s++) {
-      var sc = { x: rnd(0, W), y: H * rnd(0.55, 0.9), dir: Math.random() < 0.5 ? 1 : -1, v: rnd(16, 30) * d, ph: rnd(0, 6.28), fish: [] };
-      for (var f = 0; f < (st.small ? 7 : 12); f++) sc.fish.push({ ox: rnd(-70, 70) * d, oy: rnd(-26, 26) * d, ph: rnd(0, 6.28), sz: rnd(6, 10) * d, fl: rnd(0, 6.28) });
+      var kind = kinds[s % kinds.length];
+      var sc = { kind: kind, x: rnd(0, W), y: H * rnd(0.55, 0.9), dir: Math.random() < 0.5 ? 1 : -1, v: rnd(18, 34) * d, ph: rnd(0, 6.28), fish: [] };
+      for (var f = 0; f < (st.small ? 7 : 13); f++) sc.fish.push({ ox: rnd(-80, 80) * d, oy: rnd(-30, 30) * d, ph: rnd(0, 6.28), sc: rnd(0.75, 1.2), beat: rnd(7, 10), z: rnd(0.6, 1) });
       st.schools.push(sc);
     }
+    st.tuna = { active: false, wait: rnd(12, 25), x: 0, y: 0.5, dir: 1, v: 0, ph: 0 };
   }
   function abyssFrame(st, dt) {
     var ctx = st.ctx, W = st.W, H = st.H, t = st.t, d = st.dpr, light = st.light;
@@ -696,21 +811,31 @@
       var rr = (0.5 + 1.9 * P.z) * d; ctx.beginPath(); ctx.arc(P.x, P.y, rr, 0, 6.2832); ctx.fill();
     }
     ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
-    // fish schools gliding
+    // fish schools gliding: each fish is a painted species that beats its tail and rolls gently; they bunch, spread and bob as a school
     for (var s = 0; s < st.schools.length; s++) {
-      var SC = st.schools[s]; SC.x += SC.dir * SC.v * dt;
+      var SC = st.schools[s], sp = st.fishSp[SC.kind]; SC.x += SC.dir * SC.v * dt;
       var cy = SC.y + Math.sin(t * 0.15 + SC.ph) * H * 0.045;
-      if ((SC.dir > 0 && SC.x > W + 120 * d) || (SC.dir < 0 && SC.x < -120 * d)) { SC.dir = -SC.dir; SC.y = H * rnd(0.55, 0.9); SC.v = rnd(16, 30) * d; SC.x = SC.dir > 0 ? -100 * d : W + 100 * d; }
+      if ((SC.dir > 0 && SC.x > W + 140 * d) || (SC.dir < 0 && SC.x < -140 * d)) { SC.dir = -SC.dir; SC.y = H * rnd(0.52, 0.9); SC.v = rnd(18, 34) * d; SC.x = SC.dir > 0 ? -120 * d : W + 120 * d; }
       var heading = Math.atan2(Math.cos(t * 0.15 + SC.ph) * H * 0.045 * 0.15, SC.v) * SC.dir;
+      var spread = 1 + 0.35 * Math.sin(t * 0.21 + SC.ph * 2);
       for (var f = 0; f < SC.fish.length; f++) {
-        var F = SC.fish[f], fx = SC.x + F.ox + Math.sin(t * 0.7 + F.ph) * 9 * d, fy = cy + F.oy + Math.cos(t * 0.6 + F.ph) * 6 * d;
-        var wob = Math.sin(t * 5 + F.fl) * 0.12, flash = 0.5 + 0.5 * Math.sin(t * 0.9 + F.ph * 2);
-        ctx.save(); ctx.translate(fx, fy); ctx.rotate(heading + wob); ctx.scale(SC.dir, 1);
-        ctx.globalAlpha = (light ? 0.35 : 0.5) + 0.3 * flash * flash;
-        ctx.fillStyle = flash > 0.8 ? '#e6fbff' : '#8fd8de';
-        ctx.beginPath(); ctx.ellipse(0, 0, F.sz, F.sz * 0.30, 0, 0, 6.2832); ctx.fill();
-        ctx.beginPath(); ctx.moveTo(-F.sz * 0.85, 0); ctx.lineTo(-F.sz * 1.45, -F.sz * 0.34 + wob * F.sz); ctx.lineTo(-F.sz * 1.45, F.sz * 0.34 + wob * F.sz); ctx.closePath(); ctx.fill();
-        ctx.restore();
+        var F = SC.fish[f], fx = SC.x + F.ox * spread + Math.sin(t * 0.7 + F.ph) * 10 * d, fy = cy + F.oy * spread + Math.cos(t * 0.6 + F.ph) * 7 * d;
+        var glint = 0.5 + 0.5 * Math.sin(t * 0.9 + F.ph * 2);
+        var al = (light ? 0.42 : 0.62) * F.z + 0.28 * glint * glint * F.z;
+        drawFish(ctx, sp, fx, fy, SC.dir, t * F.beat + F.ph, Math.sin(t * 0.8 + F.ph) * 0.05 + heading, Math.min(0.95, al), F.sc);
+      }
+    }
+    // now and then one big silver-blue tuna cruises through, well in front of the schools
+    var TU = st.tuna, tsp = st.fishSp.tuna;
+    if (!TU.active) {
+      TU.wait -= dt;
+      if (TU.wait <= 0) { TU.active = true; TU.dir = Math.random() < 0.5 ? 1 : -1; TU.y = rnd(0.42, 0.80); TU.v = (W + 2 * tsp.L) / rnd(45, 70); TU.x = TU.dir > 0 ? -tsp.L : W + tsp.L; TU.ph = rnd(0, 6.28); }
+    } else {
+      TU.x += TU.dir * TU.v * dt;
+      if ((TU.dir > 0 && TU.x > W + tsp.L) || (TU.dir < 0 && TU.x < -tsp.L)) { TU.active = false; TU.wait = rnd(40, 90); }
+      else {
+        var ty = H * TU.y + Math.sin(t * 0.35 + TU.ph) * H * 0.02;
+        drawFish(ctx, tsp, TU.x, ty, TU.dir, t * 4.2 + TU.ph, Math.sin(t * 0.35 + TU.ph) * 0.03, light ? 0.55 : 0.8, 1);
       }
     }
     ctx.globalAlpha = 1;

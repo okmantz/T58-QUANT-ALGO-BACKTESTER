@@ -35,7 +35,9 @@
   .de-adv[open] summary::after, .de-more[open] summary::after { content: " \25B4"; }
   .de-grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-top: 12px; }
   .de-grid2 label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
-  .de-how { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 10px; }
+  .de-how { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 10px; }
+  @media (max-width: 1100px) { .de-how { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 560px) { .de-how { grid-template-columns: 1fr; } }
   .de-how div { background: var(--panel-3); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: 12.5px; color: var(--text-muted); line-height: 1.45; }
   .de-how b { display: block; color: var(--text); font-size: 13px; margin-bottom: 3px; }
   table.de-t { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
@@ -114,6 +116,13 @@
   </div>
 
   <div class="de-card">
+    <h2 style="margin:0 0 4px;font-size:15px;">Ideas from your research</h2>
+    <p class="de-note" style="margin:0 0 8px;">The search can start from what your Resource Library papers talk about, and from the AI when AI assist is on. These are only starting points: every one is tested exactly like a random idea and has to clear every check below.</p>
+    <label class="de-note" style="display:block;margin-bottom:4px;"><input type="checkbox" name="use_papers" value="on" checked> Start from the strategy types in my Resource Library papers</label>
+    <label class="de-note" style="display:block;"><input type="checkbox" name="use_ai" value="on" checked> Let the AI suggest starting ideas (only if AI assist is turned on)</label>
+  </div>
+
+  <div class="de-card">
     <h2 style="margin:0 0 4px;font-size:15px;">Search memory</h2>
     <p class="de-note" style="margin:0 0 8px;">
       {% if memory.variants %}<b>{{ '{:,}'.format(memory.variants) }}</b> variants tested over {{ memory.runs }} run{{ '' if memory.runs == 1 else 's' }} are on record in the
@@ -162,13 +171,16 @@
   <h2 style="margin:0 0 4px;font-size:15px;">What happens after you press Start</h2>
   <p class="de-note">Fast, and strict about luck. A winner has to survive every step; near-misses are shown with the exact step they failed.</p>
   <div class="de-how">
-    <div><b>1 &middot; Pick bar size</b>If trading costs would eat a small-bar strategy alive, it moves up to bigger bars automatically.</div>
-    <div><b>2 &middot; Search</b>29 strategy types (trend, reversion, breakout, session, momentum), thousands of settings, evolved and refined, stops sized in ATR so costs stay small compared with the risk taken.</div>
-    <div><b>3 &middot; Fresh data</b>The best ideas must also work on bars they never trained on.</div>
-    <div><b>4 &middot; Nudge test</b>Neighbouring settings must be profitable too. A real edge is a plateau, not a spike.</div>
-    <div><b>5 &middot; Sealed test</b>The last 20% of data is read once, with double costs. This is the lie detector.</div>
-    <div><b>6 &middot; Save &amp; test</b>Save a winner, then run it through Full Pipeline and Validate. A find is a lead, not a verdict.</div>
+    <div><b>1 &middot; Read the research</b>Your Resource Library papers (and the AI, if on) point the search at the strategy types worth checking first.</div>
+    <div><b>2 &middot; Pick bar size</b>If trading costs would eat a small-bar strategy alive, it moves up to bigger bars automatically.</div>
+    <div><b>3 &middot; Search</b>29 strategy types, thousands of settings, evolved and refined, with stops sized in ATR so costs stay small next to the risk taken.</div>
+    <div><b>4 &middot; Fresh data</b>The best ideas must also work on bars they never trained on.</div>
+    <div><b>5 &middot; Nudge test</b>Neighbouring settings must be profitable too. A real edge is a plateau, not a spike.</div>
+    <div><b>6 &middot; Sealed test</b>The last 20% of data is read once, with double costs. This is the lie detector.</div>
+    <div><b>7 &middot; Real-engine proof</b>Finalists are re-run in the full backtester, including the lookahead test.</div>
+    <div><b>8 &middot; Save &amp; test</b>Save a winner, then run it through Full Pipeline and Validate. A find is a lead, not a verdict.</div>
   </div>
+</div>
 </div>
 
 <details class="de-card de-more">

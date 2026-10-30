@@ -496,6 +496,52 @@ def master_key_active() -> bool:
 
 def _reset_master_cache() -> None:
     _MASTER_CACHE.update(at=0.0, value=False)
+    _OWNER_CACHE.update(at=0.0, value=False)
+
+
+# ---- Owner account ---------------------------------------------------------------------------------------------------
+# The owner's day-to-day account: a real license key in the license sheet, tied to this email, that is treated like the master
+# key for UNLOCKS only (every background, theme, badge, certificate...). It is deliberately NOT the master key:
+#   * the email alone never grants anything -- the key hash must match too, and
+#   * the sign-in must have been verified by the license sheet (this key is not accepted offline the way the master key is;
+#     validate() keeps re-checking it, and a revoked/expired row drops the unlocks at the next check),
+#   * it never triggers the master-key clean slate -- the owner account KEEPS its saved runs, strategies and settings.
+OWNER_EMAIL = "owenkmantz@gmail.com"
+_DEFAULT_OWNER_KEY_HASH = "12378d77ce06df2f79e2bba8cc0108378469f101200d4d0bcdde7937f18627b9"
+_OWNER_CACHE: dict = {"at": 0.0, "value": False}
+
+
+def _owner_key_hash() -> str:
+    return (os.environ.get("T58_OWNER_LICENSE_KEY_HASH", "").strip() or _DEFAULT_OWNER_KEY_HASH).lower()
+
+
+def _is_owner_credentials(email: str, license_key: str) -> bool:
+    if not email or not license_key:
+        return False
+    if email.strip().lower() != OWNER_EMAIL:
+        return False
+    return hashlib.sha256(license_key.strip().upper().encode("utf-8")).hexdigest() == _owner_key_hash()
+
+
+def owner_account_active() -> bool:
+    """True when the saved sign-in is the owner's sheet-verified account (email + key hash + status active)."""
+    import time as _time
+    now = _time.monotonic()
+    if _OWNER_CACHE["at"] and now - _OWNER_CACHE["at"] < 60:
+        return bool(_OWNER_CACHE["value"])
+    try:
+        st = load_state()
+        val = bool(st and st.status == "active" and st.last_validated_at and _is_owner_credentials(st.email, st.license_key)
+                   and not _is_master_key(st.license_key))
+    except Exception:  # noqa: BLE001
+        val = False
+    _OWNER_CACHE.update(at=now, value=val)
+    return val
+
+
+def full_access_active() -> bool:
+    """Everything unlocked (backgrounds, themes, titles, badges): the master key OR the owner's verified account."""
+    return master_key_active() or owner_account_active()
 
 
 _MASTER_KEY_UNSET_HINT = (
@@ -847,8 +893,15 @@ def activate(email: str, license_key: str, remember: bool = True) -> tuple[bool,
     if ok:
         try:
             if _is_master_key(license_key):
+                # Every time the master key is entered, the app comes back as a blank slate: default settings, the default
+                # strategies, nothing run. (Moved to a dated backup folder, never deleted.)
                 from app.licensing import fresh_start
-                fresh_start.run_if_needed()
+                fresh_start.run_if_needed(force=True)
+            else:
+                # A different person (or the first sign-in on this device) starts from the default strategy library; the same
+                # account signing in again keeps what it saved. The account's own vault then restores its saved strategies.
+                from app.strategy import default_library
+                default_library.prepare_for_account(license_key)
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -968,6 +1021,8 @@ def current_plan(state: "LicenseState | None" = None) -> str:
     otherwise whatever the sheet/server last reported ("" when it reported none)."""
     state = state if state is not None else load_state()
     if state.license_key and _is_master_key(state.license_key):
+        return MASTER_PLAN
+    if state.status == "active" and _is_owner_credentials(state.email, state.license_key):
         return MASTER_PLAN
     return normalize_plan(state.plan)
 

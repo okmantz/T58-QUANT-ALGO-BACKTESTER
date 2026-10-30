@@ -8,43 +8,62 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <style>
   * { box-sizing: border-box; }
-  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
-  .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 0 0 10px; }
-  .card p.help { font-size: 12px; color: var(--t-faint); margin: 0 0 10px; line-height: 1.5; }
-  label { display: block; font-size: 13px; color: var(--t-soft); margin: 10px 0 4px; }
+  .hf { max-width: 1060px; }
+  /* the four desks */
+  .hf-desks { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 14px; }
+  .hf-desk { position: relative; padding: 14px 14px 13px; border-radius: 14px; border: 1px solid var(--border); background: var(--panel-2); }
+  .hf-desk:not(:last-child)::after { content: "\2192"; position: absolute; right: -14px; top: 50%; transform: translateY(-50%); z-index: 2; width: 18px; text-align: center; font-weight: 800; color: var(--teal); }
+  .hf-desk .n { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 800; background: rgba(var(--teal-rgb), .18); color: var(--teal); margin-bottom: 8px; }
+  .hf-desk b { display: block; font-size: 14px; } .hf-desk span { font-size: 12px; color: var(--text-muted); line-height: 1.45; display: block; margin-top: 2px; }
+  @media (max-width: 860px) { .hf-desks { grid-template-columns: repeat(2, 1fr); } .hf-desk:nth-child(2)::after, .hf-desk::after { display: none; } }
+  .hf-safe { display: flex; gap: 8px; align-items: center; margin-top: 12px; padding: 9px 13px; border-radius: 10px; border: 1px solid rgba(var(--teal-rgb), .35); background: rgba(var(--teal-rgb), .07); font-size: 12.5px; color: var(--text-muted); }
+  .hf-safe b { color: var(--teal); }
+
+  /* step cards */
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 14px; padding: 18px; margin-bottom: 14px; }
+  .card h2 { display: flex; align-items: center; gap: 10px; font-size: 15px; text-transform: none; letter-spacing: 0; color: var(--text); margin: 0 0 4px; }
+  .card h2 .sn { flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; font-weight: 800; background: var(--teal); color: var(--on-teal); }
+  .card h2 small { font-size: 12px; font-weight: 500; color: var(--text-muted); }
+  .card p.help { font-size: 12.5px; color: var(--text-muted); margin: 0 0 12px; line-height: 1.55; }
+  label { display: block; font-size: 12px; font-weight: 650; color: var(--text-muted); margin: 10px 0 4px; }
   input[type=text], input[type=number], select, textarea {
-    width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border-light);
-    background: var(--panel-3); color: var(--text); font-size: 15px;
+    width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border-light);
+    background: var(--panel-3); color: var(--text); font-size: 14px; font-family: inherit;
   }
-  input:focus, select:focus, textarea:focus {
-    outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), 0.15);
-  }
-  .row { display: flex; gap: 10px; }
-  .row > div { flex: 1; }
-  input[type=file] { width: 100%; color: var(--t-soft); }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), 0.18); }
+  .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+  input[type=file] { width: 100%; color: var(--text-muted); font-size: 13px; }
   input[type=checkbox] { width: auto; }
   .checkbox-row { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
-  .checkbox-row label { margin: 0; }
+  .checkbox-row label { margin: 0; font-size: 13px; font-weight: 500; color: var(--text); }
+
+  /* the asset slots */
+  .assets { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+  .asset-block { border: 1px solid var(--border-light); border-radius: 12px; padding: 12px 14px 14px; background: var(--panel-3); }
+  .asset-block h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--teal); margin: 0 0 4px; }
+  .asset-block .opt { color: var(--text-dim); text-transform: none; letter-spacing: 0; font-weight: 500; }
+  .asset-block select, .asset-block input[type=text] { background: var(--panel-2); }
+  .asset-more { margin-top: 12px; border: 1px dashed var(--border-light); border-radius: 12px; padding: 4px 14px 14px; }
+  .asset-more > summary { cursor: pointer; padding: 10px 0; font-size: 13px; font-weight: 650; color: var(--teal); }
+
+  .submit-bar { position: sticky; bottom: 10px; z-index: 5; margin-top: 6px; padding: 10px; border-radius: 14px; border: 1px solid var(--border-light); background: var(--pop-bg, var(--panel)); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
   .submit-btn {
-    width: 100%; padding: 15px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: var(--on-teal);
-    font-size: 16px; font-weight: 700; margin-top: 6px;
-    box-shadow: 0 0 22px rgba(var(--teal-rgb), 0.35);
+    width: 100%; padding: 14px; border-radius: 10px; border: 1px solid var(--teal); background: var(--teal); color: var(--on-teal);
+    font-size: 15.5px; font-weight: 800; cursor: pointer; box-shadow: 0 0 22px rgba(var(--teal-rgb), 0.3);
   }
+  .submit-btn:hover { filter: brightness(1.07); }
   .error { background: var(--err-bg); border: 1px solid var(--err-bd); color: var(--err-fg); padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
   .notice { background: var(--ok-bg); border: 1px solid var(--ok-bd); color: var(--ok-fg); padding: 12px; border-radius: 10px; margin-bottom: 10px; font-size: 13px; }
   .warn { background: #2a2414; border: 1px solid #6b5a23; color: #ffe4b4; padding: 10px; border-radius: 10px; margin-bottom: 8px; font-size: 13px; }
-  .asset-block { border: 1px solid var(--border-light); border-radius: 10px; padding: 10px; margin-bottom: 10px; }
-  .asset-block h3 { font-size: 12px; text-transform: uppercase; color: var(--t-faint2); margin: 0 0 8px; }
-  .headline { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 10px; }
-  .stat { background: var(--panel-3); border: 1px solid var(--border-light); border-radius: 10px; padding: 10px; }
-  .stat .label { font-size: 10px; color: var(--t-faint); text-transform: uppercase; }
-  .stat .value { font-size: 16px; font-weight: 700; margin-top: 2px; }
-  .desk-flow { display: flex; gap: 6px; flex-wrap: wrap; font-size: 12px; color: var(--info-fg); margin-bottom: 10px; }
-  .desk-flow span { background: var(--panel-3); border: 1px solid var(--border-light); border-radius: 999px; padding: 4px 10px; }
-  table.sweep { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
-  table.sweep th, table.sweep td { padding: 6px 8px; border-bottom: 1px solid var(--border-light); text-align: right; }
+  .headline { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 10px; }
+  .stat { background: var(--panel-3); border: 1px solid var(--border-light); border-radius: 12px; padding: 12px; }
+  .stat .label { font-size: 10.5px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .06em; margin: 0; }
+  .stat .value { font-size: 20px; font-weight: 800; margin-top: 3px; font-variant-numeric: tabular-nums; }
+  table.sweep { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 6px; }
+  table.sweep th, table.sweep td { padding: 7px 9px; border-bottom: 1px solid var(--border-light); text-align: right; }
+  table.sweep th { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
   table.sweep th:first-child, table.sweep td:first-child { text-align: left; }
-  .journal { white-space: pre-wrap; font-size: 13px; line-height: 1.6; background: var(--panel-3); border: 1px solid var(--border-light); border-radius: 10px; padding: 12px; }
+  .journal { white-space: pre-wrap; font-size: 13px; line-height: 1.65; background: var(--panel-3); border: 1px solid var(--border-light); border-radius: 12px; padding: 14px; }
   details summary { cursor: pointer; }
 </style>
 </head>
@@ -52,13 +71,17 @@
 {% set active_page = active_page|default('hedge_fund') %}
 <div class="t58-shell">
 {% include '_sidebar.html' %}
-<div class="t58-main">
+<div class="t58-main"><div class="hf">
 <div class="t58-page-header">
-  <h1>Hedge Fund Manager</h1>
-  <p>A four-desk pipeline: Research (view generation with uncertainty) &rarr; Portfolio (Black-Litterman blend into weights) &rarr; Execution (weights walked forward into a cost-aware equity curve) &rarr; Oversight (a read-only journal of what happened). Everything runs in paper mode against your uploaded market data -- nothing here places a live order.</p>
-  <div class="desk-flow">
-    <span>1. Research</span><span>&rarr;</span><span>2. Portfolio (Black-Litterman)</span><span>&rarr;</span><span>3. Execution</span><span>&rarr;</span><span>4. Oversight journal</span>
+  <h1>Portfolio Builder</h1>
+  <p>Combine two or more markets into one portfolio. Four desks work in order, and you only need to pick your markets and press run.</p>
+  <div class="hf-desks">
+    <div class="hf-desk"><div class="n">1</div><b>Research</b><span>Forms a view on each market, with a confidence level.</span></div>
+    <div class="hf-desk"><div class="n">2</div><b>Portfolio</b><span>Blends the views into weights (Black-Litterman).</span></div>
+    <div class="hf-desk"><div class="n">3</div><b>Execution</b><span>Rebalances over time and charges realistic costs.</span></div>
+    <div class="hf-desk"><div class="n">4</div><b>Oversight</b><span>Writes a plain-English journal of what happened.</span></div>
   </div>
+  <div class="hf-safe"><b>Paper mode only.</b> This runs on your own market data and never places a live order.</div>
 </div>
 
 {% if error %}
@@ -121,12 +144,13 @@
 <form method="post" action="/hedge-fund/run" enctype="multipart/form-data">
 
   <div class="card">
-    <h2>1. Assets in the book (at least 2 required, up to {{ max_assets }})</h2>
+    <h2><span class="sn">1</span> Pick your markets <small>at least 2, up to {{ max_assets }}</small></h2>
     <p class="help">Each slot is one instrument's market data -- the research desk generates an independent view for each, the portfolio desk blends them via Black-Litterman into one set of weights.</p>
+    <div class="assets">
     {% for i in range(1, max_assets + 1) %}
     <div class="asset-block">
-      <h3>Asset {{ i }}{% if i > 2 %} (optional){% endif %}</h3>
-      <label>Use a previously stored dataset</label>
+      <h3>Market {{ i }}{% if i > 2 %} <span class="opt">(optional)</span>{% endif %}</h3>
+      <label>Stored dataset</label>
       <select name="asset{{ i }}_existing_dataset">
         <option value="">— none —</option>
         {% for g in dataset_groups %}
@@ -137,25 +161,26 @@
         </optgroup>
         {% endfor %}
       </select>
-      <label>Or upload a CSV for this instrument</label>
+      <label>&hellip;or upload a CSV</label>
       <input type="file" name="asset{{ i }}_csv" accept=".csv,.tsv,.txt,.parquet,.zip,.7z">
-      <label>Label (optional -- defaults to the dataset/file name)</label>
+      <label>Label (optional)</label>
       <input type="text" name="asset{{ i }}_label" placeholder="e.g. SPY">
-      <label>View source for this asset</label>
+      <label>Where the view comes from</label>
       <select name="asset{{ i }}_library_mode" class="asset-strategy-mode" data-asset="{{ i }}" onchange="populateAssetLibrarySelect({{ i }})">
-        <option value="">— statistical bootstrap (no edge assumed, calibrates uncertainty only) —</option>
+        <option value="">Statistical bootstrap (no edge assumed)</option>
         <option value="python">Load from library: Python</option>
         <option value="pinescript">Load from library: PineScript</option>
         <option value="mql5">Load from library: MQL5</option>
       </select>
       <select name="asset{{ i }}_library_name" id="asset{{ i }}_library_name" style="display:none;"></select>
-      <p class="help" style="margin:4px 0 0;">Pick a saved strategy to let ITS current signal and historical hit rate drive this asset's view instead of the bootstrap -- this is how the research desk becomes your own T58 strategies rather than a generic forecaster.</p>
+      <p class="help" style="margin:6px 0 0;">Pick a saved strategy to let its current signal and historical hit rate drive this market's view instead of the bootstrap. This is how the research desk becomes your own T58 strategies rather than a generic forecaster.</p>
     </div>
     {% endfor %}
+    </div>
   </div>
 
   <div class="card">
-    <h2>2. Research desk (view generation)</h2>
+    <h2><span class="sn">2</span> Research desk <small>how views are formed</small></h2>
     <p class="help">Default (no strategy picked above): samples many resampled paths per asset and uses the mean as the view, the dispersion as the confidence fed to the portfolio desk -- the same architecture the source article uses Kronos for, without vendoring an unproven forecasting model. Assets with a Strategy Library pick above use that strategy's current signal and historical same-direction hit rate instead.</p>
     <div class="row">
       <div><label>Lookback (bars)</label><input type="number" name="lookback_bars" value="100"></div>
@@ -166,7 +191,7 @@
   </div>
 
   <div class="card">
-    <h2>3. Portfolio desk (Black-Litterman)</h2>
+    <h2><span class="sn">3</span> Portfolio desk <small>how views become weights</small></h2>
     <p class="help">Confidence is the Omega dial: 1.0 trusts the research desk's own measured dispersion exactly; near 0 makes the optimizer ignore the views and fall back to equal-weight equilibrium.</p>
     <label>Confidence (0.0 - 1.0)</label>
     <input type="number" step="0.05" min="0" max="1" name="confidence" value="0.5">
@@ -177,7 +202,7 @@
   </div>
 
   <div class="card">
-    <h2>4. Execution desk (rebalance + costs)</h2>
+    <h2><span class="sn">4</span> Execution desk <small>rebalancing and costs</small></h2>
     <div class="row">
       <div>
         <label>Prop firm preset (optional shortcut)</label>
@@ -195,7 +220,7 @@
   </div>
 
   <div class="card">
-    <h2>5. Oversight desk (journal)</h2>
+    <h2><span class="sn">5</span> Oversight desk <small>the run journal</small></h2>
     <div class="checkbox-row">
       <input type="checkbox" id="write_journal" name="write_journal" checked>
       <label for="write_journal">Generate a plain-English run journal (uses your configured Ollama, AI Assistant tab; falls back to a deterministic summary if Ollama isn't set up)</label>
@@ -203,10 +228,10 @@
     <p class="help">This desk is read-only by construction -- it summarizes a FINISHED run and cannot place, size, or modify any order.</p>
   </div>
 
-  <button class="submit-btn" type="submit">Run Hedge Fund Manager</button>
+  <div class="submit-bar"><button class="submit-btn" type="submit">Build the portfolio</button></div>
 </form>
 
-</div>
+</div></div>
 </div>
 <script>
   const SAVED_STRATEGIES = {{ saved_strategies_json | safe }};

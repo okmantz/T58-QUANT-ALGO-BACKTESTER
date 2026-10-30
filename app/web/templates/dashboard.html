@@ -5,7 +5,7 @@
 {% include '_head_common.html' %}
 <style>
   /* Dashboard v3 -- "Deep Teal Glass". One calm column of frosted-glass cards over a misty mountain backdrop:
-     header, a short welcome (first run only), four KPIs, equity + focus, news/markets, current strategy, recent runs,
+     header, a short welcome (first run only), four KPIs, equity + focus, current strategy, recent runs,
      Champion Board, and a single collapsed "insights" card. Colours come from theme.css's unified palette:
      teal = primary, cyan/violet = supporting, gold = the one warm accent. */
   .db { --gap: 18px; display: flex; flex-direction: column; gap: var(--gap); max-width: 1240px; position: relative; }
@@ -117,9 +117,9 @@
   .sc-dims dd { margin: 2px 0 0; font-size: 13.5px; font-weight: 650; font-variant-numeric: tabular-nums; }
   .sc-dims dd.stg { font-size: 11.5px; line-height: 1.25; }
   .sc-dims [data-metric] { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; text-decoration-color: var(--text-dim); }
-  .sc-rank { position: absolute; right: 14px; bottom: 8px; font-size: 38px; font-weight: 800; line-height: 1; letter-spacing: -.02em;
+  .sc-rank { position: absolute; right: 14px; bottom: 8px; font-size: 22px; font-weight: 800; line-height: 1; letter-spacing: -.02em;
              color: var(--text); opacity: .13; pointer-events: none; user-select: none; font-variant-numeric: tabular-nums; }
-  .sc-next { padding-right: 46px; }
+  .sc-next { padding-right: 30px; }
   .sc-next { border-top: 1px solid var(--border); padding-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .sc-head { width: 100%; font-size: 13px; font-weight: 650; display: flex; gap: 8px; align-items: center; }
   .sc-dot { width: 8px; height: 8px; border-radius: 50%; background: rgb(var(--tone)); box-shadow: 0 0 10px rgba(var(--tone), .7); flex: none; }
@@ -129,7 +129,6 @@
   .db-runs-d[open] > summary { margin-bottom: 14px; }
 
   .db-row { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); gap: var(--gap); align-items: stretch; }
-  .db-market { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); }
   #equity-chart { min-height: 236px; }
   .db-chart-empty { min-height: 236px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; color: var(--text-muted); font-size: 13px; }
   .db-chart-empty svg { width: 38px; height: 38px; color: var(--teal); opacity: .8; }
@@ -192,7 +191,7 @@
   .db details[open] > summary { margin-bottom: 14px; }
 
   @media (max-width: 1020px) {
-    .db-row, .db-market { grid-template-columns: 1fr; }
+    .db-row { grid-template-columns: 1fr; }
     .db-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .db-welcome { flex-wrap: wrap; }
     .db-welcome .wl-acts { flex-direction: row; min-width: 0; width: 100%; }
@@ -345,7 +344,7 @@
     </div>
     <div class="db-empty">Run your first backtest and T58 will tell you what's working, why, and what to do next.</div>
     <div class="acts" style="margin-top:14px;">
-      <a class="t58-btn primary sm" href="/">Run a backtest</a>
+      <a class="t58-btn primary sm" href="/full-pipeline">Run a backtest</a>
       <a class="t58-btn ghost sm" href="/generate-strategies">Generate a strategy (AI)</a>
     </div>
     {% endif %}
@@ -430,18 +429,6 @@
   {% endif %}
 </div>
 
-<!-- ---- Market data + news (also lives in AI Assistant) ---- -->
-<div class="db-row db-market">
-  <div class="db-card">
-    <h2>News &mdash; upcoming events <a href="/assistant/">AI Assistant &rarr;</a></h2>
-    <div id="db-news" class="db-feed"><div class="db-empty">Loading news&hellip;</div></div>
-  </div>
-  <div class="db-card">
-    <h2>Market data <a href="/assistant/">Full rankings &rarr;</a></h2>
-    <div id="db-rank" class="db-feed"><div class="db-empty">Loading markets&hellip;</div></div>
-  </div>
-</div>
-
 <!-- ---- Insights: heavier visuals, drawn only when a row is opened ---- -->
 <div class="db-card db-insights">
   <h2>Deeper insights</h2>
@@ -491,37 +478,6 @@
     if (g) g.textContent = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
   })();
   function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
-  function loadNews() {
-    var el = document.getElementById('db-news');
-    fetch('/assistant/api/news').then(function (r) { return r.json(); }).then(function (d) {
-      if (d.error) { el.innerHTML = '<div class="db-empty">' + esc(d.error) + '</div>'; return; }
-      var ev = (d.events || []).slice(0, 6);
-      if (!ev.length) { el.innerHTML = '<div class="db-empty">No upcoming events this week.</div>'; return; }
-      el.innerHTML = ev.map(function (e) {
-        var cls = /high|red/i.test(e.impact) ? 'hi' : /med|orange|yellow/i.test(e.impact) ? 'med' : 'lo';
-        var mins = e.minutes_until;
-        var cd = mins == null ? '' : (mins < 0 ? 'released' : (mins >= 60 ? Math.floor(mins / 60) + 'h ' + Math.round(mins % 60) + 'm' : Math.round(mins) + 'm'));
-        return '<div class="nr"><div><div class="nt">' + esc(e.currency) + ' &mdash; ' + esc(e.title) + '</div><div class="nm">' +
-          (e.when ? new Date(e.when).toLocaleString() : 'TBD') + (cd ? ' &middot; ' + cd : '') + '</div></div><span class="' + cls + '">' + esc(e.impact) + '</span></div>';
-      }).join('');
-    }).catch(function () { el.innerHTML = '<div class="db-empty">News unavailable right now.</div>'; });
-  }
-  function loadRank() {
-    var el = document.getElementById('db-rank');
-    fetch('/assistant/api/rankings').then(function (r) { return r.json(); }).then(function (d) {
-      var rk = (d.rankings || []).slice(0, 6);
-      if (!rk.length) { el.innerHTML = '<div class="db-empty">No market data loaded yet. Add a dataset under Market Data or connect a data key.</div>'; return; }
-      el.innerHTML = rk.map(function (r) {
-        var up = r.momentum_pct >= 0;
-        return '<div class="nr"><div><div class="nt">' + esc(r.symbol) + ' <span class="nm">' + esc(r.asset_class) + '</span></div><div class="nm">' + esc(r.zone || '') +
-          '</div></div><span class="' + (up ? 'up' : 'down') + '">' + (up ? '+' : '') + r.momentum_pct + '%</span></div>';
-      }).join('');
-    }).catch(function () { el.innerHTML = '<div class="db-empty">Market data unavailable right now.</div>'; });
-  }
-  // Fetched after first paint so the page itself never waits on the network.
-  setTimeout(function () { loadNews(); loadRank(); }, 300);
-  setInterval(function () { if (!document.hidden) { loadNews(); loadRank(); } }, 300000);
-
   const DATA = {{ data | tojson | safe }};
   var lastSig = '';
 
@@ -532,7 +488,7 @@
     el.innerHTML = '<div class="db-chart-empty">' +
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l5-5 4 4 8-8"/><path d="M15 8h5v5"/></svg>' +
       '<div>No completed runs yet &mdash; run a strategy to populate this chart.</div>' +
-      '<a class="t58-btn secondary sm" href="/">Run a Backtest &rarr;</a></div>';
+      '<a class="t58-btn secondary sm" href="/full-pipeline">Run a Backtest &rarr;</a></div>';
   }
   function paint(data) {
     var sig = JSON.stringify([data.equity_series, data.heatmap, data.graph]);

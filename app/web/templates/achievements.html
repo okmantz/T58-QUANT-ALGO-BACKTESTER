@@ -6,11 +6,11 @@
 <style>
   .ach { --tier-easy: var(--teal); --tier-medium: #4d90ff; --tier-hard: #9b8cff; --tier-elite: #f5b83d; max-width: 1100px; }
   .ach-hero { display: grid; grid-template-columns: auto 1fr; gap: 18px; align-items: center; padding: 16px 18px; }
-  .ach-ring { --p: 0; width: 92px; height: 92px; border-radius: 50%; display: grid; place-items: center; position: relative;
-    background: conic-gradient(var(--teal) calc(var(--p) * 1%), rgba(var(--teal-rgb), .14) 0); }
-  .ach-ring::before { content: ""; position: absolute; inset: 7px; border-radius: 50%; background: var(--panel-2); }
-  .ach-ring b { position: relative; font-size: 28px; line-height: 1; }
-  .ach-ring small { position: absolute; bottom: 17px; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-muted); }
+  .ach-ring { width: 96px; height: 96px; border-radius: 50%; display: grid; place-items: center; position: relative; color: var(--mi, #2b1a0a);
+    background: radial-gradient(circle at 30% 25%, var(--ml), var(--mm) 52%, var(--md)); box-shadow: 0 0 0 3px rgba(255,255,255,.08), 0 10px 26px -8px var(--mm); }
+  .ach-ring::before { content: ""; position: absolute; inset: 9px; border-radius: 50%; border: 2px solid currentColor; opacity: .3; }
+  .ach-ring b { position: relative; font-size: 30px; line-height: 1; margin-top: -6px; }
+  .ach-ring small { position: absolute; bottom: 18px; font-size: 9.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; opacity: .75; }
   .ach-hero h2 { margin: 0; font-size: 20px; text-transform: none; letter-spacing: 0; color: var(--text); }
   .ach-hero p { margin: 3px 0 10px; font-size: 13px; color: var(--text-muted); }
   .ach-bar { height: 10px; border-radius: 99px; background: rgba(var(--teal-rgb), .14); overflow: hidden; }
@@ -50,7 +50,29 @@
   .ach-medal { flex: none; width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; font-size: 18px; border: 2px solid var(--c); color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); }
   .ach-badge.locked .ach-medal { filter: grayscale(1); opacity: .55; }
   .ach-badge.done { border-color: color-mix(in srgb, var(--c) 60%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--c) 25%, transparent) inset; }
-  .ach-badge.done .ach-medal { background: var(--c); color: #04120e; }
+  .ach-badge.done .ach-medal { background: radial-gradient(circle at 30% 25%, var(--ml), var(--mm) 55%, var(--md)); color: var(--mi); border-color: var(--md); box-shadow: 0 4px 12px -4px var(--mm); }
+  .ach-badge[data-tier="easy"] { --ml: {{ metals.bronze[0] }}; --mm: {{ metals.bronze[1] }}; --md: {{ metals.bronze[2] }}; --mi: {{ metals.bronze[3] }}; }
+  .ach-badge[data-tier="medium"] { --ml: {{ metals.silver[0] }}; --mm: {{ metals.silver[1] }}; --md: {{ metals.silver[2] }}; --mi: {{ metals.silver[3] }}; }
+  .ach-badge[data-tier="hard"] { --ml: {{ metals.gold[0] }}; --mm: {{ metals.gold[1] }}; --md: {{ metals.gold[2] }}; --mi: {{ metals.gold[3] }}; }
+  .ach-badge[data-tier="elite"] { --ml: {{ metals.platinum[0] }}; --mm: {{ metals.platinum[1] }}; --md: {{ metals.platinum[2] }}; --mi: {{ metals.platinum[3] }}; }
+  /* certificates & medals gallery */
+  .ach-gal { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+  .ach-gcard { border: 1px solid var(--border); border-radius: 14px; background: var(--panel-2); overflow: hidden; display: flex; flex-direction: column; }
+  .ach-gcard.locked { opacity: .55; }
+  .ach-gcard .pv { aspect-ratio: 3 / 2; background: #070b10 center / cover no-repeat; display: grid; place-items: center; }
+  .ach-gcard .pv img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .ach-gcard .pv .lk { font-size: 12px; color: #8fa1af; letter-spacing: .06em; text-transform: uppercase; }
+  .ach-gcard .gb { padding: 10px 12px 12px; display: grid; gap: 8px; }
+  .ach-gcard .gt { font-weight: 700; font-size: 13.5px; } .ach-gcard .gs { font-size: 11.5px; color: var(--text-muted); margin-top: -4px; }
+  .ach-gbtns { display: flex; gap: 6px; flex-wrap: wrap; }
+  .ach-gbtns button, .ach-gbtns a { padding: 5px 11px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; text-decoration: none; }
+  .ach-gbtns button:hover, .ach-gbtns a:hover { border-color: var(--teal); color: var(--teal); }
+  .ach-gsec { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 4px 0 8px; }
+  .ach-gsec h4 { margin: 14px 0 0; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-muted); }
+  #ach-view { position: fixed; inset: 0; z-index: 9400; background: rgba(0,0,0,.78); display: none; place-items: center; padding: 18px; }
+  #ach-view.on { display: grid; }
+  #ach-view .box { max-width: min(1100px, 100%); max-height: 100%; display: grid; gap: 10px; justify-items: center; }
+  #ach-view img { max-width: 100%; max-height: calc(100vh - 90px); border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
   .ach-badge .t { font-weight: 700; font-size: 13.5px; line-height: 1.2; } .ach-badge .d { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
   .ach-badge .foot { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); }
   .ach-tier { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--c); }
@@ -73,9 +95,10 @@
 
 {% set L = model.level %}
 <div class="t58-card ach-hero">
-  <div class="ach-ring" style="--p: {{ L.pct }}"><b>{{ L.level }}</b><small>level</small></div>
+  {% set RM = metals[rank.metal] %}
+  <div class="ach-ring" style="--ml: {{ RM[0] }}; --mm: {{ RM[1] }}; --md: {{ RM[2] }}; --mi: {{ RM[3] }}" title="{{ rank.metal_label }} rank"><b>{{ L.level }}</b><small>level</small></div>
   <div>
-    <h2>{{ L.title }}</h2>
+    <h2>{{ L.title }} <span style="font-size:12px;font-weight:700;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase;margin-left:6px">{{ rank.metal_label }} rank</span></h2>
     <p>{{ model.unlocked }} of {{ model.total }} achievements unlocked &middot; {{ model.xp }} XP</p>
     <div class="ach-bar" style="--p: {{ L.pct }}"><i></i></div>
     <div class="meta"><span>{{ L.into }} / {{ L.span }} XP to level {{ L.level + 1 }}</span><span>Easy 10 &middot; Medium 25 &middot; Hard 60 &middot; Elite 150 XP</span></div>
@@ -106,6 +129,40 @@
   {% endfor %}
 </div>
 {% endif %}
+
+<h3>Certificates &amp; medals</h3>
+<p class="ach-count" style="margin-bottom:4px">View or download your research certificate, your rank medals and every badge you have earned, as a vector file (SVG) or a picture (PNG).</p>
+<div class="ach-gsec"><h4>Certificate</h4></div>
+<div class="ach-gal">
+  <div class="ach-gcard">
+    <div class="pv"><img loading="lazy" alt="Research certificate preview" src="/achievements/certificate.svg"></div>
+    <div class="gb"><div class="gt">Research certificate</div><div class="gs">{{ rank.metal_label }} rank &middot; level {{ L.level }} &middot; {{ model.unlocked }} badges</div>
+      <div class="ach-gbtns"><button type="button" data-view="/achievements/certificate.svg">View</button><a href="/achievements/certificate.svg?download=1">SVG</a><button type="button" data-png="/achievements/certificate.svg" data-w="1600" data-h="1131" data-name="t58-research-certificate.png">PNG</button></div></div>
+  </div>
+</div>
+<div class="ach-gsec"><h4>Rank medals</h4></div>
+<div class="ach-gal">
+  {% for r in ranks %}
+  <div class="ach-gcard {{ '' if r.reached else 'locked' }}">
+    <div class="pv">{% if r.reached %}<img loading="lazy" alt="{{ r.label }} medal" src="/achievements/medal/{{ r.metal }}.svg">{% else %}<span class="lk">Locked &middot; reach level {{ r.from }}</span>{% endif %}</div>
+    <div class="gb"><div class="gt">{{ r.label }} medal</div><div class="gs">{% if r.to %}Levels {{ r.from }}&ndash;{{ r.to }}{% else %}Level {{ r.from }} and above{% endif %}</div>
+      {% if r.reached %}<div class="ach-gbtns"><button type="button" data-view="/achievements/medal/{{ r.metal }}.svg">View</button><a href="/achievements/medal/{{ r.metal }}.svg?download=1">SVG</a><button type="button" data-png="/achievements/medal/{{ r.metal }}.svg" data-w="1800" data-h="1200" data-name="t58-medal-{{ r.metal }}.png">PNG</button></div>{% endif %}</div>
+  </div>
+  {% endfor %}
+</div>
+<div class="ach-gsec"><h4>Badge medals earned ({{ badges|length }})</h4></div>
+{% if badges %}
+<div class="ach-gal">
+  {% for b in badges %}
+  <div class="ach-gcard">
+    <div class="pv"><img loading="lazy" alt="{{ b.title }} badge" src="/achievements/card/{{ b.id }}.svg"></div>
+    <div class="gb"><div class="gt">{{ b.title }}</div><div class="gs">{{ b.metal_label }} &middot; {{ b.category }}{{ ' &middot; rare'|safe if b.rare else '' }}</div>
+      <div class="ach-gbtns"><button type="button" data-view="/achievements/card/{{ b.id }}.svg">View</button><a href="/achievements/card/{{ b.id }}.svg?download=1">SVG</a><button type="button" data-png="/achievements/card/{{ b.id }}.svg" data-w="1200" data-h="630" data-name="t58-badge-{{ b.id }}.png">PNG</button></div></div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}<div class="ach-empty">No badges earned yet. Every badge you unlock appears here as a medal you can view and download.</div>{% endif %}
+<div id="ach-view" role="dialog" aria-modal="true" aria-label="Preview"><div class="box"><img alt="" id="ach-view-img"><button type="button" class="ach-chip" id="ach-view-x">Close</button></div></div>
 
 <h3>All achievements</h3>
 <div class="ach-filters" id="ach-chips" role="group" aria-label="Filter achievements">
@@ -177,6 +234,25 @@
     });
   });
   apply();
+
+  // view + PNG download for the certificate / medal gallery
+  var view = document.getElementById('ach-view'), vimg = document.getElementById('ach-view-img');
+  function closeView() { view.classList.remove('on'); vimg.removeAttribute('src'); }
+  document.addEventListener('click', function (e) {
+    var v = e.target.closest('[data-view]'), p = e.target.closest('[data-png]');
+    if (v) { vimg.src = v.dataset.view; view.classList.add('on'); }
+    else if (p) { svgToPng(p.dataset.png, +p.dataset.w, +p.dataset.h, p.dataset.name); }
+    else if (e.target === view || e.target.id === 'ach-view-x') closeView();
+  });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeView(); });
+  function svgToPng(url, w, h, name) {
+    fetch(url).then(function (r) { return r.text(); }).then(function (svg) {
+      var img = new Image(), blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }), u = URL.createObjectURL(blob);
+      img.onload = function () { var c = document.createElement('canvas'); c.width = w; c.height = h; c.getContext('2d').drawImage(img, 0, 0, w, h); URL.revokeObjectURL(u);
+        c.toBlob(function (b) { var a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = name; document.body.appendChild(a); a.click(); a.remove(); }, 'image/png'); };
+      img.src = u;
+    });
+  }
 })();
 </script>
 </body>

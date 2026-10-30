@@ -13,8 +13,17 @@ pages_bp = Blueprint("pages_extra", __name__)
 @pages_bp.route("/achievements")
 def achievements_page():
     from app.achievements import evaluate
+    from app import achievements
+    from app.achievements import share
     model = evaluate()
-    return render_template("achievements.html", active_page="achievements", model=model)
+    prof = achievements.profile(model)
+    ranks = []
+    for at, metal, label in achievements.RANK_METALS:
+        top = next((a2 for a2, _m, _l in achievements.RANK_METALS if a2 > at), None)
+        ranks.append({"metal": metal, "label": label, "from": at + 1, "to": (top if top else None),
+                      "reached": model["level"]["level"] - 1 >= at})
+    return render_template("achievements.html", active_page="achievements", model=model, rank=prof["rank"], badges=prof["badges"],
+                           ranks=ranks, metals=share.METALS, who=_display_name())
 
 
 @pages_bp.route("/api/achievements")
@@ -107,6 +116,26 @@ def achievement_card(aid: str):
     resp = Response(svg, mimetype="image/svg+xml")
     if request.args.get("download"):
         resp.headers["Content-Disposition"] = f'attachment; filename="t58-badge-{aid}.svg"'
+    return resp
+
+
+@pages_bp.route("/achievements/medal/<metal>.svg")
+def achievement_medal(metal: str):
+    from flask import Response
+    from app import achievements
+    from app.achievements import share
+    row = next((r for r in achievements.RANK_METALS if r[1] == metal), None)
+    if row is None:
+        return jsonify({"ok": False, "error": "Unknown medal."}), 404
+    lvl = achievements.profile()["level"]["level"]
+    if lvl - 1 < row[0]:
+        return jsonify({"ok": False, "error": "Medal not reached yet."}), 404
+    top = next((a for a, _m, _l in achievements.RANK_METALS if a > row[0]), None)
+    rng = f"Levels {row[0] + 1}-{top}" if top else f"Level {row[0] + 1} and above"
+    svg = share.medal_svg(metal, row[2], rng, _display_name())
+    resp = Response(svg, mimetype="image/svg+xml")
+    if request.args.get("download"):
+        resp.headers["Content-Disposition"] = f'attachment; filename="t58-medal-{metal}.svg"'
     return resp
 
 

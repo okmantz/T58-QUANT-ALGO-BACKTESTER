@@ -296,7 +296,7 @@
   // to go run, same "always tell them the next tab" convention as
   // app.orchestration.pipeline_guide's server-side guidance text.
   function nextStepText(pp) {
-    if (!pp) return 'Next step: run this strategy on Run & Report to start tracking its pipeline progress.';
+    if (!pp) return 'Next step: run this strategy on Full Pipeline to start tracking its pipeline progress.';
     const verdict = pp.verdict || '';
     switch (pp.next_stage) {
       case 'test': return 'Next step: run this strategy on Run & Report (or Quick Optimize / Full Pipeline, which include a test) to reach the Test stage.';

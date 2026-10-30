@@ -276,11 +276,11 @@ def bump(counter: str, n: int = 1) -> None:
 
 
 def _owner_mode() -> bool:
-    """True when this device is signed in with the owner's master key: every reward is shown unlocked so backgrounds, themes,
+    """True when this device is signed in with the owner's master key or verified owner account: every reward is shown unlocked so backgrounds, themes,
     titles and badges can all be tried. It is an overlay only -- nothing is written to achievements.json."""
     try:
         from app.licensing import client
-        return bool(client.master_key_active())
+        return bool(client.full_access_active())
     except Exception:  # noqa: BLE001
         return False
 
@@ -384,8 +384,8 @@ BACKGROUND_UNLOCKS: dict[str, dict[str, Any]] = {
     "abyssal-blue": {"label": "Abyssal Blue", "ach": ["grave-100", "disc-10"]},
 }
 THEME_UNLOCKS: dict[str, dict[str, Any]] = {
-    "obsidian-gold": {"label": "Obsidian Gold", "level": 8, "ach": []},
-    "arctic-glass": {"label": "Arctic Glass", "ach": ["vtool-3", "val-10"]},
+    "obsidian-gold": {"label": "Obsidian Gold", "level": 0, "ach": []},     # free for everyone from the first launch (a preview of what the rest look like)
+    "midnight-azure": {"label": "Midnight Azure", "ach": ["vtool-3", "val-10"]},
     "terminal-green": {"label": "Terminal Green", "ach": ["pipe-10", "pass-1"]},
     "deep-space": {"label": "Deep Space", "ach": ["inst-10", "tf-5"]},
     "crimson-protocol": {"label": "Crimson Protocol", "ach": ["pass-5", "strat-50"]},

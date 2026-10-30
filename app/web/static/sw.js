@@ -2,7 +2,7 @@
 // /static/sw.js, whose scope is /static/ -- it never controlled "/" or "/dashboard", which is one of the things Chrome
 // checks before it offers "Install app". It caches the app shell + static assets and falls back to a small offline page
 // for navigations. It never caches /run, /reports/ or any POST/API response (those need the live backend).
-const CACHE_NAME = "t58-backtester-shell-v2";
+const CACHE_NAME = "t58-backtester-shell-v3";
 const SHELL_ASSETS = [
   "/static/offline.html", "/manifest.json",
   "/static/icon-192.png", "/static/icon-512.png",

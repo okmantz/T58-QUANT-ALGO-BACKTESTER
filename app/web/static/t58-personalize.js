@@ -31,15 +31,14 @@
   function fxOn() { return get('t58-fx') !== '0'; }
   function isLight() { return document.documentElement.getAttribute('data-theme') === 'light'; }
   /* ------------------------------------------------------------------ interface themes (unlockable) */
-  var UI_THEMES = { 'obsidian-gold': 'Obsidian Gold', 'arctic-glass': 'Arctic Glass', 'terminal-green': 'Terminal Green', 'deep-space': 'Deep Space', 'crimson-protocol': 'Crimson Protocol' };
+  var UI_THEMES = { 'obsidian-gold': 'Obsidian Gold', 'midnight-azure': 'Midnight Azure', 'terminal-green': 'Terminal Green', 'deep-space': 'Deep Space', 'crimson-protocol': 'Crimson Protocol' };
   function uiTheme() { var v = get('t58-ui-theme'); return UI_THEMES[v] && !locked('theme', v) ? v : ''; }
   function applyUiTheme() {
     var root = document.documentElement, t = uiTheme();
     if (!t) { root.removeAttribute('data-ui-theme'); return; }
     root.setAttribute('data-ui-theme', t);
-    // the theme owns light/dark: arctic-glass is the light base, every other theme is dark
-    if (t === 'arctic-glass') { if (root.getAttribute('data-theme') !== 'light') root.setAttribute('data-theme', 'light'); }
-    else if (root.getAttribute('data-theme')) root.removeAttribute('data-theme');
+    // the theme owns light/dark: every theme sits on the dark base
+    if (root.getAttribute('data-theme')) root.removeAttribute('data-theme');
   }
   function setUiTheme(name) {
     if (name && (!UI_THEMES[name] || locked('theme', name))) return false;

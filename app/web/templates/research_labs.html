@@ -5,45 +5,75 @@
 {% include '_head_common.html' %}
 <style>
   * { box-sizing: border-box; }
+  .rl { max-width: 1120px; }
+  a.back { display: inline-flex; color: var(--text-muted); font-size: 12.5px; font-weight: 650; text-decoration: none; margin-bottom: 8px; }
+  a.back:hover { color: var(--teal); }
+  .rl-hero { padding: 20px 22px; border-radius: 16px; border: 1px solid var(--border); margin-bottom: 14px;
+    background: linear-gradient(135deg, rgba(var(--teal-rgb), .15), rgba(var(--teal-rgb), .02) 62%), var(--panel-2); }
+  .rl-hero h1 { margin: 0 0 6px; font-size: 22px; }
+  .rl-hero p { margin: 0; color: var(--text-muted); font-size: 13.5px; line-height: 1.6; max-width: 800px; }
+  .rl-promises { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin: 14px 0 0; }
+  .rl-promises div { padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel-3); font-size: 12px; color: var(--text-muted); line-height: 1.45; }
+  .rl-promises b { display: block; color: var(--text); font-size: 12.5px; margin-bottom: 2px; }
+  .rl-feat { margin: 12px 0 0; font-size: 12px; color: var(--text-dim); line-height: 1.6; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }
-  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 16px; text-decoration: none; color: var(--text); display: block; }
-  a.card:hover { border-color: var(--teal); }
-  .card h3 { margin: 0 0 6px; font-size: 14px; color: var(--teal); }
-  .card p { margin: 0 0 6px; font-size: 12.5px; color: var(--text-muted); line-height: 1.5; }
-  .badge { display: inline-block; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); border: 1px solid var(--border-light); border-radius: 4px; padding: 1px 6px; margin-bottom: 8px; }
-  h1 { font-size: 18px; margin: 0 0 4px; } h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin: 22px 0 10px; }
-  p.lede { color: var(--text-muted); font-size: 13px; margin: 0 0 18px; line-height: 1.55; }
-  .small { font-size: 12px; color: var(--text-muted); }
-  table { width: 100%; border-collapse: collapse; font-size: 12.5px; } td, th { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 14px; padding: 16px; text-decoration: none; color: var(--text); display: flex; flex-direction: column; gap: 8px; }
+  a.card { transition: transform .15s, border-color .15s, box-shadow .15s; }
+  a.card:hover { transform: translateY(-2px); border-color: rgba(var(--teal-rgb), .65); box-shadow: 0 10px 28px -14px rgba(var(--teal-rgb), .5); }
+  .card .top { display: flex; align-items: center; gap: 10px; }
+  .card .ic { flex: none; width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; font-weight: 800; color: var(--teal); background: rgba(var(--teal-rgb), .14); }
+  .card h3 { margin: 0; font-size: 14.5px; color: var(--text); line-height: 1.3; }
+  .card p { margin: 0; font-size: 12.5px; color: var(--text-muted); line-height: 1.55; }
+  .card p.sum { flex: 1; }
+  .badge { display: inline-block; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; color: var(--teal); background: rgba(var(--teal-rgb), .12); border-radius: 99px; padding: 3px 9px; }
+  .need { font-size: 11.5px; color: var(--text-dim); padding-top: 8px; border-top: 1px solid var(--border); }
+  .need b { color: var(--text-muted); }
+  .go { font-size: 12.5px; font-weight: 700; color: var(--teal); }
+  h2.sec { font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .09em; color: var(--text-muted); margin: 26px 0 10px; }
+  .small { font-size: 12.5px; color: var(--text-muted); }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; } td, th { padding: 9px 10px; border-bottom: 1px solid var(--border); text-align: left; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); }
+  .recent { overflow-x: auto; }
+  .empty { padding: 20px; text-align: center; border: 1px dashed var(--border-light); border-radius: 14px; color: var(--text-muted); font-size: 13px; }
 </style>
 </head>
 <body>
 {% set active_page = 'research_labs' %}
 <div class="t58-shell">
 {% include '_sidebar.html' %}
-<div class="t58-main">
-  <a class="small" href="/quant-lab">&larr; Quant Lab</a>
-  <h1>Research Labs</h1>
-  <p class="lede">Eight research engines that feed the backtester, the Search/Evolution labs, the Manual builder and the Gamma analyzer. Every run is <b>reproducible</b> (seeded, spec-hashed),
-    <b>keeps its assumptions</b> next to the answer, labels proxy data as proxy, and reports <b>out-of-sample</b> results. The features they validate are available as indicators in every strategy-creation engine
-    (<code>vp_*</code>, <code>flow_*</code>, <code>spread_zscore</code>, <code>leader_return</code>, <code>event_window</code>).</p>
+<div class="t58-main"><div class="rl">
+  <a class="back" href="/quant-lab">&larr; Quant Lab</a>
+  <div class="rl-hero">
+    <h1>Research Labs</h1>
+    <p>Pick a lab, give it market data, and get an answer you can check. Each lab asks one focused question about how markets behave, then feeds what it learns back into the backtester and the strategy-creation tools.</p>
+    <div class="rl-promises">
+      <div><b>Reproducible</b>Seeded and spec-hashed, so a re-run gives the same answer.</div>
+      <div><b>Assumptions shown</b>The settings used sit right next to the result.</div>
+      <div><b>Honest about proxies</b>Anything estimated from proxy data is labelled as such.</div>
+      <div><b>Out-of-sample</b>Results are reported on data the lab did not train on.</div>
+    </div>
+    <p class="rl-feat">The features these labs validate are available as indicators in every strategy-creation engine: <code>vp_*</code>, <code>flow_*</code>, <code>spread_zscore</code>, <code>leader_return</code>, <code>event_window</code>.</p>
+  </div>
+
   <div class="grid">
     {% for lab in labs %}
     <a class="card" href="/research-labs/{{ lab.slug }}">
-      <div class="badge">{{ lab.badge }}</div>
+      <div class="top"><div class="ic" aria-hidden="true">{{ lab.title[:1] }}</div><span class="badge">{{ lab.badge }}</span></div>
       <h3>{{ lab.title }}</h3>
-      <p>{{ lab.summary }}</p>
-      <p class="small"><b>Data:</b> {{ lab.data }}</p>
+      <p class="sum">{{ lab.summary }}</p>
+      <p class="need"><b>Needs:</b> {{ lab.data }}</p>
+      <span class="go">Open lab &rarr;</span>
     </a>
     {% endfor %}
   </div>
-  <h2>Recent experiments</h2>
+
+  <h2 class="sec">Recent experiments</h2>
   {% if recent %}
-  <div class="card"><table><tr><th>Lab</th><th>Result</th><th>Spec hash</th></tr>
+  <div class="card recent"><table><tr><th>Lab</th><th>Result</th><th>Spec hash</th></tr>
     {% for r in recent %}<tr><td>{{ r.title }}</td><td>{{ r.headline or r.status }}</td><td><code>{{ r.spec_hash }}</code></td></tr>{% endfor %}
   </table></div>
-  {% else %}<p class="small">No experiments yet — open a lab and run one.</p>{% endif %}
-</div>
+  {% else %}<div class="empty">No experiments yet. Open a lab above and run one; it will appear here.</div>{% endif %}
+</div></div>
 </div>
 <script src="/static/t58-chrome.js" defer></script>
 </body>

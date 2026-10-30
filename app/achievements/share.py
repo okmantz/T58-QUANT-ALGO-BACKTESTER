@@ -130,3 +130,18 @@ def certificate_svg(who: str, rank: dict[str, str], level: dict[str, Any], title
 <text x="120" y="1082" font-size="17" fill="#6f808d" font-family="Segoe UI, Helvetica, Arial, sans-serif">Certificate {cid}</text>
 <text x="1480" y="1082" text-anchor="end" font-size="16" fill="#6f808d" font-family="Segoe UI, Helvetica, Arial, sans-serif">Counts tests run and checks completed in the app. Not a performance record or a financial credential.</text>
 </svg>'''
+
+
+def medal_svg(metal: str, metal_label: str, level_range: str, who: str, reached: bool = True) -> str:
+    """A standalone rank medal (Bronze ... Obsidian) as a 900x600 share card."""
+    l, m, d, ink = METALS[metal]
+    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="900" height="600" viewBox="0 0 900 600" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<defs>{BG_DEF}{_defs(metal)}</defs>
+<rect width="900" height="600" rx="30" fill="url(#bg)"/>
+<rect x="12" y="12" width="876" height="576" rx="23" fill="none" stroke="url(#mt-{metal})" stroke-width="3" opacity=".8"/>
+{_medal(450, 235, 120, metal, metal in ("platinum", "obsidian"), "★")}
+<text x="450" y="420" text-anchor="middle" font-size="22" letter-spacing="6" fill="{m}" font-weight="700">{escape(metal_label).upper()} RANK</text>
+<text x="450" y="474" text-anchor="middle" font-size="40" fill="#ffffff" font-weight="800">{escape(who)}</text>
+<text x="450" y="512" text-anchor="middle" font-size="20" fill="#8fa1af">{escape(level_range)}</text>
+<text x="860" y="565" text-anchor="end" font-size="16" letter-spacing="2" fill="#6f808d">T58 QUANT ALGO BACKTESTER</text>
+</svg>'''
