@@ -1,0 +1,223 @@
+From e3cdd78e65e1278af7e3cb24dc027bc57370e6b7 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 17:34:58 -0500
+Subject: [PATCH] Fix /lock <-> /activate redirect loop and the 5 failing CI
+ tests
+
+- server: exempt /lock from the license gate. Unlicensed + lock password
+  bounced /lock -> /activate -> /lock forever (ERR_TOO_MANY_REDIRECTS).
+  Also restrict the lock routes' `next` param to same-site paths.
+- tests: regression tests for the loop and for open-redirect `next` values.
+- tests: update stale assertions for the v3 dashboard / v9.8 sidebar.
+- tests: re-pin dark-theme hashes for theme.css and job-theme.css
+  (additive, deliberate changes; no dark tokens moved).
+- tests: run the GA fitness-noise test at 1000 sims (noise ~5.5%)
+  instead of 300 (~11% after the day_block_days=1 calibration).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013jaQdFPUgsomDm2zZZw6CR
+---
+ app/web/server.py                        | 23 ++++++++++---
+ tests/evolution/test_ga.py               |  5 ++-
+ tests/ui/test_v915_light_theme.py        |  8 +++--
+ tests/ui/test_v97_lifecycle_ui.py        | 10 +++---
+ tests/web/test_dashboard_report_links.py |  6 ++--
+ tests/web/test_web_license_gate.py       | 41 ++++++++++++++++++++++++
+ 6 files changed, 79 insertions(+), 14 deletions(-)
+
+diff --git a/app/web/server.py b/app/web/server.py
+index 26a56ff..8995887 100644
+--- a/app/web/server.py
++++ b/app/web/server.py
+@@ -805,7 +805,11 @@ _license_ok_cached: bool | None = None
+ # "/webhook/tradingview/" is called by TradingView's servers (no browser, no
+ # redirect possible); its handler checks the license itself and the secret
+ # token in the URL is its credential -- see app/web/webhook_relay_routes.py.
+-_LICENSE_GATE_EXEMPT_PREFIXES = ("/activate", "/static/", "/manifest.json", "/sw.js", "/favicon.ico", "/webhook/tradingview/")
++# "/lock" is exempt too: the account-lock gate below sends a locked, not-yet-unlocked browser from /activate to
++# /lock. If /lock were license-gated it would bounce straight back to /activate and the browser would loop
++# forever (ERR_TOO_MANY_REDIRECTS) for anyone who is BOTH unlicensed AND has a lock password. The lock page
++# reveals nothing; once unlocked, the person lands on /activate as normal.
++_LICENSE_GATE_EXEMPT_PREFIXES = ("/activate", "/lock", "/static/", "/manifest.json", "/sw.js", "/favicon.ico", "/webhook/tradingview/")
+ 
+ 
+ def _license_ok_for_webhook() -> bool:
+@@ -1007,18 +1011,29 @@ def _account_lock_gate():
+     return jsonify({"error": "locked", "message": "This app is locked. Open it in a browser tab to unlock."}), 401
+ 
+ 
++def _safe_lock_next(raw_next: str | None) -> str:
++    """Same-site relative paths only (no "//host", "http://host" or backslash tricks), never /lock itself."""
++    target = (raw_next or "").strip()
++    if not target.startswith("/") or target.startswith("//") or "\\" in target:
++        return "/dashboard"
++    if (target.split("?", 1)[0].rstrip("/") or "/") == "/lock":
++        return "/dashboard"
++    return target
++
++
+ @app.route("/lock", methods=["GET"])
+ def account_lock_form():
+     from app.accounts.settings import load_account_settings
++    next_path = _safe_lock_next(request.args.get("next"))
+     if not load_account_settings().has_password or session.get("t58_unlocked"):
+-        return redirect(request.args.get("next") or url_for("dashboard"))
+-    return render_template("lock.html", next=request.args.get("next") or "/dashboard", error=None)
++        return redirect(next_path)
++    return render_template("lock.html", next=next_path, error=None)
+ 
+ 
+ @app.route("/lock/unlock", methods=["POST"])
+ def account_lock_unlock():
+     from app.accounts.settings import load_account_settings, verify_password
+-    next_path = request.form.get("next") or "/dashboard"
++    next_path = _safe_lock_next(request.form.get("next"))
+     settings = load_account_settings()
+     if not settings.has_password:
+         session["t58_unlocked"] = True
+diff --git a/tests/evolution/test_ga.py b/tests/evolution/test_ga.py
+index dfe99c5..7980117 100644
+--- a/tests/evolution/test_ga.py
++++ b/tests/evolution/test_ga.py
+@@ -156,8 +156,11 @@ def test_fitness_noise_across_40_seeds_is_bounded_at_the_floor():
+                       evaluation_profit_target_pct=6.0)
+     trades = _trades(120)
+     vals = []
++    # 2026-10-30: 1000 sims, not 300. The 2026-10-29 calibration moved the default day_block_days from 3 to 1; at 300 sims the
++    # seed-to-seed std is then ~11% of the mean (binomial noise at a ~27% pass rate is already ~9.4%, so a 10% bar had no
++    # headroom). At 1000 sims it is ~5.5%, so the 10% bound stays meaningful without loosening it or undoing the calibration.
+     for seed in range(40):
+-        r = run_monte_carlo(trades, rules, MonteCarloConfig(n_simulations=300, random_seed=seed))
++        r = run_monte_carlo(trades, rules, MonteCarloConfig(n_simulations=1000, random_seed=seed))
+         vals.append(r.per_attempt_pass_probability)
+     vals = np.array(vals, dtype=float)
+     assert (vals > 0).all()
+diff --git a/tests/ui/test_v915_light_theme.py b/tests/ui/test_v915_light_theme.py
+index e350882..53eaf5a 100644
+--- a/tests/ui/test_v915_light_theme.py
++++ b/tests/ui/test_v915_light_theme.py
+@@ -39,9 +39,13 @@ DARK_HASH = {
+     # seasonal-backdrop rules in theme.css changed; no dark token or any other rule did.
+     # Re-pinned 2026-10-28: the midnight-ocean backdrop's CSS swell animation was replaced by the canvas scene (.t58-scene-fx rules).
+     # No dark token moved (test_dark_token_values_pinned still passes).
+-    "theme.css": "95aea7914a5c8c8f0500e1b38bb54a5b9ede67adaa24c627f11e39a75d88f104",
++    # Re-pinned 2026-10-30: Lucide sidebar icons (.lu, muted nav-icon colour), the notification bell + inbox panel rules, and the
++    # three unlockable backdrops (obsidian-gold / sakura-reverie / abyssal-blue) were added to theme.css (commits f49c523..e0ec4f8).
++    # No dark token moved (test_dark_token_values_pinned still passes).
++    "theme.css": "793f9089fd1591c4b0b9e1a3af73872a7cd996db5f3e7165047908c49088f381",
+     # Re-pinned 2026-10-28: .badge.pass now uses var(--ok) instead of var(--teal) (commit 8f643dd); in the dark scope both are #35e0b0.
+-    "job-theme.css": "53b8a7a06c016000b090ac7cd44374a4a8f5e9a6f09cac8a24ebe02d7aaa1d01",
++    # Re-pinned 2026-10-30: the "Why this verdict" waterfall component (.wf / .wf-step rules) was ADDED (commit f49c523); no existing rule changed.
++    "job-theme.css": "1ea80e4f3812928af01d78a9f684cf1e6d13381ea3cebcdba7662127ba89b0a2",
+     # Re-pinned 2026-10-13: the lifecycle (Champion board) dark rules were extended after the
+     # WS-E pin was taken; token values (DARK_TOKENS below) are still checked separately.
+     # Re-pinned (repo cleanup): the pages' hard-coded colors became var(--token) references whose DARK
+diff --git a/tests/ui/test_v97_lifecycle_ui.py b/tests/ui/test_v97_lifecycle_ui.py
+index 9fd83d8..8b25ba5 100644
+--- a/tests/ui/test_v97_lifecycle_ui.py
++++ b/tests/ui/test_v97_lifecycle_ui.py
+@@ -76,9 +76,9 @@ def test_sidebar_lifecycle_headers_link_to_step_pages(client):
+                  "/validate-simple", "/champion-simple", "/forward-test",
+                  "/graveyard"):
+         assert f'href="{href}"' in body, href
+-    # The summary still carries the numbered labels the v9.6 tests pin.
+-    assert "&#9312;</span> Create" in body
+-    assert "&#9318;</span> Strategy Graveyard" in body
++    # v9.8 turned the numbered group summaries into single icon + label links.
++    assert '<span class="label">Create</span>' in body
++    assert '<span class="label">Strategy Graveyard</span>' in body
+ 
+ 
+ # ------------------------------------------------------------ step pages
+@@ -150,7 +150,9 @@ def test_dashboard_tested_row_points_at_validate_checks(client, monkeypatch):
+     monkeypatch.setattr(server.champion_board, "list_board",
+                         lambda: [_row(untested=False)])
+     body = client.get("/dashboard").get_data(as_text=True)
+-    assert "Open Validate (pick checks)" in body
++    # Dashboard v3: the focus card's "Continue" button carries the next step.
++    import re
++    assert re.search(r'href="/validate-simple"[^>]*>Continue', body)
+     assert "Open Validate hub" not in body
+ 
+ 
+diff --git a/tests/web/test_dashboard_report_links.py b/tests/web/test_dashboard_report_links.py
+index 2b6dda2..8cb55b2 100644
+--- a/tests/web/test_dashboard_report_links.py
++++ b/tests/web/test_dashboard_report_links.py
+@@ -72,7 +72,7 @@ def test_dashboard_route_rewrites_full_pipeline_report_links(monkeypatch):
+ 
+ 
+ def test_dashboard_v2_layout_and_lazy_visuals(monkeypatch):
+-    """Redesigned dashboard: KPI strip, focus card with progress ring, recent runs; heavy visuals live in <details> and are drawn on open;
++    """Redesigned dashboard (v3): KPI strip, focus card with progress ring, "Your strategies" cards; heavy visuals live in <details> and are drawn on open;
+     no running-jobs pill or Gamma/Knowledge-check nav entries."""
+     import os
+ 
+@@ -85,13 +85,13 @@ def test_dashboard_v2_layout_and_lazy_visuals(monkeypatch):
+             "equity_series": [{"name": "S0", "passed": True, "values": [0, 1, 3, 2, 5]}]}
+     monkeypatch.setattr("app.web.server.run_history.dashboard_data", lambda: fake)
+     body = app.test_client().get("/dashboard").get_data(as_text=True)
+-    for needle in ('class="db-kpis"', 'id="equity-chart"', 'id="db-heat-d"', 'id="universe-graph"', "data-t58-tour-start", "Recent runs", "db-ring"):
++    for needle in ('class="db-kpis"', 'id="equity-chart"', 'id="db-heat-d"', 'id="universe-graph"', "data-t58-tour-start", "Your strategies", "db-ring"):
+         assert needle in body, needle
+     # removed sections: Quick tools, Proof of the survivors, and the duplicate workflow strip (the stage trail is already at the top)
+     for gone in ("Quick tools", "data-t58-survivors", "Proof of the survivors", 'class="db-steps"'):
+         assert gone not in body, gone
+     assert 'id="t58-avatar-btn"' in body          # always-visible profile circle
+-    assert "10 strategies" not in body and "2 more strategies in Runs" in body        # only the 8 latest rows are listed
++    assert "10 strategies" not in body        # v3 lists every strategy as a card; no "N strategies" blurb
+     assert "t58-runs.js" not in body and 'href="/gamma"' not in body and "/education/knowledge-check" not in body
+     if os.environ.get("T58_DUMP_DASH"):
+         open(os.environ["T58_DUMP_DASH"], "w", encoding="utf-8").write(body)
+diff --git a/tests/web/test_web_license_gate.py b/tests/web/test_web_license_gate.py
+index 85b3ddc..28e3516 100644
+--- a/tests/web/test_web_license_gate.py
++++ b/tests/web/test_web_license_gate.py
+@@ -94,3 +94,44 @@ def test_licensed_request_passes_through_to_account_lock_gate():
+         c = app.test_client()
+         r = c.get("/dashboard")
+     assert r.status_code == 200
++
++
++def _follow_redirects_manually(client, url, limit=10):
++    """Walk the redirect chain by hand so a loop is a test failure instead of a hang."""
++    chain = []
++    for _ in range(limit):
++        r = client.get(url, follow_redirects=False)
++        chain.append((url, r.status_code))
++        if r.status_code not in (301, 302, 303, 307, 308):
++            return r, chain
++        url = r.headers["Location"]
++    raise AssertionError(f"redirect loop (> {limit} hops): {chain}")
++
++
++def test_unlicensed_and_locked_does_not_redirect_loop():
++    """Regression: unlicensed + a lock password used to bounce /lock -> /activate -> /lock forever
++    (browser: ERR_TOO_MANY_REDIRECTS). The lock page must render; unlocking then reaches /activate."""
++    from app.accounts.settings import AccountSettings
++
++    locked = AccountSettings(password_hash="pbkdf2$sha256$1000$aa$bb")
++    with patch.object(license_client, "validate", return_value=(False, "Not activated.")), \
++         patch("app.accounts.settings.load_account_settings", return_value=locked), \
++         patch.object(license_client, "load_state") as mock_state:
++        mock_state.return_value.email = ""
++        c = app.test_client()
++        for start in ("/lock?next=/activate", "/activate", "/dashboard", "/"):
++            r, chain = _follow_redirects_manually(c, start)
++            assert r.status_code == 200, (start, chain)
++            assert b"lock" in r.data.lower(), (start, chain)
++
++
++def test_lock_next_param_is_same_site_only():
++    from app.accounts.settings import AccountSettings
++
++    with patch("app.accounts.settings.load_account_settings", return_value=AccountSettings()):
++        server_module._license_ok_cached = True
++        c = app.test_client()
++        for evil in ("//evil.example", "http://evil.example/x", "/\\evil.example"):
++            r = c.get("/lock", query_string={"next": evil}, follow_redirects=False)
++            assert r.status_code in (301, 302, 303, 307, 308)
++            assert r.headers["Location"] == "/dashboard", evil
+-- 
+2.43.0
+
