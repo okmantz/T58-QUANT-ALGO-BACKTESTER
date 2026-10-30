@@ -20,6 +20,7 @@
 Full tutorial: https://drive.google.com/file/d/1pO-jS8W7A2mh8HVCpxZ0Sd2h2AHaUeW_/view?usp=drivesdk
 
 Web App: https://script.google.com/macros/s/AKfycbxOtM8dHxQnR-TsLNsgHxr-vYElG1he4XpHNPvJSsNWq1bP__pjy1PRfmBo-cbaIs7wFQ/exec
+
 ---
 
 A prop-firm-first strategy lab. Bring a strategy (Manual Builder, Python, PineScript or MQL5), test it against real
