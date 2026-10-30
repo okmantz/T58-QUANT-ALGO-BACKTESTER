@@ -24,9 +24,9 @@ def test_form_renders_and_sidebar_links():
     c = app.test_client()
     r = c.get("/discover")
     assert r.status_code == 200 and b"Your idea" in r.data
-    # v9.8: sidebar lifecycle sections are single links (Owen's spec), so
-    # tool pages are reached from the section page's Individual tools grid.
-    assert b"/discover" in c.get("/validate-simple").data  # Your Idea tool card
+    # Sidebar lifecycle sections are single links, so the Your Idea tool is reached from the Create section page
+    # (the Validate page no longer carries an "Individual tools" grid -- every check is on its main list).
+    assert b"/discover" in c.get("/start-here/create").data  # Your Idea tool card
 
 
 def test_unknown_job_status():
