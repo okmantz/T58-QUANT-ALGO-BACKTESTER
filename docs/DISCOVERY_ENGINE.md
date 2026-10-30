@@ -1,6 +1,6 @@
 # Strategy Discovery Engine (2026-10-25)
 
-Search Lab, Evolution Lab, Forge, Speed Run and the hypothesis layer are ONE engine with presets (`app/discovery_engine`).
+Search Lab, Evolution Lab, Forge (the deep gauntlet preset), Speed Run and the hypothesis layer are ONE engine with presets (the Create page now exposes only the engine; the classic pages remain under "More tools") (`app/discovery_engine`).
 One objective (`edge_lb_r`), one entry floor (100+ trades, mean-R t >= 1, cost < 0.15R), one lifetime trial ledger clustered to
 effective trials, one sealed slice read once, one promotion sequence:
 reproduction -> sequence-deflated Sharpe -> random-timing null gate -> pooled cross-market edge -> sealed slice.
