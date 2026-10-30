@@ -9,6 +9,8 @@
   .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin-bottom: 16px; max-width: 760px; }
   .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin: 0 0 10px; }
   .card p { font-size: 14px; color: var(--t-soft); line-height: 1.6; margin: 0 0 12px; }
+  .card h2.sec-h { display: flex; align-items: center; gap: 8px; }
+  .card h2.sec-h .lu { width: 16px; height: 16px; color: var(--accent, var(--teal)); }
   .roadmap { margin: 0; padding-left: 22px; }
   .roadmap li { font-size: 13.5px; color: var(--t-soft); line-height: 1.75; margin-bottom: 4px; }
   .btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
@@ -54,13 +56,13 @@
 
 <div class="cr-paths">
   <a class="cr-path" href="#cr-start">
-    <span class="cr-ico" aria-hidden="true">&#9998;</span>
+    <span class="cr-ico" aria-hidden="true"><svg class="lu"><use href="#lu-pencil-line"/></svg></span>
     <b>I have a strategy</b>
     <span>Paste Python, PineScript or MQL5 code &mdash; or describe the idea in plain English.</span>
     <em>Paste or describe it &darr;</em>
   </a>
   <a class="cr-path cr-engine" href="/discovery-engine">
-    <span class="cr-ico" aria-hidden="true">&#10024;</span>
+    <span class="cr-ico" aria-hidden="true"><svg class="lu"><use href="#lu-sparkles"/></svg></span>
     <b>I don&rsquo;t have one yet</b>
     <span>Open the Strategy Discovery Engine: pick a market and a prop firm, press Start, and it searches for you.</span>
     <em>Open the Discovery Engine &rarr;</em>
@@ -74,7 +76,9 @@
   .cr-path b { font-size: 16px; }
   .cr-path span { font-size: 13px; color: var(--text-muted); line-height: 1.5; }
   .cr-path em { font-style: normal; font-weight: 700; font-size: 13.5px; color: var(--teal); margin-top: 4px; }
-  .cr-ico { font-size: 20px !important; color: var(--teal) !important; }
+  .cr-path .cr-ico { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; margin-bottom: 4px;
+    background: rgba(var(--teal-rgb), .14); border: 1px solid rgba(var(--teal-rgb), .28); color: var(--teal); }
+  .cr-path .cr-ico .lu { width: 20px; height: 20px; }
   .cr-engine { border-color: rgba(var(--teal-rgb), .55); background: linear-gradient(160deg, rgba(var(--teal-rgb), .10), var(--panel-2) 60%); }
   @media (max-width: 640px) { .cr-paths { grid-template-columns: 1fr; } }
   @media (prefers-reduced-motion: reduce) { .cr-path { transition: none; } .cr-path:hover { transform: none; } }
@@ -226,7 +230,7 @@
 {# Create has no "Start Here" overview card -- the form above is the page. #}
 {% if section != 'create' %}
 <div class="card">
-  <h2>&#128161; What this section is for</h2>
+  <h2 class="sec-h"><svg class="lu"><use href="#lu-lightbulb"/></svg>What this section is for</h2>
   <p>{{ description }}</p>
   {% if roadmap %}
   <ol class="roadmap">
@@ -246,7 +250,7 @@
 {% endif %}
 
 <div class="card" style="max-width: none;">
-  <h2>&#8981; Everything in {{ section_title }}</h2>
+  <h2 class="sec-h"><svg class="lu"><use href="#lu-search"/></svg>Everything in {{ section_title }}</h2>
   <div class="tool-grid">
     {% for t in tools %}
     <a class="tool-card" href="{{ t.href }}">

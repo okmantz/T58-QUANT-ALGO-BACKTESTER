@@ -14,6 +14,18 @@
   select { padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 14px; max-width: 100%; }
   .gy-filters { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
   .gy-filters label { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
+  /* Search box: same box, height, radius, border and focus ring as the dropdowns beside it. */
+  .gy-filters select, .gy-filters input[type="search"] { height: 38px; box-sizing: border-box; }
+  .gy-search { position: relative; display: block; }
+  .gy-search .lu { position: absolute; left: 11px; top: 50%; width: 15px; height: 15px; margin-top: -7.5px; color: var(--text-muted); pointer-events: none; }
+  .gy-filters input[type="search"] {
+    -webkit-appearance: none; appearance: none; width: 100%; min-width: 250px; padding: 0 12px 0 34px; border-radius: 8px;
+    border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text);
+    font: inherit; font-size: 14px; text-transform: none; letter-spacing: 0; transition: border-color .15s, box-shadow .15s;
+  }
+  .gy-filters input[type="search"]::placeholder { color: var(--text-dim); opacity: 1; }
+  .gy-filters input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
+  .gy-filters select:focus, .gy-filters input[type="search"]:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), .2); }
   .gy-count { font-size: 13px; color: var(--t-faint2); margin-left: auto; align-self: center; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid rgba(255,255,255,0.06); vertical-align: top; }
@@ -90,7 +102,7 @@
 <div class="t58-page-header">
   <h1>Strategy Graveyard</h1>
   <p>Every strategy that was tested hard and then rejected, with the reason. Click any row to see its scores and an equity curve.
-     Forge Strategy reads this same file before a new run, so settings already proven dead here are skipped instead of re-tested. <a href="/trial-ledger">How many ideas has the Deflated Sharpe check counted? &rarr;</a></p>
+     The Discovery Engine reads this same record before every run, so settings already proven dead here are skipped instead of re-tested. <a href="/trial-ledger">How many ideas has the Deflated Sharpe check counted? &rarr;</a></p>
 </div>
 
 <div class="card" id="searched-variants">
@@ -157,7 +169,7 @@
 </div>
 
 {% if not files %}
-<div class="card"><p class="empty">No graveyard file exists yet -- run Forge Strategy (or Evolution Lab) at
+<div class="card"><p class="empty">No graveyard file exists yet -- run the Discovery Engine at
 least once and rejections that reach CPCV/stress-testing will start accumulating here.</p></div>
 {% else %}
 
@@ -178,7 +190,8 @@ least once and rejections that reach CPCV/stress-testing will start accumulating
       </select>
     </label>{% endif %}
     <label>Search
-      <input type="search" name="q" value="{{ text_q }}" placeholder="e.g. breakout, RSI, NQ, too few trades" onchange="this.form.submit()" style="min-width:210px">
+      <span class="gy-search"><svg class="lu" aria-hidden="true"><use href="#lu-search"/></svg>
+        <input type="search" name="q" value="{{ text_q }}" placeholder="e.g. breakout, RSI, NQ, too few trades" autocomplete="off" aria-label="Search rejected strategies" onchange="this.form.submit()"></span>
     </label>
     <label>Strategy type
       <select name="family" onchange="this.form.submit()">
@@ -236,7 +249,7 @@ least once and rejections that reach CPCV/stress-testing will start accumulating
 
 <details class="card gy-adv">
   <summary><h2>Dead neighborhoods ({{ clusters|length }})</h2></summary>
-  <p class="help" style="margin-top:8px;">Strategies with nearly identical settings are grouped into one &ldquo;neighborhood&rdquo;. Forge Strategy skips a neighborhood that is already proven dead instead of re-testing it.</p>
+  <p class="help" style="margin-top:8px;">Strategies with nearly identical settings are grouped into one &ldquo;neighborhood&rdquo;. The Discovery Engine skips a neighborhood that is already proven dead instead of re-testing it.</p>
   {% if not clusters %}
   <p class="empty">
     {% if family_filter %}No rejections for this strategy type in this file.

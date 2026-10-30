@@ -12,6 +12,8 @@
     background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px;
     padding: 6px 14px; font-size: 12px; color: var(--text-muted); text-decoration: none;
   }
+  .edu-toc a { display: inline-flex; align-items: center; gap: 7px; }
+  .edu-toc a .lu { width: 14px; height: 14px; color: var(--teal); opacity: .9; }
   .edu-toc a:hover { border-color: var(--teal); color: var(--text); }
   .edu-toc a.current { border-color: var(--teal); color: var(--text); background: rgba(var(--teal-rgb), .12); font-weight: 600; }
   .edu-section { display: none; }
@@ -21,7 +23,17 @@
     padding: 22px; margin-bottom: 18px;
   }
   .edu-section .eyebrow { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-dim); font-weight: 700; }
-  .edu-section h2 { margin: 4px 0 4px; font-size: 19px; }
+  .edu-section h2 { margin: 4px 0 4px; font-size: 19px; display: flex; align-items: center; gap: 10px; }
+  .edu-section h2 .edu-h-ico { flex: none; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center;
+    background: rgba(var(--teal-rgb), .14); border: 1px solid rgba(var(--teal-rgb), .28); color: var(--teal); }
+  .edu-section h2 .edu-h-ico .lu { width: 18px; height: 18px; }
+  .t58-page-header h1 .lu.edu-title-ico { width: 24px; height: 24px; color: var(--teal); display: inline-block; vertical-align: -4px; margin-right: 8px; }
+  .edu-tip, .edu-warn { display: flex; gap: 9px; align-items: flex-start; line-height: 1.55; }
+  .edu-tip .lu, .edu-warn .lu { width: 15px; height: 15px; margin-top: 2px; }
+  .edu-tip .lu { color: var(--teal); }
+  .edu-warn .lu { color: #ff9c4a; }
+  .edu-lab-tag { display: flex; align-items: center; gap: 6px; }
+  .edu-lab-tag .lu { width: 13px; height: 13px; }
   .edu-section > p.subtitle { color: var(--text-muted); font-size: 13px; margin: 0 0 14px; }
   .edu-lesson { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }
   .edu-lesson:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
@@ -60,12 +72,18 @@
 </head>
 <body>
 {% set active_page = 'education' %}
+{# Lucide icon per module. (content.py keeps its emoji field because the desktop app still renders it.) #}
+{% set edu_icons = {
+  'getting-started': 'rocket', 'strategy-development': 'brain', 'backtesting-fundamentals': 'chart-column',
+  'validation-lab': 'flask-conical', 'prop-evaluation': 'shield-check', 'reading-results': 'trending-up',
+  'how-backtests-lie': 'triangle-alert', 'custom-code': 'code-xml', 'research-process': 'trophy'
+} %}
 <div class="t58-shell">
 {% include '_sidebar.html' %}
 <div class="t58-main">
 
 <div class="t58-page-header">
-  <h1>🎓 Education</h1>
+  <h1><svg class="lu edu-title-ico"><use href="#lu-graduation-cap"/></svg>Education</h1>
   <p>What the numbers and tabs in this app actually mean, and how to think quantitatively about strategy
   research -- not a generic trading course. Work through the modules below in order, or jump straight to
   the one you need -- if you only read one, make it Validation Lab. Hands-on labs are built into the lessons they belong to, all five also live together on the <a href="#labs" style="color:var(--teal)">interactive labs</a> tab, and the <a href="#knowledge-check" style="color:var(--teal)">knowledge check</a> is the last module.</p>
@@ -73,16 +91,16 @@
 
 <div class="edu-toc" id="edu-module-tabs">
   {% for section in sections %}
-  <a href="#{{ section.id }}" data-module="{{ section.id }}">{{ section.icon }} {{ loop.index }}. {{ section.title }}</a>
+  <a href="#{{ section.id }}" data-module="{{ section.id }}"><svg class="lu"><use href="#lu-{{ edu_icons.get(section.id, 'book-open') }}"/></svg>{{ loop.index }}. {{ section.title }}</a>
   {% endfor %}
-  <a href="#labs" data-module="labs">🧪 Interactive labs</a>
-  <a href="#knowledge-check" data-module="knowledge-check">✅ Knowledge check</a>
+  <a href="#labs" data-module="labs"><svg class="lu"><use href="#lu-flask-conical"/></svg>Interactive labs</a>
+  <a href="#knowledge-check" data-module="knowledge-check"><svg class="lu"><use href="#lu-circle-check"/></svg>Knowledge check</a>
 </div>
 
 {% for section in sections %}
 <div class="edu-section" id="{{ section.id }}" data-module="{{ section.id }}">
   <div class="eyebrow">Module {{ loop.index }} of {{ sections|length }}</div>
-  <h2>{{ section.icon }} {{ section.title }}</h2>
+  <h2><span class="edu-h-ico"><svg class="lu"><use href="#lu-{{ edu_icons.get(section.id, 'book-open') }}"/></svg></span>{{ section.title }}</h2>
   <p class="subtitle">{{ section.subtitle }}</p>
 
   {% for lesson in section.lessons %}
@@ -96,9 +114,9 @@
       {% elif block.kind == 'steps' %}
         <ol>{% for item in block.items %}<li>{{ item }}</li>{% endfor %}</ol>
       {% elif block.kind == 'tip' %}
-        <div class="edu-tip">✓ {{ block.text }}</div>
+        <div class="edu-tip"><svg class="lu"><use href="#lu-lightbulb"/></svg><span>{{ block.text }}</span></div>
       {% elif block.kind == 'warn' %}
-        <div class="edu-warn">⚠ {{ block.text }}</div>
+        <div class="edu-warn"><svg class="lu"><use href="#lu-triangle-alert"/></svg><span>{{ block.text }}</span></div>
       {% elif block.kind == 'example' %}
         <div class="edu-example">{{ block.text }}</div>
       {% endif %}
@@ -108,7 +126,7 @@
     {% endif %}
     {% if lab_slots.get(lesson.id) %}
     <div class="edu-inline-lab">
-      <div class="edu-lab-tag">🧪 Try it</div>
+      <div class="edu-lab-tag"><svg class="lu"><use href="#lu-flask-conical"/></svg>Try it</div>
       <div class="edu-inline-lab-host" data-lab="{{ lab_slots[lesson.id] }}"></div>
       <div class="edu-lab-more">All labs together: <a href="#labs" data-module-link="labs">Interactive labs</a></div>
     </div>
@@ -126,7 +144,7 @@
 
 <div class="edu-section" id="labs" data-module="labs">
   <div class="eyebrow">Hands-on</div>
-  <h2>🧪 Interactive labs</h2>
+  <h2><span class="edu-h-ico"><svg class="lu"><use href="#lu-flask-conical"/></svg></span>Interactive labs</h2>
   <p class="subtitle">Don't just read it &mdash; play with it. Drag the sliders, click the buttons, break the account, overfit a strategy on pure noise. Every number you see is computed live in your browser.</p>
   <div id="labs-host"></div>
   <div class="edu-nav">
@@ -138,7 +156,7 @@
 
 <div class="edu-section" id="knowledge-check" data-module="knowledge-check">
   <div class="eyebrow">Check yourself</div>
-  <h2>✅ Knowledge check</h2>
+  <h2><span class="edu-h-ico"><svg class="lu"><use href="#lu-circle-check"/></svg></span>Knowledge check</h2>
   <p class="subtitle">Six quick questions on what the course covered, with an explanation after every answer. Wrong answers teach more than right ones &mdash; read the explanation either way.</p>
   <div id="quiz-host"></div>
   <div class="edu-nav">

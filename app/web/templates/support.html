@@ -77,19 +77,35 @@
     <div class="sp-h">Frequently asked questions</div>
     <details>
       <summary>How do I create a strategy?</summary>
-      <p>Use Forge Strategy under the Create tab to build one from scratch (Manual, Python, PineScript, or MQL5), or start from a template in the Strategy Library.</p>
+      <p>Open <b>Create</b>. You have three routes: describe an idea in plain English or paste your own Python, PineScript or MQL5 code; build one rule by rule in the no-code Manual builder (Strategy Library); or let the <b>Strategy Discovery Engine</b> find candidates for you. Everything you save lands in the Strategy Library.</p>
     </details>
     <details>
-      <summary>What's the difference between Quick Optimize and Full Pipeline?</summary>
-      <p>Quick Optimize runs the walk-forward-aware GA search on its own for a fast iteration loop. Full Pipeline runs the complete 15-step process (baseline, search, final Monte Carlo, out-of-sample checks, and a READY / MARGINAL / NOT READY verdict) and is what you'd run before trusting a result.</p>
+      <summary>I don't have a strategy yet. What does the Discovery Engine do?</summary>
+      <p>You pick a market and a prop firm, and the engine generates and screens many strategy candidates against that firm's rules, then keeps the survivors. Speed Run, Search Lab, Evolution Lab and the deep "Forge" gauntlet are now presets of the engine, so you no longer start in separate tools. A survivor is a lead, not a verdict: send it through Optimize and Validate before you trust it.</p>
+    </details>
+    <details>
+      <summary>What is the order of the workflow?</summary>
+      <p>Create &rarr; Test &rarr; Optimize &rarr; Validate &rarr; Champion &rarr; Deploy. Test runs one strategy on one dataset. Optimize tunes its numbers. Validate stress-tests the result. A strategy that passes the core checks can be promoted to Champion, and Deploy covers forward testing and going live.</p>
+    </details>
+    <details>
+      <summary>What's the difference between Optimize and Full Pipeline?</summary>
+      <p>Optimize runs a walk-forward-aware genetic search for better parameters and finishes in minutes. It never grants a READY verdict. Full Pipeline runs the complete process (baseline, search, final Monte Carlo, out-of-sample checks) and returns READY / MARGINAL / NOT READY. Run it before trusting a result.</p>
+    </details>
+    <details>
+      <summary>Why is Optimize searching only part of my data?</summary>
+      <p>Every candidate is a full multi-fold backtest, so run time grows with the number of bars. By default Optimize searches the most recent 150,000 bars and says so in the run log. Raise <b>Max bars</b> under Advanced options (0 = use everything), or pick a coarser timeframe. Population and generations in the same panel control how wide the search is.</p>
+    </details>
+    <details>
+      <summary>Which validation tests can I run, and how do I run just one?</summary>
+      <p>The Validate page lists all eight checks in one place: Monte Carlo, CPCV, PBO, Walk-forward, Walk-forward GA, Sensitivity, Robustness and Regime. Tick the ones you want and press Run. Tick one to run it alone, or all of them for the full battery.</p>
+    </details>
+    <details>
+      <summary>What is the Strategy Graveyard?</summary>
+      <p>It is the record of strategies that failed screening or validation, with the reason each was rejected. Search it before you re-test an idea, so you don't repeat work that already failed.</p>
     </details>
     <details>
       <summary>Why does a search say a candidate has zero trades?</summary>
       <p>The strategy's entry conditions never fired on that dataset/timeframe combination. Widen the parameter ranges, check the timeframe matches what the strategy expects, or try a different instrument.</p>
-    </details>
-    <details>
-      <summary>What do Search Lab, Evolution Lab, and Iterative Refinement each do differently?</summary>
-      <p>Search Lab tries many different strategy families and hypotheses. Evolution Lab runs a longer, multi-generation search within families. Iterative Refinement takes a strategy you already have and tunes its existing numeric parameters with a genetic algorithm (or TPE / CMA-ES).</p>
     </details>
     <details>
       <summary>Can I use MT5, cTrader, Tradovate, TradeLocker, or DXtrade?</summary>
@@ -105,7 +121,7 @@
     <h2>Report an issue</h2>
     <p class="sub">There is no ticket desk behind this form. Your note is saved to a file on this computer (<code>data/config/issue_reports.jsonl</code>) so you have a running log you can paste into an email or GitHub issue.</p>
     <label for="issue-title">Summary</label>
-    <input type="text" id="issue-title" placeholder="e.g. Evolution Lab crashes on multi-instrument runs">
+    <input type="text" id="issue-title" placeholder="e.g. Optimize stalls on a large 1-minute file">
     <label for="issue-body">What happened?</label>
     <textarea id="issue-body" placeholder="What happened, what you expected instead, and any steps to reproduce it..."></textarea>
     <button class="sp-btn" type="button" onclick="saveIssue()">Save report</button>

@@ -76,6 +76,7 @@
 <script>
 const JOB_ID = {{ job_id | tojson }};
 let stopped = false;
+let lastLogLen = -1;
 function stopPolling(){ stopped = true; document.getElementById('unwatch-btn').disabled = true; }
 async function stopRun(){
   const b = document.getElementById('stop-btn'); b.disabled = true; b.textContent = 'Stopping…';
@@ -153,8 +154,14 @@ async function poll(){
     const res = await fetch('/optimize-simple/job/' + JOB_ID + '/status.json');
     const data = await res.json();
     const logEl = document.getElementById('log');
-    logEl.innerHTML = (data.log || []).map(esc).join('<br>');
-    logEl.scrollTop = logEl.scrollHeight;
+    const lines = data.log || [];
+    // Only touch the DOM when the log actually grew, and only follow the tail if the reader is already at the bottom.
+    if (lines.length !== lastLogLen) {
+      const nearBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
+      logEl.innerHTML = lines.map(esc).join('<br>');
+      if (nearBottom) logEl.scrollTop = logEl.scrollHeight;
+      lastLogLen = lines.length;
+    }
     window.__lcJobProgress = data.progress || null;
     if (!data.done) renderProgress(data.progress);
     if (data.done) {
@@ -174,7 +181,7 @@ async function poll(){
       return;
     }
   } catch (e) { /* keep polling through transient errors */ }
-  setTimeout(poll, 1500);
+  setTimeout(poll, document.hidden ? 5000 : 1500);
 }
 poll();
 </script>
