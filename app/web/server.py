@@ -2533,6 +2533,44 @@ def _apply_timeframe_choice(df, form):
     return target.dataframe, note, None, label
 
 
+# Optimize searches hundreds of candidates, and every candidate is a full multi-fold backtest, so run time grows
+# linearly with the number of bars. A multi-year 1-minute file is millions of bars: one candidate takes many seconds and
+# the "quick" optimizer turns into a multi-hour job. The Optimize page therefore searches the MOST RECENT slice of the
+# data by default (the newest bars are also the most relevant to what the strategy will trade next), says so in the
+# run log, and lets the user raise the cap or switch it off (0) under Advanced options.
+OPTIMIZE_DEFAULT_MAX_BARS = 150_000
+OPTIMIZE_MIN_MAX_BARS = 5_000
+
+
+def _cap_optimize_bars(df, form):
+    """(df, note): the most recent `max_bars` rows of `df` for an Optimize run. 0 / negative = no cap.
+    A blank or unreadable value uses the default; a tiny value is raised to a floor the walk-forward
+    folds can work with. Returns note=None when nothing was trimmed."""
+    raw = (form.get("max_bars") or "").strip()
+    try:
+        cap = int(float(raw)) if raw else OPTIMIZE_DEFAULT_MAX_BARS
+    except ValueError:
+        cap = OPTIMIZE_DEFAULT_MAX_BARS
+    if cap <= 0 or len(df) <= cap:
+        return df, None
+    cap = max(cap, OPTIMIZE_MIN_MAX_BARS)
+    if len(df) <= cap:
+        return df, None
+    total = len(df)
+    return df.tail(cap).reset_index(drop=True), (
+        f"Speed: searching the most recent {cap:,} of {total:,} bars so the run finishes quickly. "
+        "Raise \"Max bars\" under Advanced options (0 = use everything) to search more history, or pick a coarser timeframe.")
+
+
+def _bounded_int(form, key: str, default: int, lo: int, hi: int) -> int:
+    """An int form field, defaulted when blank/unreadable and clamped to [lo, hi]."""
+    try:
+        v = int(float((form.get(key) or "").strip() or default))
+    except (TypeError, ValueError):
+        v = default
+    return max(lo, min(hi, v))
+
+
 def _num_or_none(v):
     try:
         f = float(v)
@@ -2825,8 +2863,12 @@ def _run_optimize_simple_job(job_id: str, df, strategy, risk, rules, engines, fo
                     res = run_quick_optimize(
                         df, strategy, risk, rules,
                         QuickOptimizeConfig(
-                            ga_population=max(int(form.get("ga_population", 40) or 40), 40),
-                            ga_generations=max(int(form.get("ga_generations", 14) or 14), 14),
+                            # The page's own Advanced boxes are honoured (they used to be silently raised to at least
+                            # 40 x 14). 24 x 8 is the default: the planted-edge regression test improves a strategy at
+                            # 16 x 5, the engine's adaptive budget caps small search spaces anyway, and early stopping
+                            # ends a flat search sooner. Raise it for a wider search.
+                            ga_population=_bounded_int(form, "ga_population", 24, 4, 200),
+                            ga_generations=_bounded_int(form, "ga_generations", 8, 2, 60),
                             fitness_metric=form.get("fitness_metric", "pass_gradient") or "pass_gradient",
                             # One strategy, one record: a library strategy is
                             # updated in place (never overwritten by a result
@@ -2946,6 +2988,7 @@ def optimize_simple_start():
         df, tf_note, tf_error, _tf_label = _apply_timeframe_choice(df, form)
         if tf_error:
             return render_template("optimize_simple.html", **ctx(error=tf_error)), 400
+        df, _cap_note = _cap_optimize_bars(df, form)
         strategy, library_ref = _simple_load_strategy(form)
         try:
             strategy = stamp_manual_timeframe(strategy, _tf_label)
@@ -2976,7 +3019,7 @@ def optimize_simple_start():
                     _slot_note += f" (could not save to library: {_sx})"
         cancel_event = threading.Event()
         job_id = JOB_MANAGER.create(tool="Optimize (pick engines)", page_template="/optimize-simple/job/{job_id}",
-                                    log=[f"Loaded {len(df)} bars from {active_label}."] + ([tf_note] if tf_note else []) + [f"Engines: {', '.join(engines)}."] + ([_slot_note] if _slot_note else []),
+                                    log=[f"Loaded {len(df):,} bars from {active_label}."] + ([tf_note] if tf_note else []) + ([_cap_note] if _cap_note else []) + [f"Engines: {', '.join(engines)}."] + ([_slot_note] if _slot_note else []),
                                     instrument=active_label, cancel_event=cancel_event, cancelled=False,
                                     opt_ctx={"pick": (form.get("strategy_pick") or "").strip(), "dataset": (form.get("existing_dataset") or "").strip(),
                                              "timeframe": (form.get("timeframe") or "").strip(), "prop": (form.get("prop_preset") or "").strip(),
