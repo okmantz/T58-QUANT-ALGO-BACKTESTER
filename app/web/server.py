@@ -805,7 +805,11 @@ _license_ok_cached: bool | None = None
 # "/webhook/tradingview/" is called by TradingView's servers (no browser, no
 # redirect possible); its handler checks the license itself and the secret
 # token in the URL is its credential -- see app/web/webhook_relay_routes.py.
-_LICENSE_GATE_EXEMPT_PREFIXES = ("/activate", "/static/", "/manifest.json", "/sw.js", "/favicon.ico", "/webhook/tradingview/")
+# "/lock" is exempt too: the account-lock gate below sends a locked, not-yet-unlocked browser from /activate to
+# /lock. If /lock were license-gated it would bounce straight back to /activate and the browser would loop
+# forever (ERR_TOO_MANY_REDIRECTS) for anyone who is BOTH unlicensed AND has a lock password. The lock page
+# reveals nothing; once unlocked, the person lands on /activate as normal.
+_LICENSE_GATE_EXEMPT_PREFIXES = ("/activate", "/lock", "/static/", "/manifest.json", "/sw.js", "/favicon.ico", "/webhook/tradingview/")
 
 
 def _license_ok_for_webhook() -> bool:
@@ -1007,18 +1011,29 @@ def _account_lock_gate():
     return jsonify({"error": "locked", "message": "This app is locked. Open it in a browser tab to unlock."}), 401
 
 
+def _safe_lock_next(raw_next: str | None) -> str:
+    """Same-site relative paths only (no "//host", "http://host" or backslash tricks), never /lock itself."""
+    target = (raw_next or "").strip()
+    if not target.startswith("/") or target.startswith("//") or "\\" in target:
+        return "/dashboard"
+    if (target.split("?", 1)[0].rstrip("/") or "/") == "/lock":
+        return "/dashboard"
+    return target
+
+
 @app.route("/lock", methods=["GET"])
 def account_lock_form():
     from app.accounts.settings import load_account_settings
+    next_path = _safe_lock_next(request.args.get("next"))
     if not load_account_settings().has_password or session.get("t58_unlocked"):
-        return redirect(request.args.get("next") or url_for("dashboard"))
-    return render_template("lock.html", next=request.args.get("next") or "/dashboard", error=None)
+        return redirect(next_path)
+    return render_template("lock.html", next=next_path, error=None)
 
 
 @app.route("/lock/unlock", methods=["POST"])
 def account_lock_unlock():
     from app.accounts.settings import load_account_settings, verify_password
-    next_path = request.form.get("next") or "/dashboard"
+    next_path = _safe_lock_next(request.form.get("next"))
     settings = load_account_settings()
     if not settings.has_password:
         session["t58_unlocked"] = True
