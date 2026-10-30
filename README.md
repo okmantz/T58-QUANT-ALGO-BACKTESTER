@@ -86,10 +86,10 @@ New buyers: [docs/buyer/INSTALL.md](docs/buyer/INSTALL.md), then [docs/buyer/QUI
 
 | Stage | Tools |
 |---|---|
-| **Create** | Speed Run (fast wide search into Full Pipeline validation; if nothing clears the bar it suggests what to try next), Discovery Engine, Generate Strategies (AI), Research Agent (read-only engine calls, never invented numbers) |
+| **Create** | Strategy Discovery Engine (pick a market and prop firm; Speed Run, Search Lab, Evolution Lab and the deep Forge gauntlet are its presets), plain-English / Python / PineScript / MQL5 import, the no-code Manual builder, Generate Strategies (AI), Research Agent (read-only engine calls, never invented numbers) |
 | **Test** | Run & Report, Payout Probability (eval pass, funded, payout 1, 2 ... with an optional scaling stress test), Prop-Firm Recommender (ranks every preset against your trade sequence) |
-| **Optimize** | Search Lab (5-stage funnel to a leaderboard), Iterative Refinement (GA), Full Pipeline, Quick Optimize, Multi-Objective (NSGA-II Pareto front), Evolution Lab (unattended generate, filter, validate, mutate, ranked by PROP FITNESS) |
-| **Validate** | Walk-Forward Optimization, Walk-Forward-Aware GA, CPCV / PBO, Parameter Sensitivity and Parameter Robustness, Regime Survival Matrix |
+| **Optimize** | Search Lab (5-stage funnel to a leaderboard), Iterative Refinement (GA), Full Pipeline, Optimize (Quick Optimize: searches the most recent 150k bars by default, adjustable under Advanced), Multi-Objective (NSGA-II Pareto front), Evolution Lab (unattended generate, filter, validate, mutate, ranked by PROP FITNESS) |
+| **Validate** | One page, eight checks you tick and run together or alone: Monte Carlo, CPCV, PBO, Walk-Forward, Walk-Forward-Aware GA, Parameter Sensitivity, Parameter Robustness, Regime Survival |
 | **Champion** | Multi-Asset Portfolio, Multi-Strategy Ensemble, Family Diversity, Automated Portfolio Composer |
 | **Deployment** | Forward Test (MT5 demo), Webhook Relay (TradingView), Overnight Autopilot, Auto-Retune, Deploy Live, Live PnL pill, Live Market monitor |
 | **Quant Lab** | Strategy Translator (to PineScript v5 / MQL5), Auto Regime Selector, Health / Drift Monitor, Pairs, Options Pricing, Order Book Simulator, Sentiment Correlation, Markowitz, Volatility Surface, Factor Model |
