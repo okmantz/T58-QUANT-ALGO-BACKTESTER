@@ -42,12 +42,15 @@ Assumes [INSTALL.md](INSTALL.md) is done and the app is open.
 
 ## Next steps
 
-- **Search Lab** — let the app hunt for robust parameter sets automatically
-  (Stages 1–5: filter → refine → validate → rank → champion).
-- **Evolution Lab** — invents whole new strategy structures, not just
-  parameter tweaks.
-- **Strategy Lab** — describe an idea in words; the app builds and
-  validates it.
+- **Strategy Discovery Engine** (Create) — no strategy yet? Pick a market
+  and a prop firm and the engine generates, screens and keeps survivors.
+  Speed Run, Search Lab and Evolution Lab are presets of it.
+- **Optimize** — tunes a strategy's numbers with a walk-forward-aware
+  search. It searches the most recent 150,000 bars by default; raise
+  "Max bars" under Advanced to use more history.
+- **Validate** — tick any of the eight checks (Monte Carlo, CPCV, PBO,
+  Walk-forward, Walk-forward GA, Sensitivity, Robustness, Regime) and run
+  them together or one at a time.
 
 > **[OWEN: DECIDE]** — Point buyers at your onboarding video / docs hub
 > here if you have one (URL), or delete this line.
