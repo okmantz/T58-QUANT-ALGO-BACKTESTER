@@ -42,7 +42,7 @@
   }
 
   /* -------------------------------------------------------------- shared canvas plumbing */
-  var IMAGE_OF = { ocean: 'midnight-ocean', forest: 'misty-forest', gold: 'obsidian-gold', sakura: 'sakura-reverie-wide', abyss: 'abyssal-blue' };
+  var IMAGE_OF = { ocean: 'midnight-ocean', forest: 'misty-forest', gold: 'obsidian-gold', sakura: 'sakura-reverie', abyss: 'abyssal-blue' };
 
   function makeStage(kind, layer, drawFrame, setup, opts) {
     opts = opts || {};
@@ -431,7 +431,7 @@
      water in the picture is re-drawn in strips pushed by travelling waves, plus the odd widening ring), and petals drift
      diagonally across the scene from the blossom tree. */
   var SAKURA_LAKE = 0.60;                    // water starts here, as a fraction of the picture's height
-  var PAGODA = { x: 0.1 + 0.8 * 0.317, y: 0.50 };        // paper-lantern windows
+  var PAGODA = { x: 0.317, y: 0.50 };        // paper-lantern windows
   // The picture is a sunset; every other time of day is a colour wash over it. A full day takes about eight minutes:
   // sunrise -> morning -> noon -> afternoon -> sunset -> evening -> night -> (sunrise again).
   // [name, hold s, ease-in s, multiply top, multiply bottom, screen top, screen bottom, night amount (stars, lanterns, fireflies)]
@@ -446,7 +446,7 @@
   ];
   var SK_START = 4;                          // start the day on the sunset (the picture as painted)
   var SK_TOTAL = SK_PHASES.reduce(function (a, p) { return a + p[1] + p[2]; }, 0);
-  var SKX = function (x) { return 0.1 + 0.8 * x; };   // the wide picture holds the square painting in its middle 80%
+  var SKX = function (x) { return x; };   // the picture is the full square painting, edge to edge (no padded wide canvas)
   function lerp(a, b, k) { return a + (b - a) * k; }
   function mix3(a, b, k) { return [lerp(a[0], b[0], k), lerp(a[1], b[1], k), lerp(a[2], b[2], k)]; }
   function rgb3(c) { return 'rgb(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0) + ')'; }
@@ -547,8 +547,8 @@
       for (var si = 0; si < st.stars.length; si++) {
         var S = st.stars[si], tw = 0.45 + 0.55 * Math.sin(t * S.sp + S.ph);
         ctx.globalAlpha = night * 0.7 * Math.max(0, tw);
-        ctx.fillStyle = '#e8f0ff'; var sx = st.rect.x + S.x * st.rect.w, sy = st.rect.y + S.y * st.rect.h;
-        ctx.fillRect(sx, sy, S.sz * d, S.sz * d);
+        ctx.fillStyle = '#e8f0ff'; var skyB = Math.min(H, st.rect.y + st.rect.h * 0.28), sx = st.rect.x + S.x * st.rect.w, sy = S.y / 0.16 * skyB * 0.92;
+        if (skyB > 8 && sx >= 0 && sx <= W) ctx.fillRect(sx, sy, S.sz * d, S.sz * d);
       }
       var L = st.lamp, flick = 0.88 + 0.12 * Math.sin(t * 2.3) * Math.sin(t * 0.9 + 1);
       for (var pass = 0; pass < 2; pass++) {

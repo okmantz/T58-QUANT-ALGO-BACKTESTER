@@ -69,7 +69,7 @@
       title: "2 \u00B7 Create a strategy",
       text: [
         "**Create** is where strategies enter. Describe an idea in plain English and let T58 turn it into testable candidates, or paste your own Python, PineScript or MQL5.",
-        "No idea yet? The tools grid on the same page has Forge Strategy and Speed Run, one button each. Everything you save lands in the **Strategy Library**."
+        "No idea yet? The **Strategy Discovery Engine** on the same page hunts for candidates for you: pick a market and a prop firm and press go. Everything you save lands in the **Strategy Library**."
       ],
       target: function () { return navLink("/start-here/create"); },
       action: { label: "Open Create", href: "/start-here/create" }

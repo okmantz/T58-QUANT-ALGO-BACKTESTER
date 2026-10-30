@@ -1130,10 +1130,10 @@ html[data-bg="silent-sanctuary"][data-theme="light"]   { --scene: url("/static/b
 html[data-bg="misty-forest"][data-theme="light"]       { --scene: url("/static/backgrounds/misty-forest-light.webp");       --sc1: .42; --sc2: .46; --sc3: .64; --scene-pos: 55% 50%; }
 /* Unlockable scenes (Account -> Personalize; locked until earned): Obsidian Gold, Sakura Reverie, Abyssal Blue. */
 html[data-bg="obsidian-gold"]:not([data-theme="light"])  { --scene: url("/static/backgrounds/obsidian-gold-dark.webp");  --sc1: .30; --sc2: .34; --sc3: .56; --scene-pos: 50% 50%; }
-html[data-bg="sakura-reverie"]:not([data-theme="light"]) { --scene: url("/static/backgrounds/sakura-reverie-wide-dark.webp"); --sc1: .34; --sc2: .46; --sc3: .70; --scene-pos: 50% 78%; }
+html[data-bg="sakura-reverie"]:not([data-theme="light"]) { --scene: url("/static/backgrounds/sakura-reverie-dark.webp"); --sc1: .34; --sc2: .46; --sc3: .70; --scene-pos: 40% 30%; }
 html[data-bg="abyssal-blue"]:not([data-theme="light"])   { --scene: url("/static/backgrounds/abyssal-blue-dark.webp");   --sc1: .32; --sc2: .38; --sc3: .62; --scene-pos: 50% 22%; }
 html[data-bg="obsidian-gold"][data-theme="light"]  { --scene: url("/static/backgrounds/obsidian-gold-light.webp");  --sc1: .22; --sc2: .28; --sc3: .50; --scene-pos: 50% 50%; }
-html[data-bg="sakura-reverie"][data-theme="light"] { --scene: url("/static/backgrounds/sakura-reverie-wide-light.webp"); --sc1: .26; --sc2: .36; --sc3: .58; --scene-pos: 50% 78%; }
+html[data-bg="sakura-reverie"][data-theme="light"] { --scene: url("/static/backgrounds/sakura-reverie-light.webp"); --sc1: .26; --sc2: .36; --sc3: .58; --scene-pos: 40% 30%; }
 html[data-bg="abyssal-blue"][data-theme="light"]   { --scene: url("/static/backgrounds/abyssal-blue-light.webp");   --sc1: .26; --sc2: .34; --sc3: .56; --scene-pos: 50% 22%; }
 html[data-bg]:not([data-bg="mountains"]) body::before { background-position: var(--scene-pos, center); }
 html[data-bg]:not([data-bg="mountains"]):not([data-theme="light"]) body::before {
