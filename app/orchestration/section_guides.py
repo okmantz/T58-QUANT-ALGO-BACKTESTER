@@ -30,7 +30,7 @@ SECTION_GUIDES = {
             "build it directly in the Strategy Library.",
             "Want an LLM to reason about market structure and propose ideas? Try Research Agent, Research "
             "Director, or the background Research Loop.",
-            "The classic labs (Forge, Speed Run, Evolution Lab) are still under More tools below -- they are now methods of the "
+            "The classic labs (Speed Run, Evolution Lab) are still under More tools below -- they are now presets of the "
             "Discovery Engine. Once you have a survivor you like, send it to Full Pipeline for a validated verdict.",
         ],
         "primary_buttons": [{"label": "Strategy Discovery Engine", "href": "/discovery-engine"}, {"label": "Strategy Library", "href": "/library"}],
@@ -45,11 +45,11 @@ SECTION_GUIDES = {
             {"name": "Pine Indicator Creator", "href": "/pine-indicator",
              "desc": "TradingView (Pine v5) indicators from an idea or pasted code, checked before you copy them."},
         ],
-        # "More tools": the classic labs. Search Lab / Evolution Lab / Forge / Speed Run are methods of the Strategy Discovery
+        # "More tools": the classic labs. Search Lab / Evolution Lab / Forge / Speed Run are presets of the Strategy Discovery
         # Engine now; their own pages still work for people who want every knob.
         "more_tools": [
-            {"name": "Forge Strategy", "href": "/forge", "desc": "Classic one-button broad generate + screen + prop-survival check."},
-            {"name": "Speed Run", "href": "/speed-run", "desc": "Classic faster, narrower single-pass version of Forge."},
+            {"name": "Forge Strategy (classic)", "href": "/forge", "desc": "Original one-button generate + screen + prop-survival check. The Discovery Engine's deep preset covers this."},
+            {"name": "Speed Run", "href": "/speed-run", "desc": "Classic faster, narrower single-pass search (a Discovery Engine preset)."},
             {"name": "Multi-Instrument Speed Run", "href": "/speed-run/multi-instrument", "desc": "Speed Run across several datasets at once."},
             {"name": "Evolution Lab (GA)", "href": "/evolution",
              "desc": "Genetic algorithm that evolves strategy parameter sets across generations."},
@@ -133,13 +133,13 @@ SECTION_GUIDES = {
         "title": "Strategy Graveyard", "accent_color": "#c9d1d9",
         "tagline": "Every rejected strategy, and exactly why it failed -- so you don't re-test the same dead idea twice.",
         "description": (
-            "Every strategy Forge, Search Lab, or Evolution Lab rejects gets recorded here with the specific "
+            "Every strategy the Discovery Engine (or a classic lab) rejects gets recorded here with the specific "
             "reason it failed, per instrument -- not raw profit, but pass/payout probability and prop-firm "
             "survival. Worth checking before a new search: if a whole family keeps dying the same way on a "
             "given instrument, that's a pattern worth knowing before you spend more search budget on it."
         ),
         "roadmap": [
-            "After a Forge/Search Lab/Evolution Lab run, check here for what got rejected and why.",
+            "After a Discovery Engine run, check here for what got rejected and why.",
             "Look for repeated failure patterns within one family/instrument before re-running a similar search.",
         ],
         "primary_buttons": [{"label": "Open Strategy Graveyard", "href": "/graveyard"}],

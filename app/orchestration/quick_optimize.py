@@ -796,10 +796,16 @@ def run_quick_optimize(
 
     log(f"Searching for a more robust configuration ({cfg.ga_generations} generations x {cfg.ga_population} candidates)...")
     _prog(0.10, "Searching parameters")
-    _ga_state = {"batches": 0}
-    _ga_expected = max(1, int(cfg.ga_generations) + 1)
+    # "expected" starts at the configured ceiling and is corrected by _ga_budget as soon as the GA has settled its
+    # adaptive budget, so the progress bar is scaled to the work that will really run (it used to crawl to ~50%
+    # and then jump to 80% when the search was smaller than the ceiling).
+    _ga_state = {"batches": 0, "expected": max(1, int(cfg.ga_generations) + 1)}
+
+    def _ga_budget(_population: int, generations: int) -> None:
+        _ga_state["expected"] = max(1, int(generations) + 1)
 
     def _ga_batch(done: int, total: int) -> None:
+        _ga_expected = _ga_state["expected"]
         if total and done >= total:
             _ga_state["batches"] += 1
             frac_in = 0.0
@@ -827,6 +833,7 @@ def run_quick_optimize(
         cancel_event=cancel_event,
         preflight=False,           # the baseline above already proved the strategy trades
         batch_progress_cb=_ga_batch,
+        budget_cb=_ga_budget,
     )
     _prog(0.80, "Re-validating the winner")
     warnings.extend(ga_result.warnings)
