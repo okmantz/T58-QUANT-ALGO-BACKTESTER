@@ -370,8 +370,14 @@ def run_walkforward_aware_refinement(
     per_fold_reoptimize: bool = False,
     reserve_tail_frac: float = 0.2,
     gene_range_scale: float | None = None,
+    budget_cb: "Callable[[int, int], None] | None" = None,
 ) -> WalkforwardGAResult:
     """
+    budget_cb(population, generations): optional, called once after the adaptive budget is
+    settled with the population/generations the search will ACTUALLY use (which can be lower
+    than the configured ceiling). Callers use it to scale a progress bar to the real amount of
+    work instead of the ceiling. Purely informational; it never changes the search.
+
     gene_range_scale (Auto-Fix): when set to a value in (0, 1), every tunable gene's search
     range is shrunk to that fraction of its normal half-width around the strategy's CURRENT
     value (integers stay integers, the current value always stays inside). A narrower search
@@ -512,15 +518,23 @@ def run_walkforward_aware_refinement(
         # budget; the configured values are the ceiling.
         if cfg.adaptive_budget:
             n_genes = len(genes)
+            _ceiling_pop, _ceiling_gens = cfg.population_size, cfg.generations
             if n_genes <= 3:
                 cfg = replace(cfg, population_size=min(cfg.population_size, 16),
                               generations=min(cfg.generations, 6))
             elif n_genes <= 8:
                 cfg = replace(cfg, population_size=min(cfg.population_size, 24),
                               generations=min(cfg.generations, 8))
+            # (The "ceiling" used to be read AFTER the reduction, so the message always showed the same
+            # numbers twice. It now reports the configured ceiling honestly.)
             log(f"Adaptive budget: {n_genes} tunable gene(s) -> "
                 f"{cfg.population_size}x{cfg.generations} budget (ceiling was "
-                f"{cfg.population_size}x{cfg.generations}).")
+                f"{_ceiling_pop}x{_ceiling_gens}).")
+        if budget_cb is not None:
+            try:
+                budget_cb(int(cfg.population_size), int(cfg.generations))
+            except Exception:  # noqa: BLE001 -- a progress hook must never break the search
+                pass
         if gene_range_scale is not None and 0.0 < float(gene_range_scale) < 1.0:
             genes = [_shrink_gene(g, float(gene_range_scale)) for g in genes]
             log(f"Search ranges narrowed to {float(gene_range_scale):.0%} of normal around the current values.")
