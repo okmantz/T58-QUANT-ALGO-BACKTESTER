@@ -187,6 +187,10 @@ function doGet(e) {
 // ============================ ADMIN MENU ====================================
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('T58 License')
+    .addItem('Assign key to a customer & email it…', 'menuAssignAndEmail')
+    .addItem('Assign key to a customer (no email)…', 'menuAssignOnly')
+    .addItem('Re-send key email (selected key)', 'menuResendEmail')
+    .addSeparator()
     .addItem('Generate more keys…', 'menuGenerateKeys')
     .addSeparator()
     .addItem('Revoke selected key', 'menuRevoke')
@@ -228,6 +232,134 @@ function menuReleaseDevice() {
                'The customer can then activate on a new computer.', ui.ButtonSet.OK_CANCEL) !== ui.Button.OK) return;
   s.sheet.getRange(s.row, COL.DEVICE + 1).setValue('');
   s.sheet.getRange(s.row, COL.STATUS + 1).setValue('Inactive');
+}
+
+
+// ===================== ASSIGN A KEY TO A CUSTOMER + EMAIL IT =================
+// The everyday flow: click a row (or let the script pick the next unused key), type the customer's name and email, and
+// choose a plan. The key is locked to that email (the app checks it at sign-in), and the customer gets an email with the
+// key and three steps to start. The first time you use this, Google asks you once to allow the script to send email.
+
+/** Pure: is this email address plausible? */
+function validEmail_(s) { return /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(cleanEmail_(s)); }
+
+/** Pure: the first row (0-based index into rows) whose key is still unassigned, or -1. */
+function nextFreeRow_(rows) {
+  for (var i = 0; i < rows.length; i++) {
+    var st = lower_(rows[i][COL.STATUS]);
+    if (norm_(rows[i][COL.KEY]) && !cleanEmail_(rows[i][COL.EMAIL]) && (st === 'unused' || st === '')) return i;
+  }
+  return -1;
+}
+
+/** Pure: {subject, body, html} for the customer's email. */
+function buildKeyEmail_(info) {
+  var name = String(info.name || '').trim();
+  var hello = name ? 'Hi ' + name.split(/\s+/)[0] + ',' : 'Hi,';
+  var plan = info.plan ? ' (' + info.plan + ')' : '';
+  var steps = [
+    'Open the T58 Quant Algo Backtester.',
+    'On the activation screen, type this email address (' + info.email + ') and the license key above.',
+    'Press Activate. You are in: everything starts on the default settings and saves to your account as you work.'
+  ];
+  var body = hello + '\n\nThanks for joining T58. Your license' + plan + ' is ready.\n\n' +
+    'LICENSE KEY:  ' + info.key + '\n\n' +
+    steps.map(function (t, i) { return (i + 1) + '. ' + t; }).join('\n') + '\n\n' +
+    'Keep this email: the key works only with ' + info.email + ' and on one computer at a time. ' +
+    'If you change computers, reply to this email and we will release the old one.\n\n- T58 Trading';
+  var esc = function (t) { return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+  var html = '<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;color:#111">' +
+    '<p>' + esc(hello) + '</p><p>Thanks for joining T58. Your license' + esc(plan) + ' is ready.</p>' +
+    '<div style="margin:16px 0;padding:14px 16px;border-radius:10px;background:#0d1017;color:#fff;text-align:center">' +
+    '<div style="font-size:11px;letter-spacing:.12em;color:#8fa1af">LICENSE KEY</div>' +
+    '<div style="font-family:Consolas,Menlo,monospace;font-size:20px;font-weight:700;letter-spacing:.04em;margin-top:4px">' + esc(info.key) + '</div></div>' +
+    '<ol style="line-height:1.7">' + steps.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ol>' +
+    '<p style="font-size:13px;color:#555">Keep this email: the key works only with ' + esc(info.email) + ' and on one computer at a time. ' +
+    'If you change computers, reply to this email and we will release the old one.</p><p>&mdash; T58 Trading</p></div>';
+  return { subject: 'Your T58 license key', body: body, html: html };
+}
+
+/** Pure: the cells to write when a key is assigned. Returns {colIndex: value}. */
+function assignPatch_(info, now) {
+  var p = {};
+  p[COL.CUSTOMER] = String(info.name || '').trim();
+  p[COL.EMAIL] = cleanEmail_(info.email);
+  p[COL.PLAN] = info.plan || 'Lifetime';
+  p[COL.ISSUED] = now;
+  return p;
+}
+
+function pickAssignRow_() {
+  var sheet = getSpreadsheet_().getSheetByName(LICENSES_SHEET);
+  var active = getSpreadsheet_().getActiveSheet();
+  var ui = SpreadsheetApp.getUi();
+  var last = sheet.getLastRow();
+  if (last < 2) { ui.alert('There are no keys yet. Use "Generate more keys…" first.'); return null; }
+  var rows = sheet.getRange(2, 1, last - 1, NUM_COLS).getValues();
+  var row = 0;
+  if (active.getName() === LICENSES_SHEET && active.getActiveRange().getRow() >= 2) {
+    row = active.getActiveRange().getRow();
+    var r = rows[row - 2];
+    if (cleanEmail_(r[COL.EMAIL]) && ui.alert('That key already belongs to ' + r[COL.EMAIL] + '.',
+        'Reassign it to someone else?', ui.ButtonSet.OK_CANCEL) !== ui.Button.OK) return null;
+  } else {
+    var i = nextFreeRow_(rows);
+    if (i < 0) { ui.alert('No unassigned keys left. Use "Generate more keys…".'); return null; }
+    row = i + 2;
+  }
+  return { sheet: sheet, row: row, key: sheet.getRange(row, COL.KEY + 1).getValue() };
+}
+
+function askAssignDetails_() {
+  var ui = SpreadsheetApp.getUi();
+  var r1 = ui.prompt('Customer name', 'Their name (optional):', ui.ButtonSet.OK_CANCEL);
+  if (r1.getSelectedButton() !== ui.Button.OK) return null;
+  var r2 = ui.prompt('Customer email', 'The email they will sign in with:', ui.ButtonSet.OK_CANCEL);
+  if (r2.getSelectedButton() !== ui.Button.OK) return null;
+  if (!validEmail_(r2.getResponseText())) { ui.alert('That does not look like an email address.'); return null; }
+  var r3 = ui.prompt('Plan', 'Plan (' + PLANS.join(', ') + '). Leave blank for Lifetime:', ui.ButtonSet.OK_CANCEL);
+  if (r3.getSelectedButton() !== ui.Button.OK) return null;
+  var plan = String(r3.getResponseText() || '').trim();
+  var match = PLANS.filter(function (p) { return lower_(p) === lower_(plan); })[0];
+  return { name: r1.getResponseText(), email: cleanEmail_(r2.getResponseText()), plan: match || (plan ? plan : 'Lifetime') };
+}
+
+function assignAndMaybeEmail_(sendMail) {
+  var ui = SpreadsheetApp.getUi();
+  var target = pickAssignRow_();
+  if (!target) return;
+  var info = askAssignDetails_();
+  if (!info) return;
+  info.key = String(target.key);
+  var patch = assignPatch_(info, new Date());
+  for (var col in patch) target.sheet.getRange(target.row, Number(col) + 1).setValue(patch[col]);
+  if (!sendMail) { ui.alert('Assigned ' + info.key + ' to ' + info.email + '.'); return; }
+  try {
+    var m = buildKeyEmail_(info);
+    MailApp.sendEmail({ to: info.email, subject: m.subject, body: m.body, htmlBody: m.html, name: 'T58 Trading' });
+    var notes = target.sheet.getRange(target.row, COL.NOTES + 1);
+    notes.setValue((notes.getValue() ? notes.getValue() + ' | ' : '') + 'Key emailed ' + new Date().toISOString().slice(0, 10));
+    ui.alert('Assigned ' + info.key + ' to ' + info.email + ' and emailed it.');
+  } catch (err) {
+    ui.alert('The key was assigned, but the email could not be sent: ' + err +
+             '\n\nUse "Re-send key email" after allowing the script to send mail, or copy the key to them yourself.');
+  }
+}
+function menuAssignAndEmail() { assignAndMaybeEmail_(true); }
+function menuAssignOnly() { assignAndMaybeEmail_(false); }
+
+function menuResendEmail() {
+  var s = selectedLicenseRow_();
+  if (!s) return;
+  var ui = SpreadsheetApp.getUi();
+  var email = cleanEmail_(s.sheet.getRange(s.row, COL.EMAIL + 1).getValue());
+  if (!validEmail_(email)) { ui.alert('This key has no customer email yet. Use "Assign key to a customer & email it…".'); return; }
+  var info = { key: String(s.key), email: email, name: s.sheet.getRange(s.row, COL.CUSTOMER + 1).getValue(),
+               plan: s.sheet.getRange(s.row, COL.PLAN + 1).getValue() };
+  if (ui.alert('Email ' + info.key + ' to ' + email + '?', '', ui.ButtonSet.OK_CANCEL) !== ui.Button.OK) return;
+  var m = buildKeyEmail_(info);
+  MailApp.sendEmail({ to: email, subject: m.subject, body: m.body, htmlBody: m.html, name: 'T58 Trading' });
+  ui.alert('Sent.');
 }
 
 function menuGenerateKeys() {

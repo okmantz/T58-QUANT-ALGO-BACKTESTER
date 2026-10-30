@@ -12,8 +12,8 @@ const sandbox = {
 };
 vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(path.join(__dirname, 'Code.gs'), 'utf8'), sandbox);
-const { evaluate_, makeKey_, findRow_, COL, KEY_ALPHABET } = vm.runInContext(
-  '({evaluate_, makeKey_, findRow_, COL, KEY_ALPHABET})', sandbox);
+const { evaluate_, makeKey_, findRow_, COL, KEY_ALPHABET, validEmail_, nextFreeRow_, buildKeyEmail_, assignPatch_ } = vm.runInContext(
+  '({evaluate_, makeKey_, findRow_, COL, KEY_ALPHABET, validEmail_, nextFreeRow_, buildKeyEmail_, assignPatch_})', sandbox);
 
 // vm-context objects have a foreign Object prototype; normalise the JSON reply for deepStrictEqual.
 const evaluate = (...a) => { const o = evaluate_(...a); o.res = JSON.parse(JSON.stringify(o.res)); return o; };
@@ -146,6 +146,31 @@ test('generated keys use all 32 symbols roughly uniformly (no bias bug)', () => 
   assert.strictEqual(vals.length, 32);
   const mean = 5000 * 20 / 32;
   assert.ok(vals.every(v => Math.abs(v - mean) < mean * 0.12), 'distribution skewed: ' + JSON.stringify(counts));
+});
+
+test('owner flow: a key assigned to an email only activates for that email', () => {
+  const OWNER = 'owenkmantz@gmail.com', K = 'T58-UAXLS-HES9D-JHT7Q-EHLNG';
+  const patch = assignPatch_({ name: 'Owen', email: ' Owenkmantz@Gmail.com ', plan: 'Lifetime' }, NOW);
+  const r = row({ KEY: K });
+  for (const c in patch) r[Number(c)] = patch[c];
+  assert.strictEqual(r[COL.EMAIL], OWNER);
+  const ok = evaluate([r], { action: 'activate', license_key: K, email: OWNER, device_id: 'pc1' }, NOW);
+  assert.strictEqual(ok.res.ok, true);
+  assert.strictEqual(ok.res.plan, 'Lifetime');
+  const bad = evaluate([r], { action: 'activate', license_key: K, email: 'someone@else.com', device_id: 'pc2' }, NOW);
+  assert.deepStrictEqual(bad.res, { ok: false, error: 'email_mismatch' });
+});
+test('validEmail_ and nextFreeRow_', () => {
+  assert.ok(validEmail_('a@b.co')); assert.ok(!validEmail_('nope')); assert.ok(!validEmail_('a@b'));
+  const rows = [row({ KEY: 'K1', STATUS: 'Active', EMAIL: 'x@y.com' }), row({ KEY: 'K2', EMAIL: 'z@y.com' }), row({ KEY: 'K3' })];
+  assert.strictEqual(nextFreeRow_(rows), 2);
+  assert.strictEqual(nextFreeRow_([row({ KEY: 'K1', STATUS: 'Active', EMAIL: 'x@y.com' })]), -1);
+});
+test('key email carries the key, the address and the steps', () => {
+  const m = buildKeyEmail_({ key: KEY, email: 'jane@example.com', name: 'Jane Doe', plan: 'Pro Annual' });
+  assert.ok(m.body.includes(KEY) && m.body.includes('jane@example.com') && m.body.startsWith('Hi Jane,'));
+  assert.ok(m.html.includes(KEY) && m.subject.length > 0);
+  assert.ok(!buildKeyEmail_({ key: KEY, email: 'a@b.co', name: '<i>x</i>', plan: '<u>p</u>' }).html.includes('<u>p</u>'));
 });
 
 console.log(`\n${passed} tests passed`);

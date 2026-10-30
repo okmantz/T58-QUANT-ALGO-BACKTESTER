@@ -53,6 +53,8 @@ values, so they can't be guessed, and nothing else is ever returned.
   latest after the 3-day offline grace period).
 - **Customer got a new computer:** click the row -> **T58 License -> Release device**.
 - **Need more keys:** **T58 License -> Generate more keys**.
+- **Sell / give a key to someone:** click a key row (or click nothing and the next unused key is used) -> **T58 License -> Assign key to a customer & email it...**. Type their name, email and plan. The key is locked to that email and they receive an email with the key and three steps; they can sign in straight away and start on the default settings. Google asks you once to allow the script to send mail. **Re-send key email** repeats it.
+- **Your own owner key:** put `owenkmantz@gmail.com` in the EMAIL column of your key and set PLAN to Lifetime. The app unlocks everything for that email + key once the sheet confirms it (it never unlocks on the email alone).
 - Status meanings: Unused (never activated) - Active - Inactive (device released) - Suspended (temporary) - Revoked.
 
 ## Whop note
