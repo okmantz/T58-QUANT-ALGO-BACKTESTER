@@ -67,7 +67,7 @@ STEPS = [
         "strategyconfig",
         "2 \u00B7 Create or bring a strategy",
         "Build one with the no-code Manual builder, or paste/upload Python, PineScript or MQL5.\n\n"
-        "No idea yet? Skip ahead: Speed Run and Forge Strategy (in the CREATE section) hunt for one "
+        "No idea yet? Skip ahead: the Strategy Discovery Engine (in the CREATE section) hunts for one "
         "for you, and Generate Strategies (AI) drafts one from a plain-English idea. Everything you "
         "save lands in your Strategy Library.",
     ),
