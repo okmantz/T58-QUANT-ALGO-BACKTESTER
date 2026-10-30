@@ -76,9 +76,9 @@ def test_sidebar_lifecycle_headers_link_to_step_pages(client):
                  "/validate-simple", "/champion-simple", "/forward-test",
                  "/graveyard"):
         assert f'href="{href}"' in body, href
-    # The summary still carries the numbered labels the v9.6 tests pin.
-    assert "&#9312;</span> Create" in body
-    assert "&#9318;</span> Strategy Graveyard" in body
+    # v9.8 turned the numbered group summaries into single icon + label links.
+    assert '<span class="label">Create</span>' in body
+    assert '<span class="label">Strategy Graveyard</span>' in body
 
 
 # ------------------------------------------------------------ step pages
@@ -150,7 +150,9 @@ def test_dashboard_tested_row_points_at_validate_checks(client, monkeypatch):
     monkeypatch.setattr(server.champion_board, "list_board",
                         lambda: [_row(untested=False)])
     body = client.get("/dashboard").get_data(as_text=True)
-    assert "Open Validate (pick checks)" in body
+    # Dashboard v3: the focus card's "Continue" button carries the next step.
+    import re
+    assert re.search(r'href="/validate-simple"[^>]*>Continue', body)
     assert "Open Validate hub" not in body
 
 

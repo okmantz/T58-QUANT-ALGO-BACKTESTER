@@ -156,8 +156,11 @@ def test_fitness_noise_across_40_seeds_is_bounded_at_the_floor():
                       evaluation_profit_target_pct=6.0)
     trades = _trades(120)
     vals = []
+    # 2026-10-30: 1000 sims, not 300. The 2026-10-29 calibration moved the default day_block_days from 3 to 1; at 300 sims the
+    # seed-to-seed std is then ~11% of the mean (binomial noise at a ~27% pass rate is already ~9.4%, so a 10% bar had no
+    # headroom). At 1000 sims it is ~5.5%, so the 10% bound stays meaningful without loosening it or undoing the calibration.
     for seed in range(40):
-        r = run_monte_carlo(trades, rules, MonteCarloConfig(n_simulations=300, random_seed=seed))
+        r = run_monte_carlo(trades, rules, MonteCarloConfig(n_simulations=1000, random_seed=seed))
         vals.append(r.per_attempt_pass_probability)
     vals = np.array(vals, dtype=float)
     assert (vals > 0).all()

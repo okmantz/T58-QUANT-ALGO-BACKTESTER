@@ -94,3 +94,44 @@ def test_licensed_request_passes_through_to_account_lock_gate():
         c = app.test_client()
         r = c.get("/dashboard")
     assert r.status_code == 200
+
+
+def _follow_redirects_manually(client, url, limit=10):
+    """Walk the redirect chain by hand so a loop is a test failure instead of a hang."""
+    chain = []
+    for _ in range(limit):
+        r = client.get(url, follow_redirects=False)
+        chain.append((url, r.status_code))
+        if r.status_code not in (301, 302, 303, 307, 308):
+            return r, chain
+        url = r.headers["Location"]
+    raise AssertionError(f"redirect loop (> {limit} hops): {chain}")
+
+
+def test_unlicensed_and_locked_does_not_redirect_loop():
+    """Regression: unlicensed + a lock password used to bounce /lock -> /activate -> /lock forever
+    (browser: ERR_TOO_MANY_REDIRECTS). The lock page must render; unlocking then reaches /activate."""
+    from app.accounts.settings import AccountSettings
+
+    locked = AccountSettings(password_hash="pbkdf2$sha256$1000$aa$bb")
+    with patch.object(license_client, "validate", return_value=(False, "Not activated.")), \
+         patch("app.accounts.settings.load_account_settings", return_value=locked), \
+         patch.object(license_client, "load_state") as mock_state:
+        mock_state.return_value.email = ""
+        c = app.test_client()
+        for start in ("/lock?next=/activate", "/activate", "/dashboard", "/"):
+            r, chain = _follow_redirects_manually(c, start)
+            assert r.status_code == 200, (start, chain)
+            assert b"lock" in r.data.lower(), (start, chain)
+
+
+def test_lock_next_param_is_same_site_only():
+    from app.accounts.settings import AccountSettings
+
+    with patch("app.accounts.settings.load_account_settings", return_value=AccountSettings()):
+        server_module._license_ok_cached = True
+        c = app.test_client()
+        for evil in ("//evil.example", "http://evil.example/x", "/\\evil.example"):
+            r = c.get("/lock", query_string={"next": evil}, follow_redirects=False)
+            assert r.status_code in (301, 302, 303, 307, 308)
+            assert r.headers["Location"] == "/dashboard", evil

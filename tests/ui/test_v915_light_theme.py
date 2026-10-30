@@ -39,9 +39,13 @@ DARK_HASH = {
     # seasonal-backdrop rules in theme.css changed; no dark token or any other rule did.
     # Re-pinned 2026-10-28: the midnight-ocean backdrop's CSS swell animation was replaced by the canvas scene (.t58-scene-fx rules).
     # No dark token moved (test_dark_token_values_pinned still passes).
-    "theme.css": "95aea7914a5c8c8f0500e1b38bb54a5b9ede67adaa24c627f11e39a75d88f104",
+    # Re-pinned 2026-10-30: Lucide sidebar icons (.lu, muted nav-icon colour), the notification bell + inbox panel rules, and the
+    # three unlockable backdrops (obsidian-gold / sakura-reverie / abyssal-blue) were added to theme.css (commits f49c523..e0ec4f8).
+    # No dark token moved (test_dark_token_values_pinned still passes).
+    "theme.css": "793f9089fd1591c4b0b9e1a3af73872a7cd996db5f3e7165047908c49088f381",
     # Re-pinned 2026-10-28: .badge.pass now uses var(--ok) instead of var(--teal) (commit 8f643dd); in the dark scope both are #35e0b0.
-    "job-theme.css": "53b8a7a06c016000b090ac7cd44374a4a8f5e9a6f09cac8a24ebe02d7aaa1d01",
+    # Re-pinned 2026-10-30: the "Why this verdict" waterfall component (.wf / .wf-step rules) was ADDED (commit f49c523); no existing rule changed.
+    "job-theme.css": "1ea80e4f3812928af01d78a9f684cf1e6d13381ea3cebcdba7662127ba89b0a2",
     # Re-pinned 2026-10-13: the lifecycle (Champion board) dark rules were extended after the
     # WS-E pin was taken; token values (DARK_TOKENS below) are still checked separately.
     # Re-pinned (repo cleanup): the pages' hard-coded colors became var(--token) references whose DARK
