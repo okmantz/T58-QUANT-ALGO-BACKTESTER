@@ -7,6 +7,8 @@ from app.data import storage
 def test_index_loads():
     client = app.test_client()
     r = client.get("/")
+    assert r.status_code == 302 and r.headers["Location"].endswith("/full-pipeline")   # Run & Report retired -> Full Pipeline
+    r = client.get("/full-pipeline")
     assert r.status_code == 200
     assert b"T58" in r.data
 

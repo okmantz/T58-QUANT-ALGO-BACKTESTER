@@ -53,7 +53,7 @@ def test_champion_simple_page_has_board_and_actions(client):
 # ------------------------------------------------------------- (b) sidebar
 
 def test_sidebar_lifecycle_order_and_account_order(client):
-    r = client.get("/")
+    r = client.get("/full-pipeline")
     assert r.status_code == 200
     body = r.get_data(as_text=True)
     labels = [f'<span class="label">{n}</span>' for n in ("Create", "Test", "Optimize", "Validate", "Champion", "Deploy", "Strategy Graveyard")]

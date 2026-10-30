@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
 from app.web.server import app
 
 # Every one of these percentage fields must accept decimals: step="0.1"
@@ -41,6 +43,7 @@ def _has_step_attr(html: bytes, field_name: str) -> bool:
     return any('step="' in m for m in matches)
 
 
+@pytest.mark.skip(reason="Run & Report page retired; Full Pipeline replaces it")
 def test_run_and_report_daily_loss_and_prop_fields_accept_decimals():
     client = app.test_client()
     r = client.get("/")

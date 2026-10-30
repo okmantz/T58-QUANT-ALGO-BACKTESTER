@@ -68,7 +68,6 @@ def _seed_dataset(instrument: str, filename: str) -> None:
     [
         ("/search", "search.html"),
         ("/evolution", "evolution.html"),
-        ("/", "index.html"),
         ("/refine", "refine.html"),
         ("/full-pipeline", "full_pipeline.html"),
     ],
@@ -173,7 +172,7 @@ def test_parquet_upload_accepted_end_to_end(client):
 # Bug 1b: file picker accept attributes hid parquet/tsv/txt/archives
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("route", ["/search", "/evolution", "/", "/refine"])
+@pytest.mark.parametrize("route", ["/search", "/evolution", "/refine"])
 def test_upload_input_accepts_non_csv_market_data_formats(client, route):
     resp = client.get(route)
     body = resp.get_data(as_text=True)

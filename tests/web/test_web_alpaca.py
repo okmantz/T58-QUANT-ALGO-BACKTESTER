@@ -30,6 +30,7 @@ def _fake_bars_df():
     })
 
 
+@pytest.mark.skip(reason="Run & Report page retired; Full Pipeline replaces it")
 def test_index_shows_alpaca_fetch_panel():
     client = app.test_client()
     r = client.get("/")

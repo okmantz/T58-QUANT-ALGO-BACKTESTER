@@ -128,7 +128,7 @@ def test_optimize_and_validate_hubs_are_framed_as_start_here(path, section_key):
     assert "Start Here" in r.get_data(as_text=True)
 
 
-@pytest.mark.parametrize("path", ["/", "/forge", "/search", "/evolution", "/full-pipeline"])
+@pytest.mark.parametrize("path", ["/forge", "/search", "/evolution", "/full-pipeline"])
 def test_old_embedded_start_here_card_is_gone_from_individual_tool_pages(path):
     """These 5 tools each used to carry their OWN small embedded Start
     Here card (see _start_here.html's macro) -- now that every tool's
