@@ -272,6 +272,10 @@ def _stub_ollama_readiness(request, monkeypatch):
 # plain `pytest` (or the full-tests workflow) still runs everything. Refresh the list with
 # `python scripts/run_tests.py --refresh-slow` after adding heavy tests.
 # ---------------------------------------------------------------------------
+def pytest_configure(config):
+    config.addinivalue_line("markers", "slow: long-running test listed in tests/slow_tests.txt (deselect with -m 'not slow')")
+
+
 def pytest_collection_modifyitems(config, items):
     from pathlib import Path
 
