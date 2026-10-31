@@ -206,8 +206,8 @@ def test_run_surrogate_study_with_a_fake_pipeline_counts_false_discoveries_and_p
 
 
 def _report(**kw):
-    base = dict(created_at=time.time(), code_hash="abc", n_null=60, null_candidates=1, null_rate=1 / 60, null_rate_upper95=0.08, planted=[],
-                power={"0.10": 0.2, "0.20": 0.7, "0.30": 0.9}, runs=[], min_null_runs=20, schema=sg.GATE_SCHEMA, opened_batches=[1, 2], notes=[])
+    base = dict(created_at=time.time(), code_hash="abc", n_null=60, null_candidates=1, null_rate=1 / 60, null_rate_upper95=0.08, planted=[{"target_r": 0.2, "runs": 10}, {"target_r": 0.3, "runs": 10}],
+                power={"0.10": 0.2, "0.20": 0.7, "0.30": 0.9}, runs=[], min_null_runs=60, schema=sg.GATE_SCHEMA, opened_batches=[1, 2], notes=[])
     base.update(kw)
     return base
 
@@ -223,6 +223,8 @@ def test_gate_is_closed_without_a_report_and_opens_only_on_a_fresh_passing_one(t
 @pytest.mark.parametrize("patch,needle", [
     ({"null_rate": 0.10}, "false-discovery rate"),
     ({"n_null": 5}, "null runs"),
+    ({"n_null": 40, "min_null_runs": 20}, "null runs"),
+    ({"planted": [{"target_r": 0.2, "runs": 3}, {"target_r": 0.3, "runs": 3}]}, "planted runs"),
     ({"power": {"0.20": 0.1, "0.30": 0.2}}, "power"),
     ({"created_at": time.time() - 200 * 86400}, "older than"),
     ({"schema": 999}, "schema"),
