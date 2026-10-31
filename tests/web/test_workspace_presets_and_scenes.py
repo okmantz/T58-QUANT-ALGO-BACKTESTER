@@ -7,7 +7,7 @@ from app.web.server import app
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 STATIC = ROOT / "app" / "web" / "static"
-PRESETS = ("obsidian", "cyberpunk", "nordic", "evergreen", "sovereign", "midnight")
+PRESETS = ("obsidian", "cyberpunk", "nordic", "evergreen", "sovereign")
 NEW_SCENES = ("endless-sands", "coastal-italy", "bioluminescence")
 
 
