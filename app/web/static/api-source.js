@@ -50,11 +50,29 @@
   function remember(patch) {
     try { var m = mem(); Object.keys(patch).forEach(function (k) { m[k] = patch[k]; }); localStorage.setItem(MEM_KEY, JSON.stringify(m)); } catch (e) { /* private mode */ }
   }
+  var loadProblem = '';
+  var FALLBACK_PROVIDERS = [
+    ['alpaca', 'Alpaca', 'AAPL or BTC/USD'], ['lse', 'London Strategic Edge', 'EUR/USD, GC, AAPL'], ['twelve_data', 'Twelve Data', 'EUR/USD, AAPL'],
+    ['polygon', 'Polygon', 'AAPL, C:EURUSD'], ['tiingo', 'Tiingo', 'AAPL, eurusd'], ['alpha_vantage', 'Alpha Vantage', 'IBM, EURUSD'],
+    ['databento', 'Databento', 'ES.c.0, NQ.c.0'], ['dukascopy', 'Dukascopy (no key)', 'EURUSD, XAUUSD']
+  ].map(function (r) {
+    return { id: r[0], label: r[1], hint: r[2], ready: r[0] === 'dukascopy', key_hint: '', note: '', timeframes: ['1m', '5m', '15m', '30m', '1h', '4h', '1d'] };
+  });
   function getProviders() {
     if (providersPromise) return providersPromise;
-    providersPromise = fetch('/data/api/providers', { credentials: 'same-origin' })
-      .then(function (r) { return r.ok ? r.json() : { providers: [] }; })
-      .catch(function () { return { providers: [] }; });
+    providersPromise = fetch('/data/api/providers', { credentials: 'same-origin', cache: 'no-store' })
+      .then(function (r) {
+        if (!r.ok) { loadProblem = 'the app answered ' + r.status + ' when asked for your providers'; return { providers: [] }; }
+        return r.json().catch(function () { loadProblem = 'the app sent an unreadable provider list (restart the app after updating it)'; return { providers: [] }; });
+      })
+      .catch(function (e) { loadProblem = 'could not reach the app (' + (e && e.message || 'network error') + ')'; return { providers: [] }; })
+      .then(function (info) {
+        if (!info || !info.providers || !info.providers.length) {
+          loadProblem = loadProblem || 'the provider list came back empty (restart the app after updating it)';
+          return { providers: FALLBACK_PROVIDERS, fallback: true };
+        }
+        return info;
+      });
     return providersPromise;
   }
   function fmtRange(res) {
@@ -408,12 +426,30 @@
   function init() {
     if (!document.querySelector('input[type="file"][name="csv_file"], ' + SINGLE + ', input[type="checkbox"][name="datasets"], select[multiple][name="datasets"], select[multiple][name="ds_datasets"], form .empty-note')) return;
     getProviders().then(function (info) {
-      if (!info || !info.providers || !info.providers.length) return;
-      injectStyle();
-      ensureDatasetSelects();
-      Array.prototype.forEach.call(document.querySelectorAll(SINGLE), function (s) { enhanceSingle(s, info); });
-      enhanceMulti(info);
+      try {
+        injectStyle();
+        ensureDatasetSelects();
+        Array.prototype.forEach.call(document.querySelectorAll(SINGLE), function (s) {
+          try { enhanceSingle(s, info); } catch (e) { reportProblem(s, e); }
+          if (info.fallback) warnFallback(s);
+        });
+        enhanceMulti(info);
+      } catch (e) {
+        if (window.console) console.error('[T58 data providers]', e);
+        Array.prototype.forEach.call(document.querySelectorAll(SINGLE), function (s) { reportProblem(s, e); });
+      }
     });
+  }
+  function noteAfter(sel, text) {
+    var n = el('div', { 'class': 't58-api-note', style: 'color:var(--coral,#ff7a7a)' }, text);
+    var host = sel.nextElementSibling && sel.nextElementSibling.classList.contains('t58-api-row') ? sel.nextElementSibling : sel;
+    host.insertAdjacentElement('afterend', n);
+  }
+  function warnFallback(sel) {
+    noteAfter(sel, 'Data providers: ' + loadProblem + '. Providers are listed, but pick one only after the app is restarted with the latest files; keys are managed under Settings > API Keys.');
+  }
+  function reportProblem(sel, e) {
+    noteAfter(sel, 'Data provider picker error: ' + (e && e.message ? e.message : e));
   }
 
   window.T58ApiSource = { PREFIX: PREFIX, makeToken: makeToken, parseToken: parseToken, splitSymbols: splitSymbols, init: init };

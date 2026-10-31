@@ -79,7 +79,10 @@ def key_hint(provider: Provider) -> str:
     """Masked identifier of the saved key ("••••1a2b") so the person can tell WHICH key a run will use. Never the key itself."""
     if not provider.needs_key:
         return "no key needed"
-    k = _key_for(provider)
+    try:
+        k = _key_for(provider)
+    except Exception:  # noqa: BLE001
+        return ""
     if isinstance(k, tuple):
         k = k[0] if k else ""
     k = (k or "").strip()
@@ -93,7 +96,10 @@ def provider_list() -> list[dict]:
     missing a key (flagged so the UI can point at Settings > API Keys)."""
     out = []
     for p in PROVIDERS.values():
-        ready = (not p.needs_key) or bool(_key_for(p))
+        try:
+            ready = (not p.needs_key) or bool(_key_for(p))
+        except Exception:  # noqa: BLE001 -- a broken keyring/credential file must not hide every provider
+            ready = False
         out.append({"id": p.id, "label": p.label, "hint": p.hint, "ready": ready, "key_hint": key_hint(p) if ready else "",
                     "timeframes": list(p.timeframes), "note": p.note})
     return out
