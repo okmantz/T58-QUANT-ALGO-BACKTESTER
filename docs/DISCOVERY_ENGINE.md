@@ -15,7 +15,7 @@ A passing champion is a forward-test candidate, never a "winner".
 The 100 report indicators are in `app/strategy/indicators_v13*.py`; the 100 families (92 runnable, 8 blocked with reasons) in
 `app/search/families_v13.py`, pre-registered with kill conditions in `app/discovery/hypothesis.py`.
 New family batches stay CLOSED until `reports/surrogate_gate.json` (written by the surrogate study, valid 90 days, bound to the
-current engine code) shows < 5% false discoveries over >= 20 null runs (~60 needed to prove it) and >= 50% power on +0.20/+0.30R plants.
+current engine code) shows < 5% false discoveries over >= 60 null runs and >= 50% power on +0.20/+0.30R plants measured on >= 10 runs per planted-edge size.
 Requires `numba` for speed (pure-Python fallback is ~100x slower for the HMM/analog indicators).
 
 ## Known limits
