@@ -38,5 +38,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r config/requirements.txt pytest pytest-xdist
+      - name: Rebuild the data manifest (fails on UNREADABLE, e.g. a missing parquet engine)
+        run: python scripts/build_data_manifest.py
       - name: Run every test
         run: xvfb-run -a pytest -q -p no:cacheprovider tests -n auto --durations=25
