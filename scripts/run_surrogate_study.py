@@ -1,6 +1,6 @@
 """Surrogate study: does the Strategy Discovery Engine hand out forward-test candidates on data with NO edge, and does it find a planted one?
 
-    python -m scripts.run_surrogate_study [--null-runs 60] [--planted-runs 5] [--families a,b,c | --batch 1] [--null-seeds 200]
+    python -m scripts.run_surrogate_study [--null-runs 60] [--planted-runs 10] [--families a,b,c | --batch 1] [--null-seeds 200]
                                           [--days 80] [--markets 8] [--max-candidates 120] [--out reports/surrogate_gate.json]
 
 Runs the REAL engine (all mandatory promotion steps) on ``--null-runs`` random-walk surrogates and on planted-edge surrogates of
@@ -23,7 +23,7 @@ import sys
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--null-runs", type=int, default=60)
-    ap.add_argument("--planted-runs", type=int, default=5)
+    ap.add_argument("--planted-runs", type=int, default=10)
     ap.add_argument("--families", default="", help="comma-separated; default = the active (open) families")
     ap.add_argument("--batch", type=int, default=0, help="include this v13 rollout batch's ready families")
     ap.add_argument("--null-seeds", type=int, default=200)
