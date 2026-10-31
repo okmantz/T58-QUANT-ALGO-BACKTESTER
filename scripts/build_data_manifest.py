@@ -3,6 +3,10 @@
     python scripts/build_data_manifest.py            # scan data/raw, write data/data_manifest.json
     python scripts/build_data_manifest.py --from-coverage-doc   # just re-parse docs/DATA_COVERAGE.md
 
+2026-10-31 audit (section 6): the NQ parquet was once marked UNREADABLE only because pyarrow was missing when the manifest was built, which
+looked like a data problem. A missing parquet engine now stops the build with an explicit message, and any file that still ends up
+UNREADABLE makes the script exit non-zero (pass --allow-unreadable to write the manifest anyway), so CI fails instead of shipping it.
+
 Flags written per file: SYNTHETIC (file name contains SYNTHETIC/FAKE), <2y history, UNREADABLE,
 RAW ROLL GAPS (futures-style files whose raw bytes still carry contract-roll jumps; informational -- the importer
 back-adjusts continuous-future files on load, and the pipeline data gate measures the LOADED frame, so only a frame that
@@ -25,6 +29,23 @@ import pandas as pd  # noqa: E402
 from app.data.data_manifest import (  # noqa: E402
     MIN_ROLL_EVENTS_TO_FLAG, MIN_YEARS_FOR_READY, looks_like_futures, manifest_from_coverage_markdown, roll_gap_counts,
 )
+
+
+def _require_parquet_engine(files) -> None:
+    """Fail loudly when parquet files exist but no parquet engine is installed -- never mislabel them UNREADABLE."""
+    if not any(p.suffix.lower() == ".parquet" for p in files):
+        return
+    try:
+        import pyarrow  # noqa: F401
+        return
+    except ImportError:
+        pass
+    try:
+        import fastparquet  # noqa: F401
+        return
+    except ImportError:
+        raise SystemExit("data manifest: parquet files found under data/raw but neither pyarrow nor fastparquet is installed. "
+                         "`pip install -r config/requirements.txt` first; refusing to mark readable files UNREADABLE.")
 
 
 def _scan_file(p: Path, raw: Path) -> dict:
@@ -103,6 +124,7 @@ def _scan_file(p: Path, raw: Path) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--from-coverage-doc", action="store_true")
+    ap.add_argument("--allow-unreadable", action="store_true", help="write the manifest and exit 0 even if a file is UNREADABLE")
     args = ap.parse_args()
     out = ROOT / "data" / "data_manifest.json"
     if args.from_coverage_doc:
@@ -110,6 +132,7 @@ def main() -> None:
     else:
         raw = ROOT / "data" / "raw"
         files = sorted(p for p in raw.rglob("*") if p.suffix.lower() in (".csv", ".parquet"))
+        _require_parquet_engine(files)
         m = {"schema": 1, "min_years_for_ready": MIN_YEARS_FOR_READY, "files": [_scan_file(p, raw) for p in files]}
     out.parent.mkdir(parents=True, exist_ok=True)
     def _clean(o):
@@ -123,6 +146,11 @@ def main() -> None:
         return o
     out.write_text(json.dumps(_clean(m), indent=1, allow_nan=False), encoding="utf-8")
     print(f"wrote {out} ({len(m['files'])} files)")
+    bad = [r["file"] for r in m["files"] if "UNREADABLE" in str(r.get("flags", "")).upper()]
+    if bad and not args.allow_unreadable:
+        print(f"ERROR: {len(bad)} file(s) are UNREADABLE (first: {bad[0]}). Fix the file or the environment; "
+              "pass --allow-unreadable to accept.", file=sys.stderr)
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
