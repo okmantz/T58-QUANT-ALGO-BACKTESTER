@@ -11,6 +11,7 @@ so "high" and "low" mean "high/low relative to the recent past", never relative 
 from __future__ import annotations
 
 import time
+import weakref
 
 import numpy as np
 import pandas as pd
@@ -61,22 +62,65 @@ POOL_KINDS: tuple = (
 )
 
 _SLOW: set = set()          # kinds that took too long on this machine / data: dropped from the rest of the run (their signals are all-False)
-_SLOW_SECONDS = 6.0
+_SLOW_SECONDS = 4.0
 
 
-def series_for(df: pd.DataFrame, kind: str, period: int) -> np.ndarray:
-    """The indicator as a float array aligned to ``df`` (NaN when it cannot be computed). Slow kinds are blacklisted after the first try."""
-    n = len(df)
-    if kind in _SLOW:
-        return np.full(n, np.nan)
+def _compute_series(df: pd.DataFrame, kind: str, period: int):
+    """One indicator as a float array, or None when it cannot run on this frame / is too slow here (blacklisted for the rest of the run)."""
     from app.strategy.indicators import build_indicator_series
     t0 = time.time()
     try:
         out = build_indicator_series(df, kind, int(period)).to_numpy(float)
     except Exception:  # noqa: BLE001 -- a kind that cannot run on this frame simply never fires
-        return np.full(n, np.nan)
+        return None
     if time.time() - t0 > _SLOW_SECONDS:
         _SLOW.add(kind)
+    return out
+
+
+_BOOKS: dict = {}
+
+
+def _book_for(df: pd.DataFrame) -> dict:
+    """Per-frame scratch (NOT ``df.attrs``: pandas deep-copies attrs on every slice/copy, which made every operation on the frame copy the cache)."""
+    key = id(df)
+    book = _BOOKS.get(key)
+    if book is None:
+        book = _BOOKS[key] = {}
+        try:
+            weakref.finalize(df, _BOOKS.pop, key, None)       # dies with the frame, so a reused id() can never see a stale entry
+        except TypeError:
+            pass
+    return book
+
+
+def series_for(df: pd.DataFrame, kind: str, period: int) -> np.ndarray:
+    """The indicator as a float array aligned to ``df`` (NaN when it cannot be computed). Slow kinds are blacklisted after the first try.
+
+    2026-10-30 (speed): many of the ~300 kinds ignore ``period`` (calendar / time-of-day / session-profile features). The search asks for
+    each of them at four periods, so it used to compute the identical series four times -- the day-profile family alone cost ~25 s a run.
+    The first two periods of a kind are compared; if the arrays are identical the kind is period-free and every later period reuses the
+    first array (per frame, held per frame and dropped with it). Results are bit-identical to before."""
+    n = len(df)
+    if kind in _SLOW:
+        return np.full(n, np.nan)
+    book = _book_for(df)
+    rec = book.setdefault(kind, {"by_period": {}, "free": None})
+    per = rec["by_period"]
+    p = int(period)
+    if p in per:
+        return per[p]
+    if rec["free"] is True:
+        return next(iter(per.values()))
+    out = _compute_series(df, kind, p)
+    if out is None:
+        out = np.full(n, np.nan)
+    per[p] = out
+    if rec["free"] is None and len(per) == 2:
+        a, b = list(per.values())
+        rec["free"] = bool(a.shape == b.shape and np.array_equal(a, b, equal_nan=True))
+        if rec["free"]:
+            rec["by_period"] = {p_: a for p_ in per}
     return out
 
 

@@ -5,11 +5,17 @@
 {% include '_head_common.html' %}
 <style>
   * { box-sizing: border-box; }
-  body { background: var(--bg, var(--bg)); min-height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0; padding: 20px; }
+  /* The card lives in its own fixed, self-centring layer: nothing injected into <body> (backdrop scene, verse bar, avatar...) can
+     push it around, and a short window scrolls instead of clipping. */
+  html, body { height: 100%; margin: 0; }
+  .gate-wrap { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 2; overflow-y: auto; display: flex; padding: 20px; }
+  .gate-wrap > form { margin: auto; }
   .activate-card {
     background: var(--panel-2); border: 1px solid var(--border); border-radius: 14px;
     padding: 28px 26px; width: 100%; max-width: 380px;
+    box-shadow: 0 24px 60px -18px rgba(0, 0, 0, .65);
   }
+  html:not([data-theme="light"]) .activate-card { background: rgba(8, 20, 24, .78); -webkit-backdrop-filter: blur(14px) saturate(1.2); backdrop-filter: blur(14px) saturate(1.2); border-color: rgba(130, 235, 220, .16); }
   .activate-icon { font-size: 26px; margin-bottom: 6px; text-align: center; }
   h1 { font-size: 17px; margin: 0 0 4px; color: var(--text); text-align: center; }
   p.lede { color: var(--text-muted); font-size: 13px; margin: 0 0 20px; text-align: center; }
@@ -34,6 +40,7 @@
 </style>
 </head>
 <body>
+  <div class="gate-wrap">
   <form class="activate-card" method="POST" action="/activate/submit">
     <div class="activate-icon">&#128273;</div>
     <h1>Activate T58</h1>
@@ -59,6 +66,7 @@
     {% if error %}<p class="error-note">{{ error }}</p>{% endif %}
     <p class="hint">No license yet? Purchases and support are handled through Whop.</p>
   </form>
+  </div>
 <script>
 (function(){
   var btn=document.getElementById('test-conn'); if(!btn) return;

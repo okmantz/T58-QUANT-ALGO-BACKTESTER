@@ -59,8 +59,12 @@
   .pz-tile:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
 
   .pz-tile[data-bg="obsidian-gold"] { background-image: url("/static/backgrounds/obsidian-gold-thumb.webp"); }
-  .pz-tile[data-bg="sakura-reverie"] { background-image: url("/static/backgrounds/sakura-reverie-thumb.webp"); }
+  .pz-tile[data-bg="sakura-reverie"] { background-image: url("/static/backgrounds/sakura-reverie-hd-thumb.webp"); }
   .pz-tile[data-bg="abyssal-blue"] { background-image: url("/static/backgrounds/abyssal-blue-thumb.webp"); }
+  .pz-tile[data-bg="nordic-kingdom"] { background-image: url("/static/backgrounds/nordic-kingdom-thumb.webp"); }
+  .pz-tile[data-bg="endless-sands"] { background-image: url("/static/backgrounds/endless-sands-thumb.webp"); }
+  .pz-tile[data-bg="coastal-italy"] { background-image: url("/static/backgrounds/coastal-italy-thumb.webp"); }
+  .pz-tile[data-bg="bioluminescence"] { background-image: url("/static/backgrounds/bioluminescence-thumb.webp"); }
   .pz-tile.locked { cursor: not-allowed; border-color: var(--border); }
   .pz-tile.locked::before { content: ""; position: absolute; inset: 0; background: rgba(2, 6, 10, .66); z-index: 1; }
   .pz-tile .pz-lock { display: none; position: absolute; top: 7px; right: 7px; z-index: 2; width: 26px; height: 26px; border-radius: 50%; place-items: center; background: rgba(0, 0, 0, .7); color: #fff; }
@@ -93,6 +97,28 @@
   .rp-share { display: flex; flex-wrap: wrap; gap: 8px; }
   .rp-share .secondary-btn { margin-top: 0; }
   @media (max-width: 520px) { .rp-show { grid-template-columns: 1fr; } }
+  /* Workspace presets: six whole-workspace looks (unlockable). The preview card is a miniature of the real dashboard in that preset's colours. */
+  .ws-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; margin: 10px 0 4px; }
+  .ws-tile { position: relative; text-align: left; padding: 10px; border-radius: 14px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); cursor: pointer; font: inherit; transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease; }
+  .ws-tile:hover { transform: translateY(-2px); border-color: var(--border-light); }
+  .ws-tile.on { border-color: var(--teal); box-shadow: 0 0 0 1px var(--teal), 0 8px 26px rgba(0, 0, 0, .35); }
+  .ws-tile.locked { opacity: .62; cursor: not-allowed; filter: saturate(.7); }
+  .ws-tile.locked:hover { transform: none; }
+  .ws-prev { display: grid; grid-template-columns: 22% 1fr; gap: 5px; height: 104px; padding: 6px; border-radius: 9px; background: var(--wb); border: 1px solid var(--wl); overflow: hidden; position: relative; }
+  .ws-prev .sb { border-radius: 5px; background: var(--wp); border: 1px solid var(--wl); display: flex; flex-direction: column; gap: 4px; padding: 5px 4px; }
+  .ws-prev .sb i { display: block; height: 4px; border-radius: 2px; background: var(--wm); opacity: .55; }
+  .ws-prev .sb i:first-child { background: var(--wa); opacity: 1; }
+  .ws-prev .mn { display: grid; grid-template-rows: 9px 24px 1fr; gap: 5px; }
+  .ws-prev .mn .hd { width: 52%; border-radius: 3px; background: var(--wt); opacity: .8; }
+  .ws-prev .mn .kp { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+  .ws-prev .mn .kp b { border-radius: 4px; background: var(--wp); border: 1px solid var(--wl); box-shadow: var(--wg, none); }
+  .ws-prev .mn .ch { border-radius: 5px; background: var(--wp); border: 1px solid var(--wl); position: relative; overflow: hidden; box-shadow: var(--wg, none); }
+  .ws-prev .mn .ch svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .ws-tile .nm { display: block; margin-top: 9px; font-weight: 600; font-size: 14px; letter-spacing: .01em; }
+  .ws-tile .tg { display: block; margin-top: 2px; font-size: 11.5px; line-height: 1.35; color: var(--text-muted); }
+  .ws-tile .lock { position: absolute; top: 14px; right: 14px; width: 22px; height: 22px; border-radius: 999px; display: none; place-items: center; background: rgba(0, 0, 0, .6); color: #fff; }
+  .ws-tile.locked .lock { display: grid; }
+  .ws-tile .lock svg { width: 12px; height: 12px; }
   .pz-tile[data-bg="mountains"] { background-image: url("/static/dashboard-mountains.webp"); }
   html[data-theme="light"] .pz-tile[data-bg="mountains"] { background-image: url("/static/dashboard-mountains-light.webp"); }
   .pz-tile[data-bg="spring"] { background-image: url("/static/backgrounds/spring-dark.webp"); }
@@ -326,6 +352,7 @@
       <div class="pz-group">Classic</div>
       <div class="pz-grid">
         <button type="button" class="pz-tile" data-bg="mountains" role="radio"><span>Mountains (default)</span></button>
+        <button type="button" class="pz-tile" data-bg="nordic-kingdom" role="radio"><span>Nordic Kingdom</span></button>
       </div>
       <div class="pz-group">Seasons</div>
       <div class="pz-grid">
@@ -348,6 +375,9 @@
         <button type="button" class="pz-tile" data-bg="obsidian-gold" role="radio"><span>Obsidian Gold</span><i class="pz-lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
         <button type="button" class="pz-tile" data-bg="sakura-reverie" role="radio"><span>Sakura Reverie</span><i class="pz-lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
         <button type="button" class="pz-tile" data-bg="abyssal-blue" role="radio"><span>Abyssal Blue</span><i class="pz-lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
+        <button type="button" class="pz-tile" data-bg="endless-sands" role="radio"><span>Endless Sands</span><i class="pz-lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
+        <button type="button" class="pz-tile" data-bg="coastal-italy" role="radio"><span>Coastal Italy</span><i class="pz-lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
+        <button type="button" class="pz-tile" data-bg="bioluminescence" role="radio"><span>Bioluminescence</span><i class="pz-lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
       </div>
     </div>
     <label class="pz-switch"><input type="checkbox" id="pz-fx"> Gentle background motion (scenes, snow, leaves, petals, fireflies)</label>
@@ -364,6 +394,20 @@
       <button type="button" class="ut-tile" data-ut="deep-space" role="radio"><span class="sw" style="background:radial-gradient(circle at 70% 20%,#5a46d6,#0c0c22 62%)"></span><span class="nm">Deep Space</span><i class="lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
       <button type="button" class="ut-tile" data-ut="crimson-protocol" role="radio"><span class="sw" style="background:linear-gradient(135deg,#080304 40%,#8a1424 75%,#ff3d57)"></span><span class="nm">Crimson Protocol</span><i class="lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
     </div>
+
+    <hr class="divider">
+    <label>Workspace presets</label>
+    <p class="field-note" style="margin-top:0">Six complete looks for the whole workspace &mdash; colour, surfaces, type and motion together. Each one is a reward for a milestone (hover a locked one to see what to do). A preset replaces the interface theme above while it is on; pick Standard to go back.</p>
+    <div class="ws-grid" id="ws-grid" role="radiogroup" aria-label="Workspace presets">
+        <button type="button" class="ws-tile on" data-ws="" role="radio" aria-checked="true"><span class="ws-prev" style="--wb:#05070a;--wp:#0d1017;--wl:#1c2230;--wa:#35e0b0;--wm:#8a93a6;--wt:#e7ebf2"><span class="sb"><i></i><i></i><i></i><i></i></span><span class="mn"><span class="hd"></span><span class="kp"><b></b><b></b><b></b></span><span class="ch"><svg viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true"><polyline fill="none" stroke="#35e0b0" stroke-width="2" points="0,32 14,28 28,30 42,18 56,22 70,10 84,14 100,4"/></svg></span></span></span><span class="nm">Standard</span><span class="tg">The classic T58 look.</span></button>
+        <button type="button" class="ws-tile" data-ws="obsidian" role="radio" aria-checked="false"><span class="ws-prev" style="--wb:#050506;--wp:#0f0f12;--wl:#26262c;--wa:#9fb3b0;--wm:#8a8a94;--wt:#d8d8dc;"><span class="sb"><i></i><i></i><i></i><i></i></span><span class="mn"><span class="hd"></span><span class="kp"><b></b><b></b><b></b></span><span class="ch"><svg viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true"><polyline fill="none" stroke="#9fb3b0" stroke-width="2" points="0,32 14,28 28,30 42,18 56,22 70,10 84,14 100,4"/></svg></span></span></span><span class="nm">Obsidian</span><span class="tg">Black surfaces, muted accents, minimal animations.</span><i class="lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
+        <button type="button" class="ws-tile" data-ws="cyberpunk" role="radio" aria-checked="false"><span class="ws-prev" style="--wb:#0a0518;--wp:#150a33;--wl:#3a1f7a;--wa:#19f3ff;--wm:#8f7fd0;--wt:#efe9ff;--wg:0 0 8px rgba(25,243,255,.3);"><span class="sb"><i></i><i></i><i></i><i></i></span><span class="mn"><span class="hd"></span><span class="kp"><b></b><b></b><b></b></span><span class="ch"><svg viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true"><polyline fill="none" stroke="#19f3ff" stroke-width="2" points="0,32 14,28 28,30 42,18 56,22 70,10 84,14 100,4"/></svg></span></span></span><span class="nm">Cyberpunk</span><span class="tg">Neon accents, glowing borders, futuristic details.</span><i class="lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
+        <button type="button" class="ws-tile" data-ws="nordic" role="radio" aria-checked="false"><span class="ws-prev" style="--wb:#ebe4d6;--wp:#f7f2e8;--wl:#d1c4a8;--wa:#7a4e26;--wm:#8a7d66;--wt:#2a251d;--wg:0 1px 3px rgba(70,50,20,.18);"><span class="sb"><i></i><i></i><i></i><i></i></span><span class="mn"><span class="hd"></span><span class="kp"><b></b><b></b><b></b></span><span class="ch"><svg viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true"><polyline fill="none" stroke="#7a4e26" stroke-width="2" points="0,32 14,28 28,30 42,18 56,22 70,10 84,14 100,4"/></svg></span></span></span><span class="nm">Nordic</span><span class="tg">Warm neutrals, soft shadows, spacious layouts.</span><i class="lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
+        <button type="button" class="ws-tile" data-ws="evergreen" role="radio" aria-checked="false"><span class="ws-prev" style="--wb:#04100b;--wp:#0b2418;--wl:#1c4a35;--wa:#3ddc97;--wm:#6fa488;--wt:#dff3e6;"><span class="sb"><i></i><i></i><i></i><i></i></span><span class="mn"><span class="hd"></span><span class="kp"><b></b><b></b><b></b></span><span class="ch"><svg viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true"><polyline fill="none" stroke="#3ddc97" stroke-width="2" points="0,32 14,28 28,30 42,18 56,22 70,10 84,14 100,4"/></svg></span></span></span><span class="nm">Evergreen</span><span class="tg">Deep greens, natural accents, subtle ambient effects.</span><i class="lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
+        <button type="button" class="ws-tile" data-ws="sovereign" role="radio" aria-checked="false"><span class="ws-prev" style="--wb:#040302;--wp:#100d07;--wl:#4a3c16;--wa:#d4af37;--wm:#9c8d5c;--wt:#f5edd9;"><span class="sb"><i></i><i></i><i></i><i></i></span><span class="mn"><span class="hd"></span><span class="kp"><b></b><b></b><b></b></span><span class="ch"><svg viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true"><polyline fill="none" stroke="#d4af37" stroke-width="2" points="0,32 14,28 28,30 42,18 56,22 70,10 84,14 100,4"/></svg></span></span></span><span class="nm">Sovereign</span><span class="tg">Black, gold, refined typography, elegant details.</span><i class="lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
+        <button type="button" class="ws-tile" data-ws="midnight" role="radio" aria-checked="false"><span class="ws-prev" style="--wb:#060d26;--wp:#12224f;--wl:#2c4a8f;--wa:#6ea8ff;--wm:#8399c7;--wt:#e8efff;--wg:0 0 10px rgba(110,168,255,.18);"><span class="sb"><i></i><i></i><i></i><i></i></span><span class="mn"><span class="hd"></span><span class="kp"><b></b><b></b><b></b></span><span class="ch"><svg viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true"><polyline fill="none" stroke="#6ea8ff" stroke-width="2" points="0,32 14,28 28,30 42,18 56,22 70,10 84,14 100,4"/></svg></span></span></span><span class="nm">Midnight</span><span class="tg">Navy surfaces, cool blue accents, glass effects.</span><i class="lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
+    </div>
+
 
     <hr class="divider">
     <label class="pz-switch"><input type="checkbox" id="pz-verse"> Show a Bible verse at the top of every page</label>
@@ -572,6 +616,15 @@
         t.addEventListener('click', function () { P.setUiTheme(name); markUt(); });
       });
       markUt();
+      // workspace presets
+      var wsGrid = document.getElementById('ws-grid'), wsTiles = [].slice.call(wsGrid.querySelectorAll('.ws-tile'));
+      function markWs() { var cur = P.workspace ? P.workspace() : ''; wsTiles.forEach(function (t) { var on = t.dataset.ws === cur; t.classList.toggle('on', on); t.setAttribute('aria-checked', on ? 'true' : 'false'); }); }
+      wsTiles.forEach(function (t) {
+        var name = t.dataset.ws, meta = name ? (u.workspaces || {})[name] : null;
+        if (meta && !meta.unlocked) { t.classList.add('locked'); t.setAttribute('aria-disabled', 'true'); wireTip(t, meta.label + ' \u00b7 locked', meta.text); return; }
+        t.addEventListener('click', function () { if (P.setWorkspace) P.setWorkspace(name); markWs(); });
+      });
+      markWs();
     }).catch(function () {});
   }
   function initProfile() {

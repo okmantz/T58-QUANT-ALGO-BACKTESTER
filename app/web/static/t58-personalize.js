@@ -16,7 +16,8 @@
   var SEASON_BGS = ['spring', 'summer', 'autumn', 'winter'];
   // Animated scenes: name -> CSS class of its motion layer (see "Scene motion" in theme.css)
   var SCENES = { 'cosmic-drift': 'cosmic', 'obsidian': 'obsidian', 'midnight-ocean': 'ocean', 'rainfall-district': 'rain', 'silent-sanctuary': 'sanctuary', 'misty-forest': 'forest',
-    'obsidian-gold': 'gold', 'sakura-reverie': 'sakura', 'abyssal-blue': 'abyss' };
+    'obsidian-gold': 'gold', 'sakura-reverie': 'sakura', 'abyssal-blue': 'abyss',
+    'nordic-kingdom': 'nordic', 'endless-sands': 'sands', 'coastal-italy': 'italy', 'bioluminescence': 'biolum' };
   // Scenes earned through achievements. The server lists the still-locked ones in window.__T58_LOCKED (and drops a locked
   // choice from the synced preferences), so a locked scene is never applied -- not from a synced pref, not from this browser.
   function locked(kind, name) { try { return ((window.__T58_LOCKED || {})[kind] || []).indexOf(name) >= 0; } catch (e) { return false; } }
@@ -32,6 +33,21 @@
   function isLight() { return document.documentElement.getAttribute('data-theme') === 'light'; }
   /* ------------------------------------------------------------------ interface themes (unlockable) */
   var UI_THEMES = { 'obsidian-gold': 'Obsidian Gold', 'midnight-azure': 'Midnight Azure', 'terminal-green': 'Terminal Green', 'deep-space': 'Deep Space', 'crimson-protocol': 'Crimson Protocol' };
+  // Workspace presets (unlockable whole-workspace looks; see workspace-presets.css)
+  var WS_PRESETS = { obsidian: 'Obsidian', cyberpunk: 'Cyberpunk', nordic: 'Nordic', evergreen: 'Evergreen', sovereign: 'Sovereign', midnight: 'Midnight' };
+  function wsPreset() { var v = get('t58-ws'); return WS_PRESETS[v] && !locked('ws', v) ? v : ''; }
+  function applyWs() {
+    var root = document.documentElement, w = wsPreset();
+    if (!w) { root.removeAttribute('data-ws'); return; }
+    root.setAttribute('data-ws', w);
+    if (root.getAttribute('data-theme')) root.removeAttribute('data-theme');   // a preset owns light/dark
+  }
+  function setWs(name) {
+    if (name && (!WS_PRESETS[name] || locked('ws', name))) return false;
+    if (name) set('t58-ws', name); else { try { localStorage.removeItem('t58-ws'); } catch (e) {} }
+    applyWs(); swap();
+    return true;
+  }
   function uiTheme() { var v = get('t58-ui-theme'); return UI_THEMES[v] && !locked('theme', v) ? v : ''; }
   function applyUiTheme() {
     var root = document.documentElement, t = uiTheme();
@@ -272,6 +288,8 @@
     function cnt(n) { return small ? Math.max(3, Math.round(n * 0.55)) : n; }
     var layer = document.createElement('div');
     layer.id = SCENE_ID; layer.className = 't58-scene-fx t58-fx-' + kind; layer.setAttribute('aria-hidden', 'true');
+    // pinned inline too: the layer must never join the page flow, whatever stylesheet is (or is not) loaded
+    layer.style.cssText = 'position:fixed;top:0;right:0;bottom:0;left:0;z-index:-1;pointer-events:none;overflow:hidden';
     var i, e;
     if (kind === 'cosmic') {
       layer.appendChild(mk('neb a')); layer.appendChild(mk('neb b'));
@@ -319,7 +337,7 @@
         e = mk('leaf', { '--x': f1(rnd(0, 100)) + '%', '--sz': f1(rnd(9, 14)) + 'px', '--dur': f1(rnd(26, 40)) + 's', '--delay': f1(-rnd(0, 36)) + 's', '--sway': f1(rnd(16, 40)) + 'px', '--swaydur': f1(rnd(4.5, 8)) + 's', '--spin': f1(rnd(180, 460)) + 'deg', '--o': f1(rnd(.5, .8)) });
         var b = document.createElement('b'); b.className = 'l' + (i % 2); e.appendChild(b); layer.appendChild(e);
       }
-    } else if (kind === 'gold' || kind === 'sakura' || kind === 'abyss') {
+    } else if (kind === 'gold' || kind === 'sakura' || kind === 'abyss' || kind === 'nordic' || kind === 'sands' || kind === 'italy' || kind === 'biolum') {
       // canvas / WebGL scenes (t58-scene-canvas.js): the picture itself moves. If the canvas can't start, the still picture stays.
       sceneStage = window.T58SceneCanvas ? window.T58SceneCanvas.mount(kind, layer) : null;
     } else if (kind === 'forest') {
@@ -346,7 +364,7 @@
   }
 
   window.T58Personalize = {
-    backgrounds: BGS, isLocked: locked, uiThemes: UI_THEMES, uiTheme: uiTheme, setUiTheme: setUiTheme, seasons: SEASON_BGS, scenes: Object.keys(SCENES), bg: bg, verse: verseOn, fx: fxOn,
+    backgrounds: BGS, isLocked: locked, uiThemes: UI_THEMES, workspaces: WS_PRESETS, workspace: wsPreset, setWorkspace: setWs, uiTheme: uiTheme, setUiTheme: setUiTheme, seasons: SEASON_BGS, scenes: Object.keys(SCENES), bg: bg, verse: verseOn, fx: fxOn,
     setBg: function (name) { if (BGS.indexOf(name) < 0 || locked('bg', name)) name = 'mountains'; set('t58-bg', name); applyBg(); swap(); buildAmbient(); buildScene(); syncAmbientPause(); },
     setVerse: function (on) { set('t58-verse', on ? '1' : '0'); renderVerse(); },
     setFx: function (on) { set('t58-fx', on ? '1' : '0'); buildAmbient(); buildScene(); },
@@ -355,17 +373,18 @@
   };
 
   applyBg();
-  applyUiTheme();
+  applyUiTheme(); applyWs();
   applyAccent();
   cacheAccentVars();
   // The theme toggle (t58-chrome.js) flips data-theme: swap night <-> day scenes (fade that too) and retune the accent.
   if (window.MutationObserver) {
-    new MutationObserver(function () { applyUiTheme(); swap(); applyAccent(); }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    new MutationObserver(function () { applyUiTheme(); applyWs(); swap(); applyAccent(); }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
   }
   // Another tab changed a preference: follow it.
   window.addEventListener('storage', function (e) {
     if (e.key === 't58-bg') { applyBg(); swap(); buildAmbient(); buildScene(); }
     else if (e.key === 't58-fx') { buildAmbient(); buildScene(); }
+    else if (e.key === 't58-ws') { applyWs(); }
     else if (e.key === 't58-ui-theme') { applyUiTheme(); applyAccent(); }
     else if (e.key === 't58-accent' || e.key === 't58-accent-hex') { applyAccent(); }
     else if (e.key === 't58-verse') renderVerse();

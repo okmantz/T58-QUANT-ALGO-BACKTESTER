@@ -12,12 +12,13 @@ are chained. The only honest check of the CHAIN is to feed it data where the tru
 ``run_surrogate_study`` takes any ``pipeline(df, frames, seed) -> {"candidate": bool, ...}``; ``engine_pipeline`` is the real one
 (DiscoveryEngine on a family subset, full promotion sequence). The result is a ``SurrogateReport`` saved to ``reports/surrogate_gate.json``
 together with a hash of the code that produced it: ``enabled_batches()`` (which ``strategy_space.active_family_names()`` consults)
-returns ``[]`` unless a report exists, was produced by the CURRENT code, shows a false-discovery rate under 5% over >= 20 null runs and
+returns ``[]`` unless a report exists, was produced by the CURRENT code, shows a false-discovery rate under 5% over >= 60 null runs and
 shows the lab can find a planted edge. "Run after every major change" is therefore enforced, not requested: change the engine and the gate
 closes until the study is re-run.
 
 Honest limits: 20 null runs with 0 hits only bounds the false-discovery rate below ~14% at 95% confidence (Clopper-Pearson, reported in
-the file); a gate that proves < 5% needs ~60 clean runs. ``min_null_runs`` is configurable for that reason.
+the file); a gate that proves < 5% needs ~60 clean runs, so the gate itself refuses a report with fewer than 60 null runs or fewer than 10
+runs per planted-edge size (GATE_MIN_NULL_RUNS / GATE_MIN_PLANT_RUNS), whatever the report claims.
 """
 from __future__ import annotations
 
@@ -123,6 +124,12 @@ def clopper_pearson_upper(k: int, n: int, conf: float = 0.95) -> float:
 
 
 # -------------------------------------------------------------------------------------------------------------- the study
+# The shipped gate's evidence floor (report s.12 #7): 60 null runs bound the false-discovery rate under 5% (a rate of 0 in 20 runs only
+# proves < 14%), and >= 10 runs per planted-edge size make the power figure more than an anecdote.
+GATE_MIN_NULL_RUNS = 60
+GATE_MIN_PLANT_RUNS = 10
+
+
 @dataclass
 class SurrogateReport:
     created_at: float
@@ -134,7 +141,7 @@ class SurrogateReport:
     planted: list = field(default_factory=list)        # [{"target_r", "measured_r", "b", "runs", "found"}]
     power: dict = field(default_factory=dict)          # {target_r: share found}
     runs: list = field(default_factory=list)
-    min_null_runs: int = 20
+    min_null_runs: int = 60
     schema: int = GATE_SCHEMA
     opened_batches: list = field(default_factory=lambda: [1])
     notes: list = field(default_factory=list)
@@ -153,8 +160,8 @@ def code_hash(root: Path | None = None) -> str:
     return h.hexdigest()[:20]
 
 
-def run_surrogate_study(pipeline, *, n_null: int = 20, planted_targets=(0.10, 0.20, 0.30), n_planted: int = 3, n_markets: int = 8, days: int = 80,
-                        seed: int = 0, min_null_runs: int = 20, progress=None) -> SurrogateReport:
+def run_surrogate_study(pipeline, *, n_null: int = 60, planted_targets=(0.10, 0.20, 0.30), n_planted: int = 10, n_markets: int = 8, days: int = 80,
+                        seed: int = 0, min_null_runs: int = 60, progress=None) -> SurrogateReport:
     """Run ``pipeline(df, frames, seed)`` on ``n_null`` no-edge surrogates and ``n_planted`` planted surrogates per target size.
     ``frames`` are ``n_markets`` independent surrogates of the same kind (what the pooled cross-market test consumes)."""
     log = progress or (lambda m: None)
@@ -250,8 +257,13 @@ def gate_status(path: Path | None = None, *, now: float | None = None, current_h
     if rep.get("code_hash") != (current_hash or code_hash()):
         reasons.append("the engine code changed since the study ran: re-run it (report item 8: 'run after every major change')")
     n_null = int(rep.get("n_null", 0))
-    if n_null < int(rep.get("min_null_runs", 20)):
-        reasons.append(f"only {n_null} null runs (need >= {rep.get('min_null_runs', 20)})")
+    need_null = max(int(rep.get("min_null_runs", GATE_MIN_NULL_RUNS)), GATE_MIN_NULL_RUNS)     # a report cannot lower its own bar
+    if n_null < need_null:
+        reasons.append(f"only {n_null} null runs (need >= {need_null})")
+    # 2026-10-30 (report s.12 #7): power must rest on >= 10 runs per planted-edge size, or "70% power" is 2 hits in 3 tries.
+    thin = [p_ for p_ in (rep.get("planted") or []) if float(p_.get("target_r", 0)) >= 0.2 - 1e-9 and int(p_.get("runs", 0)) < GATE_MIN_PLANT_RUNS]
+    if thin:
+        reasons.append(f"power measured on too few planted runs ({', '.join(str(int(p_.get('runs', 0))) for p_ in thin)}; need >= {GATE_MIN_PLANT_RUNS} per edge size)")
     if float(rep.get("null_rate", 1.0)) >= max_null_rate:
         reasons.append(f"false-discovery rate {float(rep.get('null_rate', 1.0)):.1%} is not under {max_null_rate:.0%}")
     strong = [v for k, v in (rep.get("power") or {}).items() if float(k) >= 0.2 - 1e-9]

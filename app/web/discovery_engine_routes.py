@@ -158,6 +158,20 @@ def _risk_for(label: str, balance: float, risk_pct: float):
     return risk
 
 
+def _pipeline_risk_for(label: str, balance: float):
+    """The risk model Full Pipeline will use for this market: its default 1% risk on the FULL-SIZE contract (not the Lab's micro stand-in)."""
+    from app.backtest.risk import RiskConfig
+    from app.data.instrument_specs import apply_any_instrument_spec, guess_any_instrument_symbol
+    risk = RiskConfig(initial_balance=balance, risk_mode="percent", risk_value=1.0)
+    sym = guess_any_instrument_symbol(label)
+    if sym:
+        try:
+            risk = apply_any_instrument_spec(risk, sym)
+        except Exception:  # noqa: BLE001
+            pass
+    return risk
+
+
 def _page_context(**extra) -> dict:
     from app.data.storage import list_datasets_grouped_for_picker
     try:
@@ -389,7 +403,7 @@ def _run_lab_job(job_id, df, risk, rules, label, effort, risk_pct, balance, seed
         d, cost = frames[-1][1], frames[-1][2]
         JOB_MANAGER.log(job_id, note)
         JOB_MANAGER.update(job_id, bar_minutes=minutes)
-        JOB_MANAGER.log(job_id, "Searching 29 strategy types with random search, evolution and refinement: train on the first 60%, validate on the next 20%, keep the last 20% sealed. "
+        JOB_MANAGER.log(job_id, "Searching 30 strategy types with random search, evolution and refinement: train on the first 60%, validate on the next 20%, keep the last 20% sealed. "
                                 "Every finalist is then re-run in the real backtester, including the lookahead test.")
         last = {"phase": None}
 
@@ -429,7 +443,8 @@ def _run_lab_job(job_id, df, risk, rules, label, effort, risk_pct, balance, seed
             JOB_MANAGER.log(job_id, f"Couldn't load starting ideas from papers/AI ({type(exc).__name__}); searching without them.")
         verifier = None
         try:
-            verifier = make_verifier(df, {m: f for m, f, _ in frames}, risk, _symbol_for(label))
+            verifier = make_verifier(df, {m: f for m, f, _ in frames}, risk, _symbol_for(label),
+                                     pipeline_risk=_pipeline_risk_for(label, balance), prop_rules=rules)
         except Exception as exc:  # noqa: BLE001 -- without it winners are unproven leads, and the page says so
             JOB_MANAGER.log(job_id, f"Couldn't set up the real-engine check ({exc}); results are not proven.")
             cfg.prove_in_engine = False

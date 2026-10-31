@@ -382,6 +382,19 @@ BACKGROUND_UNLOCKS: dict[str, dict[str, Any]] = {
     "obsidian-gold": {"label": "Obsidian Gold", "ach": ["runs-250", "val-50"]},
     "sakura-reverie": {"label": "Sakura Reverie", "ach": ["jrnl-10", "lib-10"]},
     "abyssal-blue": {"label": "Abyssal Blue", "ach": ["grave-100", "disc-10"]},
+    # 2026-10-30
+    "endless-sands": {"label": "Endless Sands", "ach": ["days-30", "pipe-50"]},
+    "coastal-italy": {"label": "Coastal Italy", "ach": ["inst-25", "pass-5"]},
+    "bioluminescence": {"label": "Bioluminescence", "ach": ["val-150", "strat-100"]},
+}
+# 2026-10-30: Workspace presets (Account -> Personalize -> Workspace presets): whole-workspace looks, each an earned reward.
+WORKSPACE_UNLOCKS: dict[str, dict[str, Any]] = {
+    "obsidian": {"label": "Obsidian", "ach": ["strat-10", "runs-25"]},
+    "evergreen": {"label": "Evergreen", "ach": ["pipe-10", "lib-10"]},
+    "midnight": {"label": "Midnight", "ach": ["val-50", "disc-10"]},
+    "nordic": {"label": "Nordic", "ach": ["jrnl-100", "lib-40"]},
+    "cyberpunk": {"label": "Cyberpunk", "ach": ["disc-50", "pass-5"]},
+    "sovereign": {"label": "Sovereign", "ach": ["pass-25", "val-150"]},
 }
 THEME_UNLOCKS: dict[str, dict[str, Any]] = {
     "obsidian-gold": {"label": "Obsidian Gold", "level": 0, "ach": []},     # free for everyone from the first launch (a preview of what the rest look like)
@@ -426,11 +439,13 @@ def unlock_state(fresh: bool = False) -> dict[str, Any]:
     unlocked, level = _read_unlocked()
     bgs = {k: {"label": v["label"], **_requirement(v, unlocked, level)} for k, v in BACKGROUND_UNLOCKS.items()}
     themes = {k: {"label": v["label"], **_requirement(v, unlocked, level)} for k, v in THEME_UNLOCKS.items()}
+    workspaces = {k: {"label": v["label"], **_requirement(v, unlocked, level)} for k, v in WORKSPACE_UNLOCKS.items()}
     titles = {}
     for tid, name, aid in TITLES:
         row = CATALOGUE.get(aid)
         titles[tid] = {"title": name, "unlocked": aid in unlocked, "needs": (row[3] + " (" + row[4].rstrip(".") + ")") if row else aid}
-    return {"backgrounds": bgs, "themes": themes, "titles": titles, "level": level,
+    return {"backgrounds": bgs, "themes": themes, "workspaces": workspaces, "titles": titles, "level": level,
+            "locked_workspaces": [k for k, v in workspaces.items() if not v["unlocked"]],
             "locked_backgrounds": [k for k, v in bgs.items() if not v["unlocked"]],
             "locked_themes": [k for k, v in themes.items() if not v["unlocked"]]}
 

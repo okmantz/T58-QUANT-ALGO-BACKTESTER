@@ -42,7 +42,7 @@
   }
 
   /* -------------------------------------------------------------- shared canvas plumbing */
-  var IMAGE_OF = { ocean: 'midnight-ocean', forest: 'misty-forest', gold: 'obsidian-gold', sakura: 'sakura-reverie', abyss: 'abyssal-blue' };
+  var IMAGE_OF = { ocean: 'midnight-ocean', forest: 'misty-forest', gold: 'obsidian-gold', sakura: 'sakura-reverie-hd', abyss: 'abyssal-blue', nordic: 'nordic-kingdom', sands: 'endless-sands', italy: 'coastal-italy', biolum: 'bioluminescence' };
 
   function makeStage(kind, layer, drawFrame, setup, opts) {
     opts = opts || {};
@@ -432,17 +432,17 @@
      diagonally across the scene from the blossom tree. */
   var SAKURA_LAKE = 0.60;                    // water starts here, as a fraction of the picture's height
   var PAGODA = { x: 0.317, y: 0.50 };        // paper-lantern windows
-  // The picture is a sunset; every other time of day is a colour wash over it. A full day takes about eight minutes:
+  // The picture is a sunset; every other time of day is a colour wash over it. A full day takes about five minutes, on the wall clock (so it never restarts when you change page):
   // sunrise -> morning -> noon -> afternoon -> sunset -> evening -> night -> (sunrise again).
   // [name, hold s, ease-in s, multiply top, multiply bottom, screen top, screen bottom, night amount (stars, lanterns, fireflies)]
   var SK_PHASES = [
-    ['sunrise',   30, 20, [255, 226, 214], [255, 238, 228], [64, 30, 38],    [38, 20, 24],   0.10],
-    ['morning',   40, 22, [255, 240, 246], [255, 246, 250], [72, 40, 62],    [40, 24, 34],   0],
-    ['noon',      50, 22, [214, 232, 255], [246, 251, 255], [96, 136, 196],  [24, 36, 52],   0],
-    ['afternoon', 40, 22, [255, 244, 224], [255, 249, 236], [70, 58, 22],    [30, 22, 8],    0],
-    ['sunset',    60, 22, [255, 255, 255], [255, 255, 255], [0, 0, 0],       [0, 0, 0],      0],
-    ['evening',   35, 22, [156, 132, 198], [128, 116, 170], [22, 14, 48],    [8, 6, 26],     0.45],
-    ['night',     50, 24, [58, 74, 142],   [44, 58, 112],   [4, 8, 26],      [0, 0, 8],      1]
+    ['sunrise',   12, 20, [255, 226, 214], [255, 238, 228], [64, 30, 38],    [38, 20, 24],   0.10],
+    ['morning',   16, 22, [255, 240, 246], [255, 246, 250], [72, 40, 62],    [40, 24, 34],   0],
+    ['noon',      20, 22, [214, 232, 255], [246, 251, 255], [96, 136, 196],  [24, 36, 52],   0],
+    ['afternoon', 16, 22, [255, 244, 224], [255, 249, 236], [70, 58, 22],    [30, 22, 8],    0],
+    ['sunset',    24, 22, [255, 255, 255], [255, 255, 255], [0, 0, 0],       [0, 0, 0],      0],
+    ['evening',   14, 22, [156, 132, 198], [128, 116, 170], [22, 14, 48],    [8, 6, 26],     0.45],
+    ['night',     20, 24, [58, 74, 142],   [44, 58, 112],   [4, 8, 26],      [0, 0, 8],      1]
   ];
   var SK_START = 4;                          // start the day on the sunset (the picture as painted)
   var SK_TOTAL = SK_PHASES.reduce(function (a, p) { return a + p[1] + p[2]; }, 0);
@@ -505,7 +505,9 @@
   }
   function sakuraFrame(st, dt) {
     var ctx = st.ctx, W = st.W, H = st.H, M = st.M, t = st.t, d = st.dpr, ly = st.lakeY, base = st.base;
-    var sky = skyAt(t);
+    // 2026-10-30: the day cycle runs on the WALL CLOCK, not the stage's own timer, so navigating to another page (a fresh stage, t=0) or
+    // opening a second tab continues the same sunrise -> night sweep instead of restarting it.
+    var sky = skyAt(Date.now() / 1000);
     // land + sky: the picture
     ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
     ctx.drawImage(base, M, 0, W, ly, 0, 0, W, ly);
@@ -752,7 +754,7 @@
     st.swm = mk;
     st.motes = []; var nm = st.small ? 46 : 110;
     for (var m = 0; m < nm; m++) st.motes.push({ x: rnd(0, W), y: rnd(0, H), z: rnd(0.3, 1), ph: rnd(0, 6.28), tw: rnd(0.3, 1.1) });
-    st.whale = { spr: whaleSprite(Math.round(W * 0.22), Math.round(W * 0.22 * 0.34)), x: 0, dir: Math.random() < 0.5 ? 1 : -1, wait: 6, active: false, y: 0.74, speed: 0 };
+    st.whale = { spr: whaleSprite(Math.round(W * 0.30), Math.round(W * 0.30 * 0.34)), x: 0, dir: Math.random() < 0.5 ? 1 : -1, wait: 1.5, active: false, y: 0.74, speed: 0 };
     var fs = st.small ? 0.8 : 1;
     st.fishSp = { sardine: fishSprite('sardine', 30 * d * fs), mackerel: fishSprite('mackerel', 40 * d * fs), lantern: fishSprite('lantern', 24 * d * fs), tuna: fishSprite('tuna', Math.max(90 * d, W * 0.085)) };
     st.schools = []; var kinds = ['sardine', 'mackerel', 'lantern'], ns = st.small ? 2 : 3;
@@ -843,12 +845,12 @@
     var Wh = st.whale, spr = Wh.spr, wl = spr.width;
     if (!Wh.active) {
       Wh.wait -= dt;
-      if (Wh.wait <= 0) { Wh.active = true; Wh.dir = -Wh.dir; Wh.speed = (W + wl) / rnd(130, 170); Wh.x = Wh.dir > 0 ? -wl : W; Wh.y = rnd(0.26, 0.36); }
+      if (Wh.wait <= 0) { Wh.active = true; Wh.dir = -Wh.dir; Wh.speed = (W + wl) / rnd(70, 95); Wh.x = Wh.dir > 0 ? -wl : W; Wh.y = rnd(0.26, 0.36); }
     } else {
       Wh.x += Wh.dir * Wh.speed * dt;
-      if ((Wh.dir > 0 && Wh.x > W) || (Wh.dir < 0 && Wh.x < -wl)) { Wh.active = false; Wh.wait = rnd(35, 70); }
+      if ((Wh.dir > 0 && Wh.x > W) || (Wh.dir < 0 && Wh.x < -wl)) { Wh.active = false; Wh.wait = rnd(6, 14); }
       var fadeIn = Math.min(smooth(-wl, wl * 0.2, Wh.x), smooth(W, W - wl * 1.2, Wh.x));
-      var alpha = (light ? 0.28 : 0.42) * (Wh.dir > 0 ? smooth(-wl, wl * 0.3, Wh.x) * smooth(W + wl * 0.1, W - wl, Wh.x) : smooth(W, W - wl * 0.3, Wh.x) * smooth(-wl * 0.9, wl * 0.1, Wh.x));
+      var alpha = (light ? 0.55 : 0.78) * (Wh.dir > 0 ? smooth(-wl, wl * 0.3, Wh.x) * smooth(W + wl * 0.1, W - wl, Wh.x) : smooth(W, W - wl * 0.3, Wh.x) * smooth(-wl * 0.9, wl * 0.1, Wh.x));
       if (!st.whaleTmp) { st.whaleTmp = document.createElement('canvas'); st.whaleTmp.width = wl; st.whaleTmp.height = Math.round(spr.height * 1.5); }
       var wt = st.whaleTmp, wx = wt.getContext('2d'), N = 36, sw = wl / N, off = Math.round(spr.height * 0.25);
       wx.clearRect(0, 0, wt.width, wt.height);                 // slices are composed at full strength, THEN faded as one image (no seams)
@@ -864,6 +866,218 @@
     }
   }
 
+  /* -------------------------------------------------------------- 2026-10-30 scenes: Nordic Kingdom, Endless Sands, Coastal Italy, Bioluminescence */
+  function baseSetup(st) {
+    var W = st.W, H = st.H, r = coverRect(st.img.naturalWidth, st.img.naturalHeight, W, H, scenePos());
+    var b = document.createElement('canvas'); b.width = W; b.height = H;
+    var g = b.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(st.img, r.x, r.y, r.w, r.h);
+    st.base = b; st.rect = r; st.blobs = {};
+  }
+  function PT(st, u, v) { return { x: st.rect.x + u * st.rect.w, y: st.rect.y + v * st.rect.h }; }
+  function blobSprite(st, key, rgb) {
+    if (st.blobs[key]) return st.blobs[key];
+    var s = 128, c = document.createElement('canvas'); c.width = c.height = s; var g = c.getContext('2d');
+    var gr = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+    gr.addColorStop(0, 'rgba(' + rgb + ',1)'); gr.addColorStop(0.5, 'rgba(' + rgb + ',.42)'); gr.addColorStop(1, 'rgba(' + rgb + ',0)');
+    g.fillStyle = gr; g.fillRect(0, 0, s, s); return (st.blobs[key] = c);
+  }
+  // re-draw a band of the picture in thin strips pushed sideways by travelling waves (water ripple / heat haze / swaying flowers)
+  function waveBand(ctx, st, u0, u1, v0, v1, amp, wl, spd, t, ph) {
+    var r = st.rect, x0 = Math.max(0, r.x + u0 * r.w), x1 = Math.min(st.W, r.x + u1 * r.w), y0 = Math.max(0, r.y + v0 * r.h), y1 = Math.min(st.H, r.y + v1 * r.h);
+    var step = Math.max(2, Math.round(3 * st.dpr));
+    if (x1 <= x0 || y1 <= y0) return;
+    ctx.save(); ctx.beginPath(); ctx.rect(x0, y0, x1 - x0, y1 - y0); ctx.clip();
+    for (var y = y0; y < y1; y += step) {
+      var k = (y - y0) / (y1 - y0), fade = smooth(0, 0.14, k) * (1 - smooth(0.88, 1, k));
+      var dx = (Math.sin(y / wl + t * spd + (ph || 0)) + 0.5 * Math.sin(y / (wl * 0.43) - t * spd * 1.3)) * amp * fade * (0.5 + k);
+      ctx.drawImage(st.base, x0, y, x1 - x0, step + 1, x0 + dx, y, x1 - x0, step + 1);
+    }
+    ctx.restore();
+  }
+  function driftBlobs(ctx, st, list, sprite, t, alphaMul) {
+    var W = st.W;
+    for (var i = 0; i < list.length; i++) {
+      var c = list[i], x = (((c.u + t * c.sp) % 1.5) + 1.5) % 1.5 - 0.25, p = PT(st, 0, c.v), sz = c.s * st.rect.w;
+      ctx.globalAlpha = c.a * alphaMul * (0.85 + 0.15 * Math.sin(t * 0.07 + c.ph));
+      ctx.drawImage(sprite, x * W - sz / 2, p.y - sz * c.h / 2, sz, sz * c.h);
+    }
+  }
+  function makeBlobs(n, v0, v1, s0, s1, sp0, sp1, a0, a1, h) {
+    var o = []; for (var i = 0; i < n; i++) o.push({ u: rnd(0, 1.4), v: rnd(v0, v1), s: rnd(s0, s1), sp: rnd(sp0, sp1), a: rnd(a0, a1), ph: rnd(0, 6.28), h: h || 0.45 });
+    return o;
+  }
+  function makeStars(n, v0, v1) { var o = []; for (var i = 0; i < n; i++) o.push({ u: rnd(0, 1), v: rnd(v0, v1), r: rnd(0.5, 1.5), ph: rnd(0, 6.28), sp: rnd(0.5, 2.2), a: rnd(0.35, 1) }); return o; }
+  function bolt(x0, y0, x1, y1, rough, out, depth) {
+    if (depth === 0) { out.push([x0, y0, x1, y1]); return; }
+    var mx = (x0 + x1) / 2 + (Math.random() - 0.5) * rough, my = (y0 + y1) / 2 + (Math.random() - 0.5) * rough * 0.25;
+    bolt(x0, y0, mx, my, rough / 2, out, depth - 1); bolt(mx, my, x1, y1, rough / 2, out, depth - 1);
+  }
+  function strike(st) {
+    var W = st.W, H = st.H, d = st.dpr, segs = [], x0 = rnd(0.12, 0.88) * W, y0 = H * rnd(0.0, 0.1), x1 = x0 + rnd(-0.12, 0.12) * W, y1 = PT(st, 0, rnd(0.26, 0.36)).y;
+    bolt(x0, y0, x1, y1, W * 0.07, segs, 6);
+    var br = [], nb = 2 + ((Math.random() * 3) | 0);
+    for (var i = 0; i < nb; i++) {
+      var s = segs[(Math.random() * segs.length * 0.7) | 0], dir = Math.random() < 0.5 ? -1 : 1;
+      bolt(s[0], s[1], s[0] + dir * rnd(0.04, 0.11) * W, s[1] + rnd(0.08, 0.2) * H, W * 0.04, br, 4);
+    }
+    return { main: segs, branches: br, t0: st.t, x: x0, d: d };
+  }
+  function drawStrike(ctx, st, L, k) {
+    var d = st.dpr, passes = [[9 * d, 0.10], [4.5 * d, 0.22], [2 * d, 0.55], [1 * d, 1]];
+    ctx.globalCompositeOperation = 'lighter'; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (var p = 0; p < passes.length; p++) {
+      ctx.lineWidth = passes[p][0]; ctx.strokeStyle = (p < 3 ? 'rgba(150,175,255,' : 'rgba(255,255,255,') + (passes[p][1] * k) + ')';
+      ctx.beginPath(); for (var i = 0; i < L.main.length; i++) { ctx.moveTo(L.main[i][0], L.main[i][1]); ctx.lineTo(L.main[i][2], L.main[i][3]); } ctx.stroke();
+      ctx.lineWidth = passes[p][0] * 0.55; ctx.beginPath();
+      for (var j = 0; j < L.branches.length; j++) { ctx.moveTo(L.branches[j][0], L.branches[j][1]); ctx.lineTo(L.branches[j][2], L.branches[j][3]); } ctx.stroke();
+    }
+  }
+
+  /* Nordic Kingdom: drifting fog, water ripples, flickering village lights, and lightning that strikes in and out */
+  function nordicSetup(st) {
+    baseSetup(st);
+    st.fog = makeBlobs(st.small ? 5 : 8, 0.30, 0.56, 0.5, 0.95, 0.002, 0.006, 0.10, 0.22, 0.35);
+    st.lights = []; for (var i = 0; i < (st.small ? 40 : 90); i++) st.lights.push({ u: rnd(0.50, 0.98), v: rnd(0.505, 0.56), ph: rnd(0, 6.28), sp: rnd(0.6, 2.4), a: rnd(0.4, 1) });
+    st.nextStrike = st.t + rnd(3, 6); st.L = null;
+  }
+  function nordicFrame(st) {
+    var ctx = st.ctx, W = st.W, H = st.H, t = st.t, d = st.dpr, lm = st.light ? 0.65 : 1;
+    ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1; ctx.drawImage(st.base, 0, 0);
+    waveBand(ctx, st, 0, 1, 0.58, 0.84, 1.3 * d, 11 * d, 0.9, t, 0);
+    ctx.globalCompositeOperation = 'lighter';
+    var fog = blobSprite(st, 'fog', '170,190,215'); driftBlobs(ctx, st, st.fog, fog, t, lm);
+    var warm = blobSprite(st, 'warm', '255,190,100');
+    for (var i = 0; i < st.lights.length; i++) {
+      var Lg = st.lights[i], p = PT(st, Lg.u, Lg.v), f = 0.55 + 0.3 * Math.sin(t * Lg.sp + Lg.ph) + 0.15 * Math.sin(t * Lg.sp * 3.1 + Lg.ph * 2), a = Lg.a * f * 0.55 * lm, s = 9 * d;
+      ctx.globalAlpha = a; ctx.drawImage(warm, p.x - s, p.y - s, s * 2, s * 2);
+      var ry = PT(st, 0, 0.51 + (Lg.v - 0.505) * 3.2 + 0.05).y;          // reflection: a wavering streak below the shoreline
+      ctx.globalAlpha = a * 0.5; ctx.drawImage(warm, p.x - s * 0.6 + Math.sin(t * 1.4 + Lg.ph) * 2 * d, ry, s * 1.2, s * 2.6);
+    }
+    // lightning: a calm flicker every so often, striking in and out of the sky
+    if (!st.L && t >= st.nextStrike) st.L = strike(st);
+    if (st.L) {
+      var e = t - st.L.t0, k = Math.max(Math.exp(-e * 4.5), e > 0.22 ? 0.7 * Math.exp(-(e - 0.22) * 5.5) : 0, e > 0.5 ? 0.35 * Math.exp(-(e - 0.5) * 7) : 0);
+      if (e > 1.6) { st.L = null; st.nextStrike = t + rnd(7, 16); }
+      else {
+        var cl = ctx.createLinearGradient(0, 0, 0, H * 0.6);
+        cl.addColorStop(0, 'rgba(140,165,235,' + (0.30 * k * lm) + ')'); cl.addColorStop(1, 'rgba(90,110,170,0)');
+        ctx.globalAlpha = 1; ctx.fillStyle = cl; ctx.fillRect(0, 0, W, H * 0.6);
+        if (e < 0.9) drawStrike(ctx, st, st.L, Math.min(1, k * 1.2) * lm);
+        ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.10 * k * lm; ctx.fillStyle = '#9fb4ff';
+        ctx.fillRect(0, PT(st, 0, 0.58).y, W, H * 0.3);                  // a hint of the flash on the water
+      }
+    }
+    ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+  }
+
+  /* Endless Sands: drifting sand, heat haze, moving clouds, and a traveller walking slowly across the dunes */
+  function sandsSetup(st) {
+    baseSetup(st);
+    st.clouds = makeBlobs(st.small ? 4 : 7, 0.04, 0.30, 0.35, 0.7, 0.003, 0.008, 0.10, 0.22, 0.32);
+    st.sand = []; for (var i = 0; i < (st.small ? 50 : 120); i++) st.sand.push({ x: rnd(0, st.W), y: rnd(st.H * 0.45, st.H), z: rnd(0.3, 1), ph: rnd(0, 6.28), l: rnd(5, 14) });
+    st.walk = { u: 0.12, pause: 0 };
+  }
+  function drawWalker(ctx, st, t, x, y, h, alpha) {
+    var ph = t * 3.0, sw = Math.sin(ph), bob = Math.abs(Math.cos(ph)) * h * 0.025, lw = Math.max(1, h * 0.07);
+    ctx.save(); ctx.globalAlpha = alpha; ctx.lineCap = 'round';
+    ctx.fillStyle = 'rgba(40,18,6,0.35)'; ctx.beginPath(); ctx.ellipse(x - h * 0.55, y + h * 0.02, h * 0.62, h * 0.06, 0, 0, 6.2832); ctx.fill();   // long low shadow
+    ctx.strokeStyle = '#1b0e07'; ctx.fillStyle = '#1b0e07'; ctx.lineWidth = lw;
+    var hip = y - h * 0.46 - bob, sh = hip - h * 0.34;
+    ctx.beginPath(); ctx.moveTo(x, hip); ctx.lineTo(x + sw * h * 0.17, y); ctx.moveTo(x, hip); ctx.lineTo(x - sw * h * 0.17, y); ctx.stroke();   // legs
+    ctx.lineWidth = lw * 1.5; ctx.beginPath(); ctx.moveTo(x, hip); ctx.lineTo(x + h * 0.03, sh); ctx.stroke();                                         // torso
+    ctx.lineWidth = lw * 0.8; ctx.beginPath(); ctx.moveTo(x + h * 0.03, sh + h * 0.03); ctx.lineTo(x + h * 0.03 - sw * h * 0.12, sh + h * 0.22);
+    ctx.moveTo(x + h * 0.03, sh + h * 0.03); ctx.lineTo(x + h * 0.03 + sw * h * 0.12, sh + h * 0.22); ctx.stroke();                                    // arms
+    ctx.beginPath(); ctx.arc(x + h * 0.04, sh - h * 0.07, h * 0.075, 0, 6.2832); ctx.fill();                                                         // head
+    ctx.restore();
+  }
+  function sandsFrame(st, dt) {
+    var ctx = st.ctx, W = st.W, H = st.H, t = st.t, d = st.dpr, lm = st.light ? 0.7 : 1;
+    ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1; ctx.drawImage(st.base, 0, 0);
+    waveBand(ctx, st, 0, 1, 0.34, 0.52, 1.7 * d, 8 * d, 1.5, t, 0);                // heat haze over the far dunes
+    ctx.globalCompositeOperation = 'lighter';
+    driftBlobs(ctx, st, st.clouds, blobSprite(st, 'cl', '255,170,90'), t, lm);
+    var wk = st.walk;
+    if (wk.pause > 0) wk.pause -= dt; else { wk.u += dt / 150; if (wk.u > 0.58) { wk.u = 0.12; wk.pause = 14; } }
+    var p = PT(st, wk.u, 0.585 - (wk.u - 0.12) * 0.16 + Math.sin(wk.u * 25) * 0.003), h = st.rect.h * 0.052 * (1 - (wk.u - 0.12) * 0.25);
+    var edge = smooth(0.12, 0.17, wk.u) * (1 - smooth(0.53, 0.58, wk.u)), moving = wk.pause <= 0;
+    ctx.globalCompositeOperation = 'source-over';
+    if (moving) drawWalker(ctx, st, t, p.x, p.y, h, 0.92 * edge);
+    ctx.globalCompositeOperation = 'source-over'; ctx.fillStyle = '#f2cf96';
+    for (var i = 0; i < st.sand.length; i++) {                                      // wind-blown sand skimming the dunes
+      var S = st.sand[i]; S.x -= (22 + 60 * S.z) * d * dt; S.y += Math.sin(t * 0.8 + S.ph) * 6 * d * dt;
+      if (S.x < -20 * d) { S.x = W + 20 * d; S.y = rnd(H * 0.45, H); }
+      ctx.globalAlpha = (0.12 + 0.3 * S.z) * (0.6 + 0.4 * Math.sin(t * 1.3 + S.ph)) * lm;
+      ctx.fillRect(S.x, S.y, S.l * d * (0.5 + S.z), Math.max(1, 1.1 * d * S.z));
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /* Coastal Italy: gentle waves, swaying flowers, drifting clouds, sunlight shimmer and boats gliding */
+  function italySetup(st) {
+    baseSetup(st);
+    st.clouds = makeBlobs(st.small ? 4 : 7, 0.02, 0.26, 0.3, 0.6, 0.004, 0.01, 0.16, 0.34, 0.36);
+    st.glint = []; for (var i = 0; i < (st.small ? 60 : 150); i++) st.glint.push({ u: rnd(0.32, 0.98), v: rnd(0.56, 0.92), ph: rnd(0, 6.28), sp: rnd(0.8, 3), s: rnd(1, 2.6) });
+    st.boats = []; for (var b = 0; b < 4; b++) st.boats.push({ u: rnd(0.35, 0.95), v: rnd(0.63, 0.86), dir: Math.random() < 0.5 ? 1 : -1, sp: rnd(0.0012, 0.0026), s: rnd(0.9, 1.5) });
+  }
+  function drawBoat(ctx, st, B, t) {
+    var p = PT(st, B.u, B.v), d = st.dpr * B.s, x = p.x, y = p.y + Math.sin(t * 1.1 + B.u * 40) * 0.8 * d, f = B.dir;
+    ctx.save(); ctx.translate(x, y); ctx.scale(f, 1);
+    ctx.globalAlpha = 0.5; ctx.fillStyle = 'rgba(255,255,255,0.8)';                // wake
+    ctx.beginPath(); ctx.moveTo(-5 * d, 1.5 * d); ctx.lineTo(-30 * d, -1 * d); ctx.lineTo(-30 * d, 4 * d); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = 1; ctx.fillStyle = '#f5f1e8'; ctx.beginPath(); ctx.moveTo(-9 * d, 0); ctx.lineTo(10 * d, 0); ctx.lineTo(7 * d, 3.2 * d); ctx.lineTo(-7 * d, 3.2 * d); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#d9dde3'; ctx.fillRect(-3 * d, -3 * d, 6 * d, 3 * d); ctx.fillStyle = '#2a6f9e'; ctx.fillRect(-9 * d, 0.2 * d, 19 * d, 0.9 * d);
+    ctx.restore();
+  }
+  function italyFrame(st, dt) {
+    var ctx = st.ctx, W = st.W, H = st.H, t = st.t, d = st.dpr, lm = st.light ? 0.7 : 1;
+    ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1; ctx.drawImage(st.base, 0, 0);
+    waveBand(ctx, st, 0.30, 1, 0.52, 0.86, 1.6 * d, 12 * d, 1.0, t, 0);            // sea swell
+    waveBand(ctx, st, 0.74, 1, 0.60, 1, 3.2 * d, 38 * d, 1.1, t, 1.2);             // blossoms and leaves swaying in the breeze
+    for (var b = 0; b < st.boats.length; b++) {
+      var B = st.boats[b]; B.u += B.dir * B.sp * dt; if (B.u > 1.02 || B.u < 0.30) { B.dir = -B.dir; B.v = rnd(0.63, 0.86); }
+      drawBoat(ctx, st, B, t);
+    }
+    ctx.globalCompositeOperation = 'lighter';
+    driftBlobs(ctx, st, st.clouds, blobSprite(st, 'cl', '255,255,255'), t, lm * 0.8);
+    ctx.fillStyle = '#fff6d8';
+    for (var i = 0; i < st.glint.length; i++) {                                     // sunlight shimmer on the water
+      var G = st.glint[i], p = PT(st, G.u, G.v), a = Math.pow(Math.max(0, Math.sin(t * G.sp + G.ph)), 6);
+      if (a < 0.02) continue; ctx.globalAlpha = a * 0.75 * lm; ctx.fillRect(p.x, p.y, G.s * d * 3, G.s * d * 0.9);
+    }
+    ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+  }
+
+  /* Bioluminescence: pulsing shoreline glow, rolling waves, twinkling stars, drifting glowing particles */
+  var BIO_SHORE = [[-0.02, 0.60], [0.22, 0.69], [0.45, 0.80], [0.68, 0.90], [0.86, 0.97], [1.02, 1.0]];
+  function bioSetup(st) {
+    baseSetup(st); st.stars = makeStars(st.small ? 70 : 170, 0.0, 0.46);
+    st.motes = []; for (var i = 0; i < (st.small ? 24 : 54); i++) st.motes.push({ u: rnd(0, 1), v: rnd(0.6, 1), ph: rnd(0, 6.28), sp: rnd(0.3, 0.9), z: rnd(0.4, 1) });
+  }
+  function bioFrame(st, dt) {
+    var ctx = st.ctx, W = st.W, H = st.H, t = st.t, d = st.dpr, lm = st.light ? 0.7 : 1;
+    ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1; ctx.drawImage(st.base, 0, 0);
+    waveBand(ctx, st, 0, 1, 0.58, 1, 2.2 * d, 14 * d, 0.8, t, 0);                  // waves rolling in
+    ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = '#e9f1ff';
+    for (var i = 0; i < st.stars.length; i++) {
+      var S = st.stars[i], p = PT(st, S.u, S.v), a = S.a * (0.45 + 0.55 * Math.sin(t * S.sp + S.ph)) * lm;
+      ctx.globalAlpha = Math.max(0, a) * 0.85; ctx.beginPath(); ctx.arc(p.x, p.y, S.r * d, 0, 6.2832); ctx.fill();
+    }
+    var pulse = 0.55 + 0.45 * Math.sin(t * 0.9) * Math.sin(t * 0.37 + 1);           // slow breathing glow along the surf line
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (var pass = 0; pass < 3; pass++) {
+      ctx.lineWidth = [26, 12, 4][pass] * d; ctx.strokeStyle = 'rgba(' + ['30,110,255', '60,170,255', '170,235,255'][pass] + ',' + ([0.10, 0.16, 0.26][pass] * pulse * lm) + ')';
+      ctx.beginPath(); for (var k = 0; k < BIO_SHORE.length; k++) { var q = PT(st, BIO_SHORE[k][0], BIO_SHORE[k][1] + Math.sin(t * 0.6 + k) * 0.004); k ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); }
+      ctx.stroke();
+    }
+    var glow = blobSprite(st, 'bio', '90,200,255');
+    for (var m = 0; m < st.motes.length; m++) {
+      var M = st.motes[m]; M.v -= 0.006 * M.sp * dt; M.u += Math.sin(t * 0.4 + M.ph) * 0.0006; if (M.v < 0.55) { M.v = rnd(0.9, 1); M.u = rnd(0, 1); }
+      var mp = PT(st, M.u, M.v), s = (5 + 7 * M.z) * d; ctx.globalAlpha = (0.2 + 0.5 * M.z) * (0.5 + 0.5 * Math.sin(t * 1.3 * M.sp + M.ph)) * lm;
+      ctx.drawImage(glow, mp.x - s, mp.y - s, s * 2, s * 2);
+    }
+    ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+  }
+
   /* -------------------------------------------------------------- public API */
   window.T58SceneCanvas = {
     mount: function (kind, layer) {
@@ -874,6 +1088,10 @@
         if (kind === 'gold') return makeStage('gold', layer, goldFrame, goldSetup, { gl: true });
         if (kind === 'sakura') return makeStage('sakura', layer, sakuraFrame, sakuraSetup);
         if (kind === 'abyss') return makeStage('abyss', layer, abyssFrame, abyssSetup);
+        if (kind === 'nordic') return makeStage('nordic', layer, nordicFrame, nordicSetup);
+        if (kind === 'sands') return makeStage('sands', layer, sandsFrame, sandsSetup);
+        if (kind === 'italy') return makeStage('italy', layer, italyFrame, italySetup);
+        if (kind === 'biolum') return makeStage('biolum', layer, bioFrame, bioSetup);
       } catch (e) {}
       return null;
     }

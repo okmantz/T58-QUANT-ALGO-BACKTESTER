@@ -1,8 +1,8 @@
-// T58 service worker (v2). Served from /sw.js so its scope is the WHOLE app ("/"). It used to live only at
+// T58 service worker (v4). Served from /sw.js so its scope is the WHOLE app ("/"). It used to live only at
 // /static/sw.js, whose scope is /static/ -- it never controlled "/" or "/dashboard", which is one of the things Chrome
 // checks before it offers "Install app". It caches the app shell + static assets and falls back to a small offline page
 // for navigations. It never caches /run, /reports/ or any POST/API response (those need the live backend).
-const CACHE_NAME = "t58-backtester-shell-v3";
+const CACHE_NAME = "t58-backtester-shell-v4";   // bump to drop every older cache (v3 served stale CSS next to fresh HTML)
 const SHELL_ASSETS = [
   "/static/offline.html", "/manifest.json",
   "/static/icon-192.png", "/static/icon-512.png",
@@ -41,8 +41,20 @@ self.addEventListener("fetch", (event) => {
     );
     return;
   }
-  // Static assets: cache first, refresh in the background.
-  if (url.pathname.startsWith("/static/") || url.pathname === "/manifest.json") {
+  // Code (CSS / JS / JSON / HTML) is NETWORK FIRST: the page's markup always comes fresh from the server, so the stylesheet and
+  // scripts it was written for must be fresh too. (v3 served cached CSS first, so after an update the new page met the OLD
+  // stylesheet -- giant sidebar icons, a squashed lock card.) The cache is only the offline fallback.
+  if (/\.(css|js|json|html)$/.test(url.pathname) || url.pathname === "/manifest.json") {
+    event.respondWith(
+      fetch(req).then((res) => {
+        if (res && res.status === 200) { const copy = res.clone(); caches.open(CACHE_NAME).then((c) => c.put(req, copy)); }
+        return res;
+      }).catch(() => caches.match(req).then((r) => r || new Response("", { status: 503 })))
+    );
+    return;
+  }
+  // Images / fonts under /static: cache first, refresh in the background (new artwork gets a new file name).
+  if (url.pathname.startsWith("/static/")) {
     event.respondWith(
       caches.match(req).then((cached) => {
         const refresh = fetch(req).then((res) => {

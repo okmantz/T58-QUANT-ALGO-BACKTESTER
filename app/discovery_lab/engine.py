@@ -4,7 +4,7 @@ One engine that combines what used to be separate tools -- broad random search, 
 a final proof in the real backtester -- and treats every step as a way to stop a lucky backtest being called a discovery:
 
   0. DATA          the WHOLE history, at one or more bar sizes where trading costs are small next to a normal stop (not a recent slice).
-  1. SEARCH        random sampling over 29 strategy families x their settings x regime filters (side / trend / session / volatility) x exits
+  1. SEARCH        random sampling over 30 strategy families x their settings x regime filters (side / trend / session / volatility) x exits
                    (stop, target, time limit). Families are drawn from the research papers in the Library.
   2. EVOLVE        the best ideas breed (mutation + crossover) for several generations, always scored on the TRAIN slice only.
   3. REFINE        the top ideas are polished by hill-climbing one setting at a time (iterative refinement).

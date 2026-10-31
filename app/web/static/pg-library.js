@@ -197,35 +197,93 @@
   /* ---------------------------------------------------------------- Focus */
   function focus(host) {
     var active = PG.store.get('focus-active', null), minutes = 20, sound = PG.store.get('focus-sound', true), tick = null, sessions = [];
-    host.appendChild(PG.el('p', 'pg-hint', 'Optional. Pick a length and read or work without interruption. No streaks, no reminders: the timer only runs when you start it.'));
-    var cards = PG.el('div', 'focus-cards'); host.appendChild(cards);
-    [10, 20, 30].forEach(function (m) { var b = PG.el('button', 'focus-card' + (m === minutes ? ' on' : ''), '<b>' + m + '</b>minutes'); b.type = 'button'; b.onclick = function () { if (active) return; minutes = m; [].forEach.call(cards.children, function (c) { c.classList.remove('on'); }); b.classList.add('on'); drawRing(); }; cards.appendChild(b); });
-    var label = PG.el('input', 'lib-search'); label.placeholder = 'What are you focusing on? (optional)'; label.style.cssText = 'margin-top:12px;width:100%;max-width:560px'; host.appendChild(label);
-    var ring = PG.el('div', 'focus-ring', '<span>20:00</span>'); host.appendChild(ring);
-    var bar = PG.el('div', 'pg-bar'); host.appendChild(bar); var bGo = PG.button(bar, 'Start', function () { start(); }, true), bStop = PG.button(bar, 'End early', function () { finish(false); }); bStop.style.display = 'none';
-    var snd = PG.el('label', 'pg-stat', '<input type="checkbox"' + (sound ? ' checked' : '') + '> Soft chime at the end'); snd.querySelector('input').onchange = function (e) { sound = e.target.checked; PG.store.set('focus-sound', sound); }; bar.appendChild(snd);
-    var sum = PG.el('p', 'pg-msg'); host.appendChild(sum); var hist = PG.el('div', 'focus-hist'); host.appendChild(hist);
-    function drawRing() { var left = active ? Math.max(0, (active.end - Date.now()) / 1000) : minutes * 60, tot = (active ? active.minutes : minutes) * 60; ring.style.setProperty('--p', active ? (1 - left / tot) * 100 : 0); ring.firstChild.textContent = PG.fmtTime(Math.ceil(left)); if (active) document.title = PG.fmtTime(Math.ceil(left)) + ' · Focus'; }
-    var baseTitle = document.title;
-    function start() { active = { minutes: minutes, start: Date.now(), end: Date.now() + minutes * 60000, label: label.value.trim() }; PG.store.set('focus-active', active); ui(); loop(); }
-    function ui() { bGo.style.display = active ? 'none' : ''; bStop.style.display = active ? '' : 'none'; label.disabled = !!active; if (active) label.value = active.label || ''; drawRing(); }
-    function loop() { clearInterval(tick); tick = setInterval(function () { if (!active) return; drawRing(); if (Date.now() >= active.end) finish(true); }, 500); }
+    var NS = 'http://www.w3.org/2000/svg', R = 112, C = 2 * Math.PI * R, baseTitle = document.title;
+    var root = PG.el('div', 'fx'); host.appendChild(root);
+    root.innerHTML =
+      '<div class="fx-stage">' +
+        '<div class="fx-dial" id="fx-dial">' +
+          '<svg viewBox="0 0 260 260" aria-hidden="true"><defs><linearGradient id="fx-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7ef0d4"/><stop offset=".55" stop-color="#4cc9f0"/><stop offset="1" stop-color="#8b7cff"/></linearGradient></defs>' +
+          '<g id="fx-ticks"></g><circle class="fx-track" cx="130" cy="130" r="' + R + '"/><circle class="fx-prog" id="fx-prog" cx="130" cy="130" r="' + R + '" stroke-dasharray="' + C.toFixed(2) + '" stroke-dashoffset="' + C.toFixed(2) + '" transform="rotate(-90 130 130)"/>' +
+          '<circle class="fx-dot" id="fx-dot" r="5" cx="130" cy="18"/></svg>' +
+          '<div class="fx-read"><span class="fx-time" id="fx-time">20:00</span><span class="fx-state" id="fx-state">Ready when you are</span></div>' +
+        '</div>' +
+        '<div class="fx-side">' +
+          '<h3 class="fx-title">Deep focus</h3>' +
+          '<p class="fx-sub">One uninterrupted block. No streaks, no reminders &mdash; the timer only runs when you start it.</p>' +
+          '<div class="fx-lbl">Length</div><div class="fx-chips" id="fx-chips" role="radiogroup" aria-label="Session length"></div>' +
+          '<div class="fx-lbl">Intention</div><input class="fx-input" id="fx-label" maxlength="80" placeholder="What are you focusing on? (optional)" autocomplete="off">' +
+          '<div class="fx-actions"><button class="fx-go" id="fx-go" type="button">Begin session</button><button class="fx-stop" id="fx-stop" type="button" hidden>End early</button></div>' +
+          '<label class="fx-switch"><input type="checkbox" id="fx-snd"' + (sound ? ' checked' : '') + '><i></i><span>Soft chime at the end</span></label>' +
+        '</div>' +
+      '</div>' +
+      '<div class="fx-msg" id="fx-msg" role="status" aria-live="polite"></div>' +
+      '<div class="fx-stats" id="fx-stats"></div>' +
+      '<div class="fx-hist" id="fx-hist"></div>';
+    var $ = function (id) { return root.querySelector('#' + id); };
+    var dial = $('fx-dial'), prog = $('fx-prog'), dot = $('fx-dot'), timeEl = $('fx-time'), stateEl = $('fx-state'), chips = $('fx-chips'), label = $('fx-label'),
+      bGo = $('fx-go'), bStop = $('fx-stop'), msg = $('fx-msg'), stats = $('fx-stats'), hist = $('fx-hist');
+    var ticks = $('fx-ticks');
+    for (var t = 0; t < 60; t++) {                       // minute ticks around the dial
+      var a = t / 60 * 2 * Math.PI, major = t % 5 === 0, r1 = major ? 121 : 124, r2 = 128, l = document.createElementNS(NS, 'line');
+      l.setAttribute('x1', 130 + Math.sin(a) * r1); l.setAttribute('y1', 130 - Math.cos(a) * r1); l.setAttribute('x2', 130 + Math.sin(a) * r2); l.setAttribute('y2', 130 - Math.cos(a) * r2);
+      l.setAttribute('class', major ? 'fx-tk major' : 'fx-tk'); ticks.appendChild(l);
+    }
+    [10, 20, 30, 45, 60].forEach(function (m) {
+      var b = PG.el('button', 'fx-chip' + (m === minutes ? ' on' : ''), '<b>' + m + '</b><small>min</small>'); b.type = 'button'; b.setAttribute('role', 'radio'); b.setAttribute('aria-checked', m === minutes ? 'true' : 'false');
+      b.onclick = function () { if (active) return; minutes = m; [].forEach.call(chips.children, function (c) { var on = c === b; c.classList.toggle('on', on); c.setAttribute('aria-checked', on ? 'true' : 'false'); }); draw(); };
+      chips.appendChild(b);
+    });
+    $('fx-snd').onchange = function (e) { sound = e.target.checked; PG.store.set('focus-sound', sound); };
+
+    function draw() {
+      var tot = (active ? active.minutes : minutes) * 60, left = active ? Math.max(0, (active.end - Date.now()) / 1000) : tot, frac = active ? 1 - left / tot : 0;
+      prog.setAttribute('stroke-dashoffset', (C * (1 - frac)).toFixed(2));
+      var ang = frac * 2 * Math.PI; dot.setAttribute('cx', (130 + Math.sin(ang) * R).toFixed(2)); dot.setAttribute('cy', (130 - Math.cos(ang) * R).toFixed(2));
+      timeEl.textContent = PG.fmtTime(Math.ceil(left));
+      stateEl.textContent = active ? (active.label ? active.label : 'In session') : 'Ready when you are';
+      dial.classList.toggle('live', !!active);
+      if (active) document.title = PG.fmtTime(Math.ceil(left)) + ' · Focus';
+    }
+    function ui() { bGo.hidden = !!active; bStop.hidden = !active; label.disabled = !!active; chips.classList.toggle('lock', !!active); if (active) label.value = active.label || ''; draw(); }
+    function start() { active = { minutes: minutes, start: Date.now(), end: Date.now() + minutes * 60000, label: label.value.trim() }; PG.store.set('focus-active', active); msg.textContent = ''; ui(); loop(); }
+    function loop() { clearInterval(tick); tick = setInterval(function () { if (!active) return; draw(); if (Date.now() >= active.end) finish(true); }, 500); }
+    bGo.onclick = start; bStop.onclick = function () { finish(false); };
     function chime() { if (!sound) return; try { var A = window.AudioContext || window.webkitAudioContext, c = new A(); [660, 880, 1100].forEach(function (f, i) { var o = c.createOscillator(), g = c.createGain(); o.frequency.value = f; o.type = 'sine'; g.gain.setValueAtTime(0, c.currentTime + i * .28); g.gain.linearRampToValueAtTime(.12, c.currentTime + i * .28 + .05); g.gain.exponentialRampToValueAtTime(.001, c.currentTime + i * .28 + 1.1); o.connect(g); g.connect(c.destination); o.start(c.currentTime + i * .28); o.stop(c.currentTime + i * .28 + 1.2); }); } catch (e) {} }
     function finish(done) {
       if (!active) return; var a = active, elapsed = Math.min(a.minutes, (Date.now() - a.start) / 60000); active = null; PG.store.set('focus-active', null); clearInterval(tick); document.title = baseTitle;
-      if (done) chime(); if (done || elapsed >= 1) csrfFetch('/api/library/focus', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ minutes: a.minutes, done_minutes: elapsed, completed: !!done, label: a.label }) }).then(function () { loadHist(); });
-      ui(); sum.textContent = done ? 'Session complete. Nicely done.' : 'Session ended early. Every minute counts.';
+      if (done) chime();
+      if (done || elapsed >= 1) csrfFetch('/api/library/focus', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ minutes: a.minutes, done_minutes: elapsed, completed: !!done, label: a.label || '' }) }).then(loadHist).catch(function () {});
+      ui(); msg.textContent = done ? 'Session complete. Nicely done.' : 'Session ended early. Every minute counts.';
     }
+    function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
     function loadHist() { fetch('/api/library/focus').then(function (r) { return r.json(); }).then(function (j) { sessions = j.sessions || []; drawHist(); }).catch(function () {}); }
     function drawHist() {
-      var week = Date.now() - 7 * 864e5, wk = sessions.filter(function (s) { return s.at * 1000 > week; }), mins = wk.reduce(function (a, s) { return a + s.done_minutes; }, 0);
+      var now = new Date(), day0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime(), DAY = 864e5, bars = [], total = 0, done = 0, n7 = 0, today = 0;
+      for (var i = 6; i >= 0; i--) bars.push({ t: day0 - i * DAY, m: 0 });
+      sessions.forEach(function (s) {
+        var at = s.at * 1000, m = +s.done_minutes || 0;
+        if (at >= day0) today += m;
+        if (at >= day0 - 6 * DAY) { n7++; total += m; if (s.completed) done++; for (var k = 0; k < 7; k++) if (at >= bars[k].t && at < bars[k].t + DAY) bars[k].m += m; }
+      });
+      var peak = Math.max.apply(null, bars.map(function (b) { return b.m; }).concat([30]));
+      stats.innerHTML =
+        '<div class="fx-stat"><b>' + Math.round(today) + '<small>min</small></b><span>Today</span></div>' +
+        '<div class="fx-stat"><b>' + Math.round(total) + '<small>min</small></b><span>Last 7 days</span></div>' +
+        '<div class="fx-stat"><b>' + n7 + '</b><span>Sessions</span></div>' +
+        '<div class="fx-stat"><b>' + (n7 ? Math.round(done / n7 * 100) : 0) + '<small>%</small></b><span>Completed</span></div>' +
+        '<div class="fx-week" aria-label="Minutes per day, last 7 days">' + bars.map(function (b) {
+          var d = new Date(b.t); return '<div class="c"><i style="height:' + Math.max(3, Math.round(b.m / peak * 100)) + '%" title="' + Math.round(b.m) + ' min"></i><em>' + d.toLocaleDateString(undefined, { weekday: 'narrow' }) + '</em></div>';
+        }).join('') + '</div>';
       var byDay = {}; sessions.slice().reverse().forEach(function (s) { var d = new Date(s.at * 1000).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); (byDay[d] = byDay[d] || []).push(s); });
-      var h = '<h4 style="margin:0 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted)">Session history</h4><p class="pg-hint" style="margin:0 0 8px">Last 7 days: <b>' + Math.round(mins) + ' min</b> across ' + wk.length + ' session' + (wk.length === 1 ? '' : 's') + '.</p>';
-      Object.keys(byDay).slice(0, 10).forEach(function (d) { h += '<div class="d"><span><b>' + d + '</b></span><span>' + byDay[d].map(function (s) { return Math.round(s.done_minutes) + 'm' + (s.completed ? '' : ' (early)') + (s.label ? ' · ' + esc(s.label) : ''); }).join(' &nbsp; ') + '</span></div>'; });
-      if (!sessions.length) h += '<p class="pg-hint">No sessions yet.</p>'; else h += '<p style="margin-top:10px"><button class="pg-btn" id="fh-clear" type="button">Clear history</button></p>'; hist.innerHTML = h;
+      var h = '<h4>Session history</h4>';
+      Object.keys(byDay).slice(0, 10).forEach(function (d) {
+        h += '<div class="r"><span class="d">' + esc(d) + '</span><span class="s">' + byDay[d].map(function (s) { return '<i class="' + (s.completed ? '' : 'early') + '">' + Math.round(s.done_minutes) + 'm' + (s.completed ? '' : ' early') + (s.label ? ' &middot; ' + esc(s.label) : '') + '</i>'; }).join('') + '</span></div>';
+      });
+      if (!sessions.length) h += '<p class="fx-empty">No sessions yet. Your first one will appear here.</p>'; else h += '<p><button class="fx-link" id="fh-clear" type="button">Clear history</button></p>';
+      hist.innerHTML = h;
       var c = hist.querySelector('#fh-clear'); if (c) c.onclick = function () { csrfFetch('/api/library/focus/clear', { method: 'POST' }).then(loadHist); };
     }
-    if (active) { if (Date.now() >= active.end) finish(true); else { minutes = active.minutes; loop(); } } ui(); loadHist();
+    if (active) { if (Date.now() >= active.end) finish(true); else { minutes = active.minutes; [].forEach.call(chips.children, function (c) { c.classList.toggle('on', c.firstChild.textContent === String(minutes)); }); loop(); } } ui(); loadHist();
     return { destroy: function () { clearInterval(tick); document.title = baseTitle; } };
   }
 

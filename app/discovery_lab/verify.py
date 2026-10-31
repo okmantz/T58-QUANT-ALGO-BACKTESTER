@@ -23,7 +23,40 @@ def _profit_factor(pnls: list) -> float:
     return pos / neg if neg > 0 else (9.99 if pos > 0 else 0.0)
 
 
-def make_verifier(raw_df: pd.DataFrame, frames: dict, risk, instrument: str, sealed_frac: float = 0.2, log=lambda m: None):
+def _pipeline_ready(strat, d: pd.DataFrame, cut, pipeline_risk, prop_rules, symbol: str) -> dict:
+    """Would Full Pipeline's baseline preflight accept this strategy? Mirrors its sizing resolution exactly (shared function)."""
+    from dataclasses import replace
+
+    from app.backtest.engine import run_backtest
+    from app.validation.preflight import resolve_baseline_sizing
+
+    try:
+        ts = pd.to_datetime(d["timestamp"])
+        dev = d[(ts < cut).to_numpy()] if cut is not None else d
+        if len(dev) < 500:
+            dev = d
+        risk = pipeline_risk
+        if prop_rules is not None:
+            try:
+                from app.backtest.risk import with_prop_safety_defaults
+                risk = with_prop_safety_defaults(risk, prop_rules)
+            except Exception:  # noqa: BLE001
+                pass
+        risk = replace(risk, sizing_mode="rr_planned")
+        _s, _r, bt, pf, notes = resolve_baseline_sizing(dev, strat, risk, prop_rules, run_backtest_fn=run_backtest, symbol=symbol)
+        if pf is None:
+            return {"ok": False, "reason": "Full Pipeline's preflight could not size a single trade of this strategy"}
+        if pf.blocked:
+            msgs = "; ".join(i.message.split(".")[0] for i in pf.by_severity("block"))[:220]
+            return {"ok": False, "reason": f"Full Pipeline would stop at preflight: {msgs}"}
+        adj = notes.get("sizing_adjustment")
+        return {"ok": True, "remedy": (adj or {}).get("text") if isinstance(adj, dict) else None}
+    except Exception as exc:  # noqa: BLE001 -- inability to prove readiness is not readiness
+        return {"ok": False, "reason": f"could not confirm Full Pipeline readiness ({type(exc).__name__}: {exc})"}
+
+
+def make_verifier(raw_df: pd.DataFrame, frames: dict, risk, instrument: str, sealed_frac: float = 0.2, log=lambda m: None,
+                  pipeline_risk=None, prop_rules=None):
     """Returns ``verify(candidate, minutes) -> dict``.
 
     ``raw_df``: the data as the user loaded it (what Full Pipeline will be handed). ``frames``: {minutes: resampled frame} used by the Lab.
@@ -42,33 +75,13 @@ def make_verifier(raw_df: pd.DataFrame, frames: dict, risk, instrument: str, sea
         path.write_text(render(c, instrument, minutes, name), encoding="utf-8")
         strat = PythonStrategy(path)
         out: dict = {"ok": False}
-        # (1) lookahead, exactly as the pipeline does it: run_backtest resamples to the strategy's TIMEFRAME and then runs the behavioural
-        #     lookahead test on that frame, reporting a verdict as a "LOOKAHEAD BIAS DETECTED" warning.
-        probe = run_backtest(tail, strat, risk, lookahead_check="always")
-        bad = [w for w in probe.warnings if "LOOKAHEAD BIAS DETECTED" in str(w)]
-        crashed = [w for w in probe.warnings if "LOOKAHEAD CHECK CRASHED" in str(w)]
-        out["lookahead_checked"] = not crashed
-        out["lookahead_bug"] = bool(bad)
-        if bad:
-            out["reason"] = "failed the lookahead test (its signal changes when future bars are removed)"
-            return out
-        if crashed:
-            out["reason"] = "the lookahead test could not run: " + str(crashed[0])[:160]
-            return out
-        # (2) the real engine on the full-history frame at this bar size
+        # Order (2026-10-30, speed): the CHEAP rejections come first. A would-be winner is a single backtest on the Lab's frame; most fail
+        # there (no reproduced profit) or at Full Pipeline's sizing gate, and only survivors pay for the (re-running) lookahead probes.
         d = frames.get(int(minutes))
         if d is None:
             out["reason"] = "no full-history frame for this bar size"
             return out
-        # (1b) 2026-10: the same lookahead test over the WHOLE history, not just the recent slice. A leak that only shows in older data (a
-        #      different session layout, a gap, a contract roll) used to pass here and then fail later in Full Pipeline.
-        if len(d) > len(tail) // max(1, int(minutes)) + 500:
-            full_probe = run_backtest(d, strat, risk, lookahead_check="always")
-            bad_full = [w for w in full_probe.warnings if "LOOKAHEAD BIAS DETECTED" in str(w)]
-            if bad_full:
-                out["lookahead_bug"] = True
-                out["reason"] = "failed the lookahead test on the full history (its signal changes when future bars are removed)"
-                return out
+        # (1) the real engine on the full-history frame at this bar size
         bt = run_backtest(d, strat, risk, lookahead_check="skip")
         trades = bt.trades
         out["trades"] = len(trades)
@@ -92,6 +105,37 @@ def make_verifier(raw_df: pd.DataFrame, frames: dict, risk, instrument: str, sea
         if late and out["sealed_net_profit"] <= 0:
             out["reason"] = "the real engine loses money on the sealed (most recent) slice"
             return out
+        # (2) Full Pipeline readiness (cheap, and the most common reason a winner was unusable)
+        if pipeline_risk is not None:
+            ready = _pipeline_ready(strat, d, cut, pipeline_risk, prop_rules, instrument)
+            out["pipeline_ready"] = ready["ok"]
+            if not ready["ok"]:
+                out["reason"] = ready["reason"]
+                return out
+            if ready.get("remedy"):
+                out["pipeline_remedy"] = ready["remedy"]
+        # (3) lookahead, exactly as the pipeline does it: run_backtest resamples to the strategy's TIMEFRAME and then runs the behavioural
+        #     lookahead test on that frame, reporting a verdict as a "LOOKAHEAD BIAS DETECTED" warning. The recent slice AND an early slice of
+        #     the history are probed (a leak that only shows in older data -- a different session layout, a gap, a contract roll -- used to pass
+        #     here and fail later in Full Pipeline); a bounded early slice keeps this cheap instead of re-running the whole history.
+        probe = run_backtest(tail, strat, risk, lookahead_check="always")
+        bad = [w for w in probe.warnings if "LOOKAHEAD BIAS DETECTED" in str(w)]
+        crashed = [w for w in probe.warnings if "LOOKAHEAD CHECK CRASHED" in str(w)]
+        out["lookahead_checked"] = not crashed
+        out["lookahead_bug"] = bool(bad)
+        if bad:
+            out["reason"] = "failed the lookahead test (its signal changes when future bars are removed)"
+            return out
+        if crashed:
+            out["reason"] = "the lookahead test could not run: " + str(crashed[0])[:160]
+            return out
+        early = d.iloc[: max(2_000, min(len(d) // 3, 60_000))].reset_index(drop=True)
+        if len(early) > 2_000 and len(d) > len(tail) // max(1, int(minutes)) + 500:
+            early_probe = run_backtest(early, strat, risk, lookahead_check="always")
+            if [w for w in early_probe.warnings if "LOOKAHEAD BIAS DETECTED" in str(w)]:
+                out["lookahead_bug"] = True
+                out["reason"] = "failed the lookahead test on the early history (its signal changes when future bars are removed)"
+                return out
         out["ok"] = True
         return out
 

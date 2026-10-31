@@ -648,10 +648,14 @@ def _prefs_bootstrap_tag() -> str:
         prefs = {}
     locked_bg: list = []
     locked_th: list = []
+    locked_ws: list = []
     try:
         from app import achievements as _ach
         _st = _ach.unlock_state()
         locked_bg, locked_th = _st["locked_backgrounds"], _st["locked_themes"]
+        locked_ws = _st.get("locked_workspaces", [])
+        if prefs.get("t58-ws") in locked_ws:
+            prefs.pop("t58-ws", None)
         if prefs.get("t58-bg") in locked_bg:
             prefs.pop("t58-bg", None)
         if prefs.get("t58-ui-theme") in locked_th:
@@ -660,7 +664,7 @@ def _prefs_bootstrap_tag() -> str:
         pass
     blob = _json.dumps(prefs).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     csrf = _json.dumps(session.get("csrf_token", "")).replace("<", "\\u003c")
-    lock = _json.dumps({"bg": locked_bg, "theme": locked_th})
+    lock = _json.dumps({"bg": locked_bg, "theme": locked_th, "ws": locked_ws})
     try:
         from app.licensing import fresh_start as _fs
         epoch = _json.dumps(_fs.epoch())
@@ -669,6 +673,31 @@ def _prefs_bootstrap_tag() -> str:
     return ("<script>window.__T58_PREFS=" + blob + ";window.__T58_CSRF=" + csrf + ";window.__T58_LOCKED=" + lock
             + ";window.__T58_FRESH_EPOCH=" + epoch + ";</script>"
             '<script src="/static/t58-prefs-sync.js"></script>')
+
+
+# 2026-10-30: every /static/*.css|js link in an HTML page is stamped with a build version (?v=<hash of the static code files'
+# names + sizes + mtimes). A changed stylesheet or script therefore has a NEW URL, so neither the browser cache nor the
+# service worker can ever pair fresh markup with an old stylesheet (that mismatch produced giant sidebar icons and a squashed
+# lock card after an update). The hash is computed once per process; the files do not change while the app runs.
+_ASSET_LINK_RE = _re_poll.compile(r'((?:href|src)=")(/static/[^"?#]+\.(?:css|js))(")')
+_asset_version_cache: str | None = None
+
+
+def _asset_version() -> str:
+    global _asset_version_cache
+    if _asset_version_cache is None:
+        import hashlib as _hashlib
+        h = _hashlib.sha1()
+        try:
+            root = Path(app.static_folder or "")
+            for f in sorted(root.rglob("*")):
+                if f.suffix in (".css", ".js") and f.is_file():
+                    st = f.stat()
+                    h.update(f"{f.relative_to(root)}:{st.st_size}:{int(st.st_mtime)}".encode())
+        except Exception:  # noqa: BLE001
+            h.update(b"static")
+        _asset_version_cache = h.hexdigest()[:10]
+    return _asset_version_cache
 
 
 @app.after_request
@@ -683,9 +712,11 @@ def _inject_poll_governor(resp):
             if "t58-prefs-sync.js" not in body:
                 tag = _prefs_bootstrap_tag() + tag
             if tag:
-                new, n = _HEAD_RE.subn(lambda m: m.group(0) + tag, body, count=1)
-                if n:
-                    resp.set_data(new)
+                body, _n = _HEAD_RE.subn(lambda m: m.group(0) + tag, body, count=1)
+            ver = _asset_version()
+            stamped = _ASSET_LINK_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}?v={ver}{m.group(3)}", body)
+            if stamped != body or tag:
+                resp.set_data(stamped)
     except Exception:  # noqa: BLE001 -- never break a page over an optimisation
         pass
     return resp
