@@ -243,7 +243,7 @@ def safe_filename_stem(display_name: str, fallback: str = "strategy") -> str:
     # or parens with an underscore -- this covers path separators (both
     # slash directions), colons, and any other character a filesystem
     # could misinterpret, without depending on pathlib to parse it.
-    name = re.sub(r"[^A-Za-z0-9 _().-]+", "_", name)
+    name = re.sub(r"[^A-Za-z0-9 _().!-]+", "_", name)
     name = name.replace(" ", "_")
     name = re.sub(r"_+", "_", name).strip("_.")
     return name or fallback

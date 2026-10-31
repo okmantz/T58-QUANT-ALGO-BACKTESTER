@@ -256,6 +256,8 @@
     nameSelect.style.display = 'block';
   }
 </script>
+<script src="/static/t58-combo.js"></script>
+<script>T58Combo.enhance('select[name$="_existing_dataset"]');</script>
 <script src="/static/prop-presets.js"></script>
 <script>
   initPropFirmPresetDropdown('hf_prop_preset_select', { account_size: 'initial_balance' });

@@ -34,7 +34,7 @@
   /* ------------------------------------------------------------------ interface themes (unlockable) */
   var UI_THEMES = { 'obsidian-gold': 'Obsidian Gold', 'midnight-azure': 'Midnight Azure', 'terminal-green': 'Terminal Green', 'deep-space': 'Deep Space', 'crimson-protocol': 'Crimson Protocol' };
   // Workspace presets (unlockable whole-workspace looks; see workspace-presets.css)
-  var WS_PRESETS = { obsidian: 'Obsidian', cyberpunk: 'Cyberpunk', nordic: 'Nordic', evergreen: 'Evergreen', sovereign: 'Sovereign', midnight: 'Midnight' };
+  var WS_PRESETS = { obsidian: 'Obsidian', cyberpunk: 'Cyberpunk', nordic: 'Nordic', evergreen: 'Evergreen', sovereign: 'Sovereign' };
   function wsPreset() { var v = get('t58-ws'); return WS_PRESETS[v] && !locked('ws', v) ? v : ''; }
   function applyWs() {
     var root = document.documentElement, w = wsPreset();

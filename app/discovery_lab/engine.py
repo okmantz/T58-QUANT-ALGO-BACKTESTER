@@ -174,7 +174,10 @@ def _sim_core(sig_idx, sig_dir, o, h, l, c, atr, stop_atr, target_r, max_hold, c
 try:  # numba makes the search ~30x faster; the plain-Python loop above is the always-available fallback
     from numba import njit as _njit
 
-    _sim_fast = _njit(cache=False, nogil=True)(_sim_core)
+    try:   # cache=True compiles once per install instead of once per server start (several seconds off every first run)
+        _sim_fast = _njit(cache=True, nogil=True)(_sim_core)
+    except Exception:  # noqa: BLE001 -- e.g. a read-only install dir: compile in memory instead
+        _sim_fast = _njit(cache=False, nogil=True)(_sim_core)
 except Exception:  # noqa: BLE001
     _sim_fast = _sim_core
 
@@ -908,7 +911,7 @@ def resample(df: pd.DataFrame, minutes: int) -> pd.DataFrame:
     return resample_ohlcv(df, label)
 
 
-def plan_bar_sizes(df: pd.DataFrame, cost_for: Callable, want_cost_r: float = 0.12, min_bars: int = 4000, max_sizes: int = 3, max_stop_atr: float = 3.0):
+def plan_bar_sizes(df: pd.DataFrame, cost_for: Callable, want_cost_r: float = 0.12, min_bars: int = 4000, max_sizes: int = 4, max_stop_atr: float = 3.0):
     """Bar sizes (>= native) where a stop of at most ``max_stop_atr`` ATR keeps round-trip cost under ``want_cost_r`` of R, and enough bars
     remain. Returns ([(minutes, frame, cost_price)], notes). Searches up to ``max_sizes`` of the coarser eligible sizes (cheap trading
     costs, the most history per bar)."""
@@ -935,7 +938,10 @@ def plan_bar_sizes(df: pd.DataFrame, cost_for: Callable, want_cost_r: float = 0.
                 break
     if not out:
         out.append((int(round(base)), df, float(cost_for(df))))
-    return out[-max_sizes:], notes
+    if len(out) > max_sizes:                                # spread the picks across the ladder (fast AND slow), not just the coarsest few
+        idx = sorted({round(i * (len(out) - 1) / (max_sizes - 1)) for i in range(max_sizes)})
+        out = [out[i] for i in idx]
+    return out, notes
 
 
 def pick_bar_size(df: pd.DataFrame, cost_price: float, want_cost_r: float = 0.10, min_bars: int = 4000):

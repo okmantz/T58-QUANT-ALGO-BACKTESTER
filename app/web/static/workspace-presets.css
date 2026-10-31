@@ -1,4 +1,4 @@
-/* T58 Workspace Presets -- six whole-workspace looks (Account -> Personalize -> Workspace presets), each an unlockable reward.
+/* T58 Workspace Presets -- five whole-workspace looks (Account -> Personalize -> Workspace presets), each an unlockable reward.
  * Chosen with <html data-ws="...">, set by t58-personalize.js. Like the interface themes these re-skin the design tokens in theme.css, so every
  * page follows with no per-page code; unlike a theme, a preset also sets typography, surface treatment and motion character.
  * A preset that is still locked is never applied (the server drops it from the synced preferences). It outranks an interface theme
@@ -108,23 +108,6 @@ html[data-ws="sovereign"] label, html[data-ws="sovereign"] .field-note, html[dat
 html[data-ws="sovereign"] .t58-card, html[data-ws="sovereign"] .card { border-color: rgba(212, 175, 55, .24); box-shadow: 0 1px 0 rgba(212, 175, 55, .08) inset, var(--shadow-md), 0 0 0 3px rgba(4, 3, 2, .9), 0 0 0 4px rgba(212, 175, 55, .12); }
 html[data-ws="sovereign"] hr, html[data-ws="sovereign"] .divider { border-color: rgba(212, 175, 55, .2); }
 
-/* ------------------------------------------------------------------ Midnight: navy surfaces, cool blue accents, glass effects */
-html[data-ws="midnight"] {
-  --bg: #050a1c; --bg-1: #050a1c; --panel: rgba(14, 26, 58, .56); --panel-2: rgba(18, 33, 72, .6); --panel-3: #10204a; --panel-elevated: #14275a;
-  --border: rgba(120, 165, 255, .16); --border-light: rgba(120, 165, 255, .3); --text: #e8efff; --text-muted: #9bb0d8; --text-dim: #6f86b4;
-  --teal: #6ea8ff; --teal-dim: #2f66c4; --teal-rgb: 110, 168, 255; --violet: #9a8bff; --on-teal: #040c1f; --on-teal2: #040c1f; --on-teal3: #040c1f;
-  --pop-bg: #0a1634; --pop-bg-2: #0f1e44; --pop-bd: rgba(110, 168, 255, .4);
-  --glass-bg: rgba(14, 26, 58, .5); --glass-border: rgba(150, 190, 255, .22);
-  --radius-sm: 9px; --radius-md: 14px; --radius-lg: 20px;
-  --shadow-md: 0 1px 0 rgba(255, 255, 255, .06) inset, 0 10px 34px rgba(0, 6, 28, .55); --shadow-lg: 0 20px 60px rgba(0, 6, 28, .7);
-  --glow-teal: 0 0 0 1px rgba(110, 168, 255, .24), 0 0 30px rgba(110, 168, 255, .12);
-}
-html[data-ws="midnight"] body { background: radial-gradient(1200px 700px at 86% -12%, rgba(70, 120, 255, .26), transparent 60%), radial-gradient(900px 640px at -6% 112%, rgba(120, 90, 255, .16), transparent 60%), #050a1c fixed; }
-html[data-ws="midnight"] .t58-card, html[data-ws="midnight"] .card, html[data-ws="midnight"] .t58-sidebar {
-  -webkit-backdrop-filter: blur(18px) saturate(1.35); backdrop-filter: blur(18px) saturate(1.35); border-color: rgba(150, 190, 255, .2);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, .07) inset, 0 10px 34px rgba(0, 6, 28, .5); }
-html[data-ws="midnight"] h1 { background: linear-gradient(100deg, #eef4ff, #6ea8ff 58%, #9a8bff); -webkit-background-clip: text; background-clip: text; color: transparent; }
-
 @media (prefers-reduced-motion: reduce) { html[data-ws="evergreen"] body::after { animation: none; } }
 
 /* ---- Nordic is a light, paper-toned preset: the dashboard's dark glass surfaces become warm, softly shadowed paper ---- */
@@ -153,3 +136,49 @@ html[data-ws="nordic"] body :is(.card, .t58-card, .panel, .t58-panel, .pz-card, 
 html[data-ws="nordic"] body :is(.t58-card, .card)::before { display: none; }
 html[data-ws="nordic"] body .field-note, html[data-ws="nordic"] body .muted { color: var(--text-muted); }
 html[data-ws="nordic"] body label, html[data-ws="nordic"] body .pz-group { color: var(--text-muted); }
+
+/* ================================================================== LAYOUT -- each preset also rearranges the workspace, not just the paint.
+ * Desktop only (the phone layout keeps its off-canvas drawer). Uses theme.css's own shell/sidebar/main hooks, so every page follows. */
+@media (min-width: 761px) {
+  /* Obsidian: dense terminal -- slim sidebar, tight padding, small type, more on screen at once */
+  html[data-ws="obsidian"] { --sidebar-w: 200px; --card-pad: 11px; font-size: 14px; }
+  html[data-ws="obsidian"] .t58-main { padding: 14px 16px; max-width: none; }
+  html[data-ws="obsidian"] .t58-sidebar { padding: 10px 6px; gap: 0; }
+  html[data-ws="obsidian"] .t58-nav-item { padding-top: 5px; padding-bottom: 5px; font-size: 12.5px; }
+  html[data-ws="obsidian"] .t58-card, html[data-ws="obsidian"] .card { margin-bottom: 10px; }
+
+  /* Cyberpunk: mirrored cockpit -- navigation docks on the RIGHT, wide edge-to-edge canvas */
+  html[data-ws="cyberpunk"] { --sidebar-w: 232px; }
+  html[data-ws="cyberpunk"] .t58-shell { flex-direction: row-reverse; }
+  html[data-ws="cyberpunk"] .t58-sidebar { border-right: 0; border-left: 1px solid rgba(25, 243, 255, .3); }
+  html[data-ws="cyberpunk"] .t58-main { padding: 20px 22px; max-width: none; }
+  html[data-ws="cyberpunk"] .t58-ambient { left: 0; right: var(--sidebar-w, 232px); }
+
+  /* Nordic: airy reading room -- wide sidebar, one centred column with generous margins */
+  html[data-ws="nordic"] { --sidebar-w: 276px; --card-pad: 22px; }
+  html[data-ws="nordic"] .t58-sidebar { padding: 24px 16px; gap: 6px; }
+  html[data-ws="nordic"] .t58-nav-item { padding-top: 10px; padding-bottom: 10px; }
+  html[data-ws="nordic"] .t58-main { padding: 40px 52px; max-width: 1180px; margin-inline: auto; }
+  html[data-ws="nordic"] .t58-card, html[data-ws="nordic"] .card { margin-bottom: 22px; }
+
+  /* Evergreen: floating panels -- the sidebar is an inset rounded card, content sits in a soft gutter */
+  html[data-ws="evergreen"] { --sidebar-w: 236px; }
+  html[data-ws="evergreen"] .t58-shell { padding: 12px; gap: 12px; }
+  html[data-ws="evergreen"] .t58-sidebar { top: 12px; height: calc(100vh - 24px); border: 1px solid rgba(61, 220, 151, .2); border-radius: 20px; }
+  html[data-ws="evergreen"] .t58-main { padding: 14px 18px; border-radius: 20px; }
+  html[data-ws="evergreen"] .t58-ambient { left: calc(var(--sidebar-w, 236px) + 24px); }
+
+  /* Sovereign: formal -- narrow sidebar with a gold rule, a centred ledger-width column */
+  html[data-ws="sovereign"] { --sidebar-w: 216px; --card-pad: 20px; }
+  html[data-ws="sovereign"] .t58-sidebar { border-right: 1px solid rgba(212, 175, 55, .45); box-shadow: 1px 0 0 rgba(212, 175, 55, .12); }
+  html[data-ws="sovereign"] .t58-nav-item { letter-spacing: .05em; text-transform: uppercase; font-size: 11.5px; }
+  html[data-ws="sovereign"] .t58-main { padding: 34px 40px; max-width: 1240px; margin-inline: auto; }
+}
+
+/* Never clip a verdict sentence: every line of the waterfall wraps inside the panel, however long the label, number list or reason is. */
+ body .wf { min-width: 0; max-width: 100%; overflow: visible; }
+ body .wf-steps { grid-template-columns: minmax(0, 1fr); min-width: 0; }
+ body .wf-step, body .wf-step .t, body .wf-step .d, body .wf-step .f, body .wf-single, body .wf-head, body .wf-head b, body .wf-head span { min-width: 0; max-width: 100%; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; word-break: normal; }
+ body .wf-step .t { line-height: 1.35; }
+ body .wf-step .m { white-space: normal; overflow-wrap: anywhere; max-width: 100%; }
+ body .wf-step .d, body .wf-step .f { line-height: 1.5; }

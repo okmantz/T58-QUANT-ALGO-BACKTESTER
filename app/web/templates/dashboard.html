@@ -80,7 +80,7 @@
 
   /* ---- Pipeline in motion (compositor-only animation; paused for reduced motion) ---- */
   .flow-wrap { overflow-x: auto; }
-  .flow-svg { width: 100%; min-width: 760px; height: auto; display: block; }
+  .flow-svg { width: 100%; min-width: 900px; height: auto; display: block; }
   .fl-link { stroke: rgba(var(--teal-rgb), .35); stroke-width: 2; stroke-dasharray: 3 5; fill: none; }
   .fl-node { fill: rgba(var(--teal-rgb), .06); stroke: var(--border-strong, rgba(127,127,127,.35)); stroke-width: 1.5; }
   .fl-node.on { fill: rgba(var(--teal-rgb), .14); stroke: var(--teal); }
@@ -354,12 +354,12 @@
 <!-- ---- Pipeline in motion: real counts, animated ---- -->
 <div class="db-card db-flow">
   <h2>Pipeline in motion <a href="/full-pipeline">Run a strategy &rarr;</a></h2>
-  <p class="db-sub">Where your strategies are right now. Dots flow where work is happening; counts are your real saved results.</p>
+  <p class="db-sub">Every step counts the strategies that have reached it (or gone further), so Candidates is your total. Dots flow where work is happening; counts are your real saved results.</p>
   {% set fl = pipeline_flow %}
-  {% set nodes = [{'t':'Tested','n':fl.tested,'href':'/runs'}] %}
-  {% for s in fl.stages %}{% set _ = nodes.append({'t': s.title, 'n': s.n, 'href': '/champion-simple'}) %}{% endfor %}
+  {% set nodes = [] %}
+  {% for s in fl.nodes %}{% set _ = nodes.append({'t': s.title, 'n': s.n, 'href': s.href}) %}{% endfor %}
   <div class="flow-wrap">
-    <svg class="flow-svg" viewBox="0 0 {{ 150 * nodes|length }} 150" preserveAspectRatio="xMidYMid meet" role="img"
+    <svg class="flow-svg" viewBox="0 0 {{ 150 * nodes|length }} 142" preserveAspectRatio="xMidYMid meet" role="img"
          aria-label="Strategy pipeline: {% for n in nodes %}{{ n.t }} {{ n.n }}{{ ', ' if not loop.last }}{% endfor %}">
       <defs><linearGradient id="fl-g" x1="0" x2="1"><stop offset="0" stop-color="var(--teal)"/><stop offset="1" stop-color="var(--neon-cyan)"/></linearGradient></defs>
       {% for n in nodes %}
@@ -374,7 +374,13 @@
           <circle class="fl-node {{ 'on' if n.n > 0 }}" cx="{{ cx }}" cy="62" r="30"/>
           {% if n.n > 0 %}<circle class="fl-pulse" cx="{{ cx }}" cy="62" r="30"/>{% endif %}
           <text class="fl-n" x="{{ cx }}" y="69" text-anchor="middle">{{ n.n }}</text>
+          {% set words = n.t.split(' ') %}
+          {% if words|length > 1 %}
+          <text class="fl-t" x="{{ cx }}" y="114" text-anchor="middle">{{ words[0] }}</text>
+          <text class="fl-t" x="{{ cx }}" y="130" text-anchor="middle">{{ words[1:]|join(' ') }}</text>
+          {% else %}
           <text class="fl-t" x="{{ cx }}" y="116" text-anchor="middle">{{ n.t }}</text>
+          {% endif %}
         </a>
       {% endfor %}
     </svg>

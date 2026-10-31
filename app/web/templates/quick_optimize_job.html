@@ -39,6 +39,16 @@
 
 <div id="verdict-wrap" style="display:none;"><div class="verdict-banner" id="verdict-banner"></div></div>
 
+<div class="card" id="no-better-card" style="display:none; border-left:4px solid #f5b83d;">
+  <h2>No better configuration found</h2>
+  <p class="note" style="font-size:14px; line-height:1.5;">The settings you started with are already the best this search could find, so the strategy was left as it is. Pick what to do with it:</p>
+  <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
+    <a id="nb-validate" class="t58-btn primary" href="/validate-simple" style="display:inline-block; padding:10px 20px; border-radius:10px; font-weight:700; text-decoration:none; background:#19d3a2; color:#04231b;">Continue to Validate &rarr;</a>
+    <a id="nb-discover" class="t58-btn ghost" href="/discovery-engine" style="display:inline-block; padding:10px 20px; border-radius:10px; font-weight:700; text-decoration:none; border:1px solid #f5b83d; color:#f5b83d;">Scrap it and find a new one</a>
+  </div>
+  <p class="note" style="margin-top:10px;">Validate tests this exact strategy on all five checks. Scrap sends you to the Discovery Engine to search for a replacement.</p>
+</div>
+
 <div class="card" id="sweep-card" style="display:none;">
   <h2>Timeframe sweep -- every timeframe tried</h2>
   <p class="note" id="sweep-note"></p>
@@ -205,6 +215,14 @@
             const banner = document.getElementById('verdict-banner');
             banner.className = 'verdict-banner ' + (s.improved ? 'verdict-yes' : 'verdict-no');
             banner.textContent = s.improved ? 'Optimized configuration improved on the baseline' : 'Optimized configuration did not clearly improve on the baseline';
+            // Nothing better found: offer exactly two ways forward (test it as it is, or scrap it and search again).
+            const nb = document.getElementById('no-better-card');
+            if (nb) {
+              nb.style.display = s.improved ? 'none' : 'block';
+              const links = data.next_links || {};
+              if (links.validate) document.getElementById('nb-validate').href = links.validate;
+              if (links.discover) document.getElementById('nb-discover').href = links.discover;
+            }
 
             document.getElementById('summary-card').style.display = 'block';
             document.getElementById('b-trades').textContent = s.baseline_trades;

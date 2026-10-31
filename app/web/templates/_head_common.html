@@ -25,7 +25,7 @@
 <script>/* interface theme (unlockable), painted before first paint; every theme sits on the dark base */
 try{var ut=localStorage.getItem('t58-ui-theme'),UL=(window.__T58_LOCKED||{}).theme||[];if(ut&&UL.indexOf(ut)<0&&/^(obsidian-gold|midnight-azure|terminal-green|deep-space|crimson-protocol)$/.test(ut)){var h=document.documentElement;h.setAttribute('data-ui-theme',ut);h.removeAttribute('data-theme')}}catch(e){}</script>
 <script>/* workspace preset (unlockable), painted before first paint; t58-personalize.js owns the logic */
-try{var ws=localStorage.getItem('t58-ws'),WL=(window.__T58_LOCKED||{}).ws||[];if(ws&&WL.indexOf(ws)<0&&/^(obsidian|cyberpunk|nordic|evergreen|sovereign|midnight)$/.test(ws)){var hh=document.documentElement;hh.setAttribute('data-ws',ws);hh.removeAttribute('data-theme')}}catch(e){}</script>
+try{var ws=localStorage.getItem('t58-ws'),WL=(window.__T58_LOCKED||{}).ws||[];if(ws&&WL.indexOf(ws)<0&&/^(obsidian|cyberpunk|nordic|evergreen|sovereign)$/.test(ws)){var hh=document.documentElement;hh.setAttribute('data-ws',ws);hh.removeAttribute('data-theme')}}catch(e){}</script>
 <script>/* accent colour, painted before first paint (t58-personalize.js owns the logic and refreshes this cache) */
 try{var a=localStorage.getItem('t58-accent');if(a&&a!=='teal'){var v=JSON.parse(localStorage.getItem('t58-accent-vars')||'null'),r=document.documentElement;if(v){var m=localStorage.getItem('t58-theme')==='light'?'light':'dark',o=v[m];for(var k in o)r.style.setProperty(k,o[k]);r.setAttribute('data-ui-accent',a)}}}catch(e){}</script>
 <script src="/static/t58-scene-canvas.js" defer></script>

@@ -2040,18 +2040,24 @@ def _dashboard_cards_and_flow(stats: dict, board_rows: list) -> tuple[list, dict
     cards.sort(key=_rank_key, reverse=True)
     for i, c in enumerate(cards, 1):
         c["rank"] = i
-    counts = [0] * len(champion_board.PROMOTION_STAGES)
-    for r in board_rows:
-        counts[champion_board.PROMOTION_STAGES.index(r["promotion"]["stage"])] += 1
+    # Pipeline in motion: Candidates (every strategy) -> Tested -> Optimized -> Validated -> Champion Candidate -> Forward Tested ->
+    # Production Ready. Each node counts the strategies that reached it or went further (see champion_board.funnel_rank), over ALL
+    # strategies on record -- not just the dozen shown as cards.
+    tested_files: set = set()
+    run_only = 0
+    for s_ in (stats.get("strategies") or []):
+        m_ = _ns.match_run_to_row(s_, board_rows)
+        if m_:
+            tested_files.add(m_["filename"])
+        else:
+            run_only += 1                      # run in Run & Report etc. but never saved to the library
     try:
         from app.achievements import compute_counters as _cc
         grave = int((_cc() or {}).get("graveyard", 0))
     except Exception:  # noqa: BLE001
         grave = 0
     flow = {
-        "tested": int(stats.get("total_strategies") or 0),
-        "stages": [{"title": champion_board.PROMOTION_STAGE_TITLES[k], "n": counts[i]}
-                   for i, k in enumerate(champion_board.PROMOTION_STAGES)],
+        "nodes": champion_board.pipeline_flow_nodes(board_rows, tested_files, run_only),
         "graveyard": grave,
         "running": int(stats.get("total_runs") or 0),
     }
@@ -3132,12 +3138,17 @@ def _optimize_next_step(job: dict) -> dict:
                                "Optimizing and validating on the same data is how curve-fits happen -- run Validate next, on all five checks."]
             out["secondary"] = [{"label": "Run again: make the edge more reliable", "href": opt("robust")}]
         else:
-            out["headline"] = "No better settings found -- the strategy was left untouched"
-            out["why"] = f"Eval pass chance stayed at about {pct(b)}. Either the settings were already near their best or the idea has no edge to tune."
-            out["bullets"] += ["If it failed on out-of-sample data: try the 'reliable edge' goal.", "If winners turn into losers: try 'Fix the exits'.",
-                               "If neither helps, scrap it and let Discovery find a replacement."]
-            out["primary"] = {"label": "Try 'Fix the exits'", "href": opt("exits")}
-            out["secondary"] = [{"label": "Make the edge more reliable", "href": opt("robust")}, {"label": "Find a replacement", "href": "/discovery-engine"}]
+            # No better configuration exists: the person has exactly two sensible moves -- keep the strategy as it is and see whether it
+            # holds up (Validate), or drop it and look for a different one (Discovery). Everything else is a footnote, not a button.
+            out["headline"] = "No better settings found -- choose what to do with this strategy"
+            out["why"] = (f"Eval pass chance stayed at about {pct(b)}. The current settings are already the best this search could find, so the "
+                          "strategy was left untouched. Either test it as it is, or scrap it and find a new one.")
+            out["bullets"] += ["Continue to Validate if you still believe in the idea: it will be tested exactly as it is, on all five checks.",
+                               "Scrap it and find a new one if Validate is not worth your time: Discovery searches for a replacement on the same market.",
+                               "Optional: the 'reliable edge' and 'Fix the exits' goals tune different things and may still find something."]
+            out["no_improvement"] = True
+            out["primary"] = {"label": "Continue to Validate", "href": val}
+            out["secondary"] = [{"label": "Scrap it and find a new one", "href": "/discovery-engine"}]
     elif rs.get("ran"):
         out["headline"] = "Risk size tuned"
         out["why"] = "Strategy settings were left alone; only risk per trade was swept."
@@ -9429,7 +9440,7 @@ def quickopt_start():
         job_id = JOB_MANAGER.create(tool="Quick Optimize", page_template="/quick-optimize/job/{job_id}", log=initial_log, instrument=active_label, cancel_event=cancel_event, cancelled=False)
         # v9.16: stash the requested timeframe so the finished run's
         # recovery panel can pre-fill downstream labs with it.
-        JOB_MANAGER.update(job_id, timeframe=(form.get("timeframe") or "").strip())
+        JOB_MANAGER.update(job_id, timeframe=(form.get("timeframe") or "").strip(), library_ref=(list(library_ref) if library_ref else None))
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)  # opportunistic, cheap -- see prune()'s own docstring
         # FIX (multi-timeframe sweep): "Timeframes to test" runs the SAME
         # GA once per requested timeframe (df resampled per timeframe --
@@ -9472,6 +9483,16 @@ def quickopt_job_stop(job_id):
     if cancel_event is not None:
         cancel_event.set()
     return jsonify({"found": True, "stopping": True})
+
+
+def _quickopt_next_links(job: dict) -> dict:
+    """The two ways forward after an optimizer run that found nothing better: test the strategy as it is, or drop it and search again."""
+    from urllib.parse import urlencode
+    ref = job.get("library_ref")
+    q = {}
+    if ref and len(ref) == 2 and ref[0] and ref[1]:
+        q["strategy_pick"] = f"{ref[0]}::{ref[1]}"
+    return {"validate": "/validate-simple" + ("?" + urlencode(q) if q else ""), "discover": "/discovery-engine"}
 
 
 @app.route("/quick-optimize/job/<job_id>/status.json")
@@ -9532,6 +9553,8 @@ def quickopt_job_status(job_id):
         "log": job["log"], "instrument": job.get("instrument"), "summary": summary,
         "progress": job.get("progress"),
         "best_timeframe": job.get("best_timeframe"), "sweep_timeframes": job.get("sweep_timeframes"),
+        # Where "Continue to Validate" / "Scrap it and find a new one" go when the optimizer found nothing better (see the result page).
+        "next_links": _quickopt_next_links(job),
         # v9: structured recovery plan for the Quick Optimize result.
         # v9.15: pass the run's own risk/rules (see the pipeline status).
         # v9.16: also pass the run's timeframe for downstream prefill.

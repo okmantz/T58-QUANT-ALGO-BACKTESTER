@@ -391,7 +391,6 @@ BACKGROUND_UNLOCKS: dict[str, dict[str, Any]] = {
 WORKSPACE_UNLOCKS: dict[str, dict[str, Any]] = {
     "obsidian": {"label": "Obsidian", "ach": ["strat-10", "runs-25"]},
     "evergreen": {"label": "Evergreen", "ach": ["pipe-10", "lib-10"]},
-    "midnight": {"label": "Midnight", "ach": ["val-50", "disc-10"]},
     "nordic": {"label": "Nordic", "ach": ["jrnl-100", "lib-40"]},
     "cyberpunk": {"label": "Cyberpunk", "ach": ["disc-50", "pass-5"]},
     "sovereign": {"label": "Sovereign", "ach": ["pass-25", "val-150"]},

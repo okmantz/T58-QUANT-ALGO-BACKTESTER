@@ -351,6 +351,100 @@ def evaluate_promotion(metadata: dict[str, Any]) -> PromotionState:
     )
 
 
+# ---------------------------------------------------------------------------
+# "Pipeline in motion" funnel (dashboard)
+# ---------------------------------------------------------------------------
+# Seven steps, left to right. Every step counts each strategy that has REACHED it or gone further, so the first number is simply
+# "how many strategies do I have" and the numbers never rise from one step to the next. A strategy's step is worked out from what is
+# really on record for it -- not only from the Promote button -- because a strategy that has passed validation, or is already being
+# forward tested, should show as such without anyone having to click through the stages by hand (2026-10-31).
+FUNNEL_STAGES = ("candidates", "tested", "optimized", "validated", "champion_candidate", "forward_tested", "production_ready")
+FUNNEL_TITLES: dict[str, str] = {
+    "candidates": "Candidates",
+    "tested": "Tested",
+    "optimized": "Optimized",
+    "validated": "Validated",
+    "champion_candidate": "Champion Candidate",
+    "forward_tested": "Forward Tested",
+    "production_ready": "Production Ready",
+}
+FUNNEL_HREFS: dict[str, str] = {
+    "candidates": "/library",
+    "tested": "/runs",
+    "optimized": "/optimize-simple",
+    "validated": "/validate-simple",
+    "champion_candidate": "/champion-simple",
+    "forward_tested": "/forward-test",
+    "production_ready": "/champion-simple",
+}
+
+
+def funnel_rank(metadata: dict[str, Any], promo: Optional[PromotionState] = None) -> int:
+    """How far one strategy has got along FUNNEL_STAGES (0 = a candidate nothing has been done with ... 6 = production ready).
+
+    - tested:             a backtest is on record (or any later tool has run, which needs one)
+    - optimized:          Quick Optimize / the GA or a Search Lab run is on record
+    - validated:          all five validation checks ran, OR it was promoted to Validated or beyond, OR Full Pipeline ran its own
+                          validation gates and none rejected it (verdict READY / MARGINAL)
+    - champion candidate: it PASSED validation. Anything promoted to Validated, Champion Candidate or further has; so has a strategy
+                          whose validation is complete and that meets the app's own Validated -> Champion Candidate gate (Eval, Payout
+                          and OOS thresholds met, last Champion Check not NOT READY)
+    - forward tested:     promoted to Forward Testing, or a forward-test result is on record
+    - production ready:   promoted to Production Ready, or deployed
+    """
+    metadata = metadata or {}
+    promo = promo or evaluate_promotion(metadata)
+    idx = PROMOTION_STAGES.index(promo.stage)          # 0 candidate, 1 validated, 2 champion candidate, 3 forward testing, 4 production
+    check = metadata.get("last_champion_check") or {}
+    verdict = str(check.get("verdict") or (metadata.get("last_run") or {}).get("verdict") or "").upper()
+
+    optimized = bool(metadata.get("last_optimize") or metadata.get("last_search"))
+    validation_complete = validation_summary(metadata)["complete"]
+    validated = validation_complete or idx >= 1 or verdict in ("READY", "MARGINAL")
+    forward = idx >= 3 or bool(metadata.get("last_forward_test"))
+    production = idx >= 4 or bool(metadata.get("last_deploy"))
+
+    rank = 0
+    if metadata.get("last_run") or optimized or validated or metadata.get("validation_methods_run") or metadata.get("last_validation") or check:
+        rank = 1
+    if optimized:
+        rank = max(rank, 2)
+    if validated:
+        rank = max(rank, 3)
+        passed = idx >= 1
+        if not passed:
+            passed = all(r.met for r in _requirements_for_next_stage(metadata, "validated"))
+        if passed:
+            rank = max(rank, 4)
+    if forward:
+        rank = max(rank, 5)
+    if production:
+        rank = max(rank, 6)
+    return rank
+
+
+def pipeline_flow_nodes(rows: list[dict[str, Any]], tested_files: Optional[set] = None, run_only: int = 0) -> list[dict[str, Any]]:
+    """The seven dashboard nodes ``[{"key", "title", "n", "href"}, ...]``.
+
+    ``rows``: Champion Board rows (each carries ``funnel_rank``). ``tested_files``: filenames of rows that have a run-history entry
+    (so a strategy tested only through Run & Report still counts as tested). ``run_only``: strategies that were run but are not saved
+    in the library -- they are candidates and they are tested, nothing more."""
+    tested_files = tested_files or set()
+    ranks = []
+    for r in rows:
+        rk = int(r.get("funnel_rank") or 0)
+        if r.get("filename") in tested_files:
+            rk = max(rk, 1)
+        ranks.append(rk)
+    nodes = []
+    for i, key in enumerate(FUNNEL_STAGES):
+        n = sum(1 for rk in ranks if rk >= i)
+        if i <= 1:
+            n += int(run_only)
+        nodes.append({"key": key, "title": FUNNEL_TITLES[key], "n": n, "href": FUNNEL_HREFS[key]})
+    return nodes
+
+
 def promote_strategy(strategy_type: str, filename: str, metadata: Optional[dict[str, Any]] = None) -> tuple[bool, str, Optional[str]]:
     """Attempts to advance one saved strategy to the next promotion stage.
     Never automatic -- this is only ever called from an explicit user
@@ -553,6 +647,7 @@ def list_board(strategy_type: Optional[str] = None) -> list[dict[str, Any]]:
                 "strength": _composite_strength(dims),
                 "validation": validation_summary(item.metadata),
                 "promotion": promo.to_dict(),
+                "funnel_rank": funnel_rank(item.metadata, promo),
                 "modified": item.modified,
             })
     for r in rows:

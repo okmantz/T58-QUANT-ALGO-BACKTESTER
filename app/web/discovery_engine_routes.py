@@ -144,6 +144,23 @@ def _symbol_for(label: str) -> str:
     return (guess_any_instrument_symbol(label) or re.sub(r"\W+", "", str(label).split("/")[0]).upper() or "MARKET")
 
 
+def _instrument_token(label: str) -> str:
+    """'data/NQ1!/NQ1! 1m.csv' -> 'NQ1!': the instrument as the person wrote it, without folders, extension or the dataset's own bar size."""
+    stem = re.sub(r"\.(csv|tsv|txt|parquet)$", "", str(label or "").replace("\\", "/").split("/")[-1], flags=re.I)
+    stem = re.sub(r"[\s_\-]+\d+\s*(m|min|mins|h|hr|d|s)\b.*$", "", stem, flags=re.I).strip()
+    return stem or _symbol_for(label)
+
+
+def strategy_file_base(label: str, family_title: str, minutes: int | None = None, tf_label: str | None = None) -> str:
+    """The saved file's name, '[instrument] [strategy] [timeframe]', e.g. 'NQ1! VWAP Mean Reversion 15m' -- the bar size the strategy was
+    actually found to work on, never the (usually 1m) bar size of the data file it was searched in."""
+    from app.discovery_lab.codegen import tf_text
+    tf = tf_label or (tf_text(minutes) if minutes else "")
+    name = " ".join(x for x in (_instrument_token(label), family_title, tf) if x)
+    name = re.sub(r"[^A-Za-z0-9 _().!-]+", " ", name)               # keep the spaces: 'NQ1! VWAP Mean Reversion 15m'
+    return re.sub(r"\s+", " ", name).strip(" .") or "discovery_strategy"
+
+
 def _risk_for(label: str, balance: float, risk_pct: float):
     from app.backtest.risk import RiskConfig
     from app.data.instrument_specs import apply_any_instrument_spec, guess_any_instrument_symbol, micro_equivalent
@@ -574,9 +591,10 @@ def _save_lab(job, lab, n):
     if n < 0 or n >= len(rows):
         return jsonify({"ok": False, "error": "That result is no longer available."}), 404
     c = rows[n]
-    inst = str(job.get("instrument", "")).split("/")[-1].replace(".csv", "")
-    base = safe_filename_stem(f"{_family_title(c['family'])} {inst} lab {c['id'][-4:]}", "lab_strategy")
-    text = render(c, inst, int(c.get("bar_minutes") or lab.get("bar_minutes") or 0) or 0, base)
+    inst = _instrument_token(str(job.get("instrument", "")))
+    minutes = int(c.get("bar_minutes") or lab.get("bar_minutes") or 0) or 0
+    base = strategy_file_base(inst, _family_title(c["family"]), minutes)
+    text = render(c, inst, minutes, base)
     for k in range(0, 50):
         fn = f"{base}{'' if k == 0 else '_' + str(k + 1)}.py"
         try:
@@ -603,7 +621,7 @@ def job_save(job_id, n):
     if spec.get("source_type", "manual") != "manual" or not spec.get("config"):
         return jsonify({"ok": False, "error": "This candidate isn't a saveable builder strategy."}), 400
     cfg = dict(spec["config"])
-    base = safe_filename_stem(f"{_family_title(c.get('family'))} {str(job.get('instrument', '')).split('/')[-1].replace('.csv', '')} discovery", "discovery_strategy")
+    base = strategy_file_base(str(job.get("instrument", "")), _family_title(c.get("family")), tf_label=str((job.get("settings") or {}).get("timeframe") or "").replace("unknown", ""))
     cfg["name"] = base
     for k in range(0, 50):
         fn = f"{base}{'' if k == 0 else '_' + str(k + 1)}.json"

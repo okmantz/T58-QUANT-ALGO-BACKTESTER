@@ -11,10 +11,21 @@ from __future__ import annotations
 import json
 
 
+_TF = {1: "1m", 3: "3m", 5: "5m", 10: "10m", 15: "15m", 30: "30m", 60: "1h", 120: "2h", 240: "4h", 1440: "1d"}
+
+
+def tf_text(minutes) -> str:
+    """Bar size in minutes -> the label used in file names and TIMEFRAME ('15m', '1h', '4h', '1d')."""
+    m = int(minutes or 0)
+    if m <= 0:
+        return ""
+    return _TF.get(m) or (f"{m // 1440}d" if m % 1440 == 0 else f"{m // 60}h" if m % 60 == 0 else f"{m}m")
+
+
 def render(c: dict, instrument: str, minutes: int, name: str) -> str:
     cfg = {"family": c["family"], "params": c["params"]}
     flt = c.get("flt") or {}
-    tf = {1: "1m", 5: "5m", 15: "15m", 30: "30m", 60: "1h", 240: "4h", 1440: "1d"}.get(int(minutes or 0))
+    tf = tf_text(minutes) or None
     tests = c.get("test", {})
     hold = int(c.get("hold", 400))
     target = float(c["target_r"])
@@ -56,12 +67,19 @@ def _levels(lg, sh, o, h, l, c, atr):
     sig = np.flatnonzero(lg ^ sh)
     free = 0
     for i in sig:
-        if i < free or i < WARMUP or i >= n - 1:
+        if i < free or i < WARMUP:
             continue
         a = atr[i]
         if not (a > 0):
             continue
         d = 1 if lg[i] else -1
+        if i >= n - 1:
+            # The setup completes on the LAST bar we have. The fill (next bar's open) has not happened yet, but the decision -- "be
+            # long/short after this bar closes" -- is already known from bars 0..i. Dropping it here (the old behaviour) made the
+            # signal on the final bar differ from the signal on the very same bar when more data follows, which is exactly what the
+            # lookahead test flags: it truncates the data right after a signal bar. Emit it and stop; nothing later is knowable.
+            level[i:] = d
+            break
         e = o[i + 1]
         sd = STOP_ATR * a
         stop = e - d * sd
