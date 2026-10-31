@@ -247,6 +247,12 @@ def start():
     label = (form.get("dataset") or "").strip()
     if not label:
         return back("Pick the market data to search on (step 1).")
+    if label.startswith("__api__:"):        # data from a provider's saved API key: download (or reuse) it, then run on the saved file
+        try:
+            from app.data import api_sources
+            label = api_sources.resolve_token(label)["full_name"]
+        except Exception as exc:  # noqa: BLE001
+            return back(f"Couldn't download that data from the provider: {str(exc)[:200]}")
     path = resolve_stored_dataset(label)
     if path is None:
         return back("That dataset couldn't be found. Pick another one, or import it from the Data section first.")

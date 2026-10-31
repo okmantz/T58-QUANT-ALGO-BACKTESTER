@@ -105,6 +105,7 @@ from app.strategy.library import (
     StrategyAlreadyExists, save_strategy_metadata, save_strategy_text, set_strategy_status,
 )
 from app.strategy.lookahead_check import check_for_lookahead
+from app.validation.trial_ledger import TrialLedgerError as _TrialLedgerError
 from app.validation.cpcv import CPCVError, compute_pbo, run_cpcv
 
 def evolution_stats_metadata(record: dict, generation: int | None = None) -> dict:
@@ -3308,6 +3309,8 @@ class EvolutionRunner(DiscoveryMixin):
                          kinds={"ga_inner_loop": sum(counts.values())})
             for _fam, _n in counts.items():
                 self._run_trials.add(_fam, _n, "ga_inner_loop")
+        except _TrialLedgerError:
+            raise    # 2026-10-31 audit: a trial that could not be recorded must stop the run, not vanish
         except Exception:  # noqa: BLE001 -- bookkeeping must never stop a run
             pass
 

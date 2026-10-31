@@ -57,10 +57,13 @@ class TrialCounter:
             return dict(self._by_kind)
 
     def book(self, run_key: str, data_fp: str | None = None, now: float | None = None) -> dict:
-        """Write the tally into the lifetime ledger exactly once for ``run_key``. Best-effort: never raises."""
+        """Write the tally into the lifetime ledger exactly once for ``run_key``. Raises ``TrialLedgerError`` when the ledger is corrupt or
+        cannot be written (2026-10-31 audit); any other unexpected error still returns {} so a bookkeeping bug cannot kill a search."""
+        from app.validation import trial_ledger
         try:
-            from app.validation import trial_ledger
             return trial_ledger.book_run(run_key, self.by_family(), now=now, data_fp=data_fp, kinds=self.by_kind())
+        except trial_ledger.TrialLedgerError:
+            raise
         except Exception:  # noqa: BLE001
             return {}
 

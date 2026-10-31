@@ -128,6 +128,8 @@ from app.strategy.library import StrategyAlreadyExists, provenance_stamped_name,
     save_strategy_replacing_version, save_strategy_text, set_strategy_status, record_backtest_result, \
     record_optimize_result, record_validation_result, record_champion_check_result, \
     instrument_from_dataset_label, simple_run_filename, simple_run_name
+from app.validation import trial_ledger as _trial_ledger
+from app.validation.trial_ledger import TrialLedgerError as _TrialLedgerError
 from app.validation.cpcv import CPCVError, CPCVResult, PBOGateResult, compute_pbo, pbo_gate, run_cpcv
 from app.validation.icir import ICIRGateResult, run_icir_gate_from_backtest
 from app.validation.regime_matrix import RegimeMatrixResult
@@ -138,11 +140,27 @@ if TYPE_CHECKING:
 ProgressCallback = Callable[[str], None]
 
 
-def _ledger_prior_trials(strategy) -> int:
-    """Variants of this strategy idea evaluated by EARLIER runs (persistent ledger) -- keeps the deflated-Sharpe trial count honest."""
+def _pipeline_data_stamp(df, label) -> dict | None:
+    """2026-10-31 audit (section 6): the stamp printed in the report header (adjusted? rolls removed? residual splices? fingerprint).
+    Measuring it must never break a report."""
     try:
-        from app.validation import trial_ledger
-        return trial_ledger.total(getattr(strategy, "name", None) or type(strategy).__name__)
+        from app.data.frame_stamp import frame_stamp
+        return frame_stamp(df, str(label) if label else None)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _ledger_prior_trials(strategy, data_fp: str | None = None) -> int:
+    """Variants of this strategy idea evaluated by EARLIER runs (persistent ledger) -- keeps the deflated-Sharpe trial count honest.
+
+    2026-10-31 audit (section 4): ``data_fp`` is the fingerprint of the data window being judged. Trials recorded on that SAME window do
+    not decay (the discovery engine already works this way); before this, Full Pipeline's trials faded on a 730-day clock even when the
+    bars had not changed. A corrupt or unreadable ledger raises ``TrialLedgerError`` instead of reading as zero trials."""
+    from app.validation import trial_ledger
+    try:
+        return trial_ledger.total(getattr(strategy, "name", None) or type(strategy).__name__, current_fp=data_fp)
+    except trial_ledger.TrialLedgerError:
+        raise
     except Exception:
         return 0
 
@@ -163,21 +181,27 @@ def _ledger_family_name(cfg, strategy=None) -> str | None:
     return None
 
 
-def _ledger_family_prior(cfg, strategy=None) -> int:
+def _ledger_family_prior(cfg, strategy=None, data_fp: str | None = None) -> int:
     """Aged number of candidates Search Lab / Evolution Lab ever evaluated in this strategy's family (Stage-1 kills
-    included); 0 when the family is unknown or never booked."""
+    included); 0 when the family is unknown or never booked. ``data_fp``: see ``_ledger_prior_trials``."""
+    from app.validation import trial_ledger
     try:
-        from app.validation import trial_ledger
         fam = _ledger_family_name(cfg, strategy)
-        return trial_ledger.family_prior(fam) if fam else 0
+        return trial_ledger.family_prior(fam, current_fp=data_fp) if fam else 0
+    except trial_ledger.TrialLedgerError:
+        raise
     except Exception:
         return 0
 
 
-def _ledger_record_trials(strategy, n) -> None:
+def _ledger_record_trials(strategy, n, data_fp: str | None = None) -> None:
+    """Book ``n`` evaluations for this strategy, stamped with the data fingerprint. A failed write raises ``TrialLedgerError`` and aborts
+    the run: reporting a trial count that was never saved would flatter every later verdict."""
+    from app.validation import trial_ledger
     try:
-        from app.validation import trial_ledger
-        trial_ledger.record(getattr(strategy, "name", None) or type(strategy).__name__, int(n or 1))
+        trial_ledger.record(getattr(strategy, "name", None) or type(strategy).__name__, int(n or 1), data_fp=data_fp)
+    except trial_ledger.TrialLedgerError:
+        raise
     except Exception:
         pass
 
@@ -3060,7 +3084,10 @@ def run_full_pipeline(
         if cfg.dsr_gate_enabled:
             log("Step 6c/7: Deflated Sharpe gate (multiple-testing correction)...")
             try:
-                _family_prior = _ledger_family_prior(cfg, strategy)
+                from app.discovery_engine.provenance import data_fingerprint as _data_fingerprint
+                _dsr_fp = _data_fingerprint(dev_df)
+                _family_prior = _ledger_family_prior(cfg, strategy, data_fp=_dsr_fp)
+                _strategy_prior = _ledger_prior_trials(strategy, data_fp=_dsr_fp)
                 n_trials = count_all_trials(
                     baseline_count=1,
                     ga_total_evaluations=(ga_result.total_evaluations
@@ -3068,12 +3095,16 @@ def run_full_pipeline(
                     # D4(b): hand-tuned / externally-evaluated configs
                     # count too -- otherwise a hand-tuned strategy gets
                     # n_trials=1 and an optimistic deflated Sharpe.
-                    extra_trial_counts=(cfg.external_trial_count, _ledger_prior_trials(strategy), _family_prior),
+                    extra_trial_counts=(cfg.external_trial_count, _strategy_prior, _family_prior),
                 )
+                _raw_trials = int(n_trials)
+                _effective_trials = int(n_trials)
+                _cluster_note = "no clustering (fewer than 3 leaderboard return streams)"
                 if _family_prior:
                     log(f"  Trial ledger: {_family_prior:,} earlier Search/Evolution candidate(s) booked under "
                         f"family:{_ledger_family_name(cfg, strategy)} are added to the raw trial count.")
-                _ledger_record_trials(strategy, (ga_result.total_evaluations if (refinement_ran and ga_result is not None) else 1))
+                _ledger_record_trials(strategy, (ga_result.total_evaluations if (refinement_ran and ga_result is not None) else 1),
+                                      data_fp=_dsr_fp)
                 trial_sharpes: list[float] = []
                 if refinement_ran and ga_result is not None and ga_result.leaderboard:
                     # v9.15 (WS-F): the leaderboard re-backtests are
@@ -3122,6 +3153,9 @@ def run_full_pipeline(
                         log(f"  Effective trials: {_eff['n_clusters']} distinct return stream(s) among {_eff['n_streams']} leaderboard "
                             f"candidates -> deflating for {_eff['effective_trials']} instead of {n_trials} raw evaluations.")
                         n_trials = _eff["effective_trials"]
+                        _effective_trials = int(n_trials)
+                        _cluster_note = (f"average-linkage clustering of {_eff['n_streams']} leaderboard daily-P&L streams at "
+                                         f"|corr| >= {cfg.dsr_cluster_corr:g} -> {_eff['n_clusters']} cluster(s)")
                         # The same effective count corrects the ICIR gate's Bonferroni n_tests (it only saw this run's own GA
                         # evaluations). Never loosens; can only turn an ICIR pass into a fail.
                         if icir_gate is not None and _family_prior:
@@ -3147,8 +3181,14 @@ def run_full_pipeline(
                     returns_skew=_skew,
                     returns_kurtosis=_kurt,
                     min_probabilistic_sharpe=cfg.dsr_min_probabilistic_sharpe,
+                    raw_trials=_raw_trials, effective_trials=_effective_trials, trial_clustering=_cluster_note,
                 )
                 log(f"  {dsr_gate_result.reason}")
+                log(f"  Trial counts (named): raw_trials={_raw_trials:,} (this run + ledger + external + family prior), "
+                    f"effective_trials={_effective_trials:,} ({_cluster_note}). Ledger rule: "
+                    f"{_trial_ledger.decay_report(getattr(strategy, 'name', None) or type(strategy).__name__, current_fp=_dsr_fp)['rule']}.")
+            except _TrialLedgerError:
+                raise    # a corrupt/unwritable ledger aborts the run: it must never read as zero trials
             except Exception as exc:  # noqa: BLE001 -- best-effort validation step
                 dsr_skip_reason = f"DSR gate failed to run: {exc}"
                 log(f"  {dsr_skip_reason}")
@@ -3625,6 +3665,7 @@ def _finish(
         verdict_reasons=verdict_reasons,
         ev_verdict=ev_verdict,
         ladder=(audit_evidence or {}).get("ladder") if isinstance(audit_evidence, dict) else None,
+        data_stamp=_pipeline_data_stamp(df, instrument),
         final_parameters=final_parameters,
         baseline_parameters=baseline_parameters,
         test_label="Full Pipeline",

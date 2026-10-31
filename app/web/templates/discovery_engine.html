@@ -71,7 +71,7 @@
     <div class="de-body">
       <h2>Which market should it search?</h2>
       <p class="sub">The price history the engine will learn from. Grouped by market; the most recent bars are used.</p>
-      {% if dataset_groups %}
+      {% if not dataset_groups %}<p class="de-note">No market data is stored yet. <a href="/data" style="color:var(--teal);">Import a CSV in the Data section</a>, or pick a data provider below (uses the API key saved under Settings &rsaquo; API Keys).</p>{% endif %}
       <select name="dataset" id="de-dataset" required aria-label="Market data">
         <option value="">Choose market data&hellip;</option>
         {% for g in dataset_groups %}
@@ -82,9 +82,6 @@
         </optgroup>
         {% endfor %}
       </select>
-      {% else %}
-      <p class="de-note">No market data is stored yet. <a href="/data" style="color:var(--teal);">Import a CSV in the Data section</a>, then come back.</p>
-      {% endif %}
     </div>
   </div>
 

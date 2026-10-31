@@ -365,6 +365,11 @@ def plan_entry(
         "mfe_price": entry_price,
         "initial_risk": initial_risk,
         "intended_risk_dollars": intended_risk_dollars,
+        # 2026-10-31 audit (section 3): under sizing_mode="rr_planned" the sizer plans anchor/RR dollars of risk, which is
+        # BELOW the configured cap (intended_risk_dollars). Record the plan so reconciliation compares against it, and
+        # flag trades whose stop was the 1%-of-price placeholder (the strategy defined none) so they can be excluded.
+        "planned_risk_dollars": decision.planned_risk,
+        "used_fallback_stop": bool(used_fallback_stop),
         "breakeven_done": False,
         "partial_taken": False,
         "trailing_distance": bar_trail_distance,

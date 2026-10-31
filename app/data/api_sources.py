@@ -75,13 +75,26 @@ def _key_for(provider: Provider) -> str | tuple[str, str]:
     return getattr(load_settings(), provider.key_field, "") or ""
 
 
+def key_hint(provider: Provider) -> str:
+    """Masked identifier of the saved key ("••••1a2b") so the person can tell WHICH key a run will use. Never the key itself."""
+    if not provider.needs_key:
+        return "no key needed"
+    k = _key_for(provider)
+    if isinstance(k, tuple):
+        k = k[0] if k else ""
+    k = (k or "").strip()
+    if not k:
+        return ""
+    return "\u2022\u2022\u2022\u2022" + k[-4:] if len(k) >= 8 else "\u2022\u2022\u2022\u2022"
+
+
 def provider_list() -> list[dict]:
     """For the dropdown: only providers that are usable right now, plus those
     missing a key (flagged so the UI can point at Settings > API Keys)."""
     out = []
     for p in PROVIDERS.values():
         ready = (not p.needs_key) or bool(_key_for(p))
-        out.append({"id": p.id, "label": p.label, "hint": p.hint, "ready": ready,
+        out.append({"id": p.id, "label": p.label, "hint": p.hint, "ready": ready, "key_hint": key_hint(p) if ready else "",
                     "timeframes": list(p.timeframes), "note": p.note})
     return out
 

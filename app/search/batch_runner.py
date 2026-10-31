@@ -85,6 +85,7 @@ from app.search.robustness import (
 from app.search.strategy_space import SearchSpace, build_strategy_from_spec
 from app.strategy.library import StrategyAlreadyExists, save_strategy_metadata, save_strategy_text, set_strategy_status
 from app.strategy.lookahead_check import check_for_lookahead
+from app.validation.trial_ledger import TrialLedgerError as _TrialLedgerError
 
 ProgressCallback = Callable[[str], None]
 
@@ -2079,6 +2080,8 @@ def run_search(
                 if _booked:
                     log("Trial ledger: booked " + ", ".join(f"{k}={v:,}" for k, v in sorted(_booked.items()))
                         + " evaluated configuration(s) (Stage-1 kills included).")
+            except _TrialLedgerError:
+                raise    # 2026-10-31 audit: an unwritable ledger aborts the run -- trials that were not saved must not be reported as booked
             except Exception as _exc:  # noqa: BLE001
                 log(f"Trial ledger booking skipped: {_exc}")
 

@@ -114,7 +114,7 @@
     if (opts.pickProvider) {
       f.provider = el('select', { 'aria-label': 'Data provider' });
       info.providers.forEach(function (p) {
-        var o = el('option', { value: p.id }, p.label + (p.ready ? '' : ' — no key saved'));
+        var o = el('option', { value: p.id }, p.label + (p.ready ? (p.key_hint && p.key_hint.indexOf('•') === 0 ? ' — key ' + p.key_hint : '') : ' — no key saved'));
         if (!p.ready) o.disabled = true;
         f.provider.appendChild(o);
       });
@@ -197,7 +197,7 @@
 
     var group = el('optgroup', { label: '☁ Data from a provider (your saved API keys)' });
     info.providers.forEach(function (p) {
-      var o = el('option', { value: PREFIX + p.id }, p.label + (p.ready ? '' : ' — add a key in Settings › API Keys'));
+      var o = el('option', { value: PREFIX + p.id }, p.label + (p.ready ? (p.key_hint && p.key_hint.indexOf('•') === 0 ? ' — key ' + p.key_hint : '') : ' — add a key in Settings › API Keys'));
       if (!p.ready) o.disabled = true;
       group.appendChild(o);
     });
@@ -386,7 +386,7 @@
     });
   }
 
-  var SINGLE = 'select[name$="existing_dataset"], select[name="dataset_label"], select[name="datasets"]:not([multiple])';
+  var SINGLE = 'select[name$="existing_dataset"], select[name="dataset_label"], select[name="dataset"]:not([multiple]), select[name="datasets"]:not([multiple])';
 
   // A page whose data library is still empty used to render NO dataset dropdown at all (just the CSV upload), which left
   // nothing for the provider picker to attach to -- so a saved Alpaca / London Strategic Edge key could not be used.

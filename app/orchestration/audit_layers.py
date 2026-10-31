@@ -198,6 +198,12 @@ def apply_audit_layers(
     deflated = deflate_pass_rate(headline_p, int(n_trials), n_eff, tunable=parameters_tuned)
     evidence["headline_pass_pct"], evidence["deflated_headline_pass_pct"] = headline_p * 100, deflated * 100
     evidence["n_trials"], evidence["n_effective"], evidence["parameters_tuned"] = int(n_trials), n_eff, bool(parameters_tuned)
+    # 2026-10-31 audit (section 4, defect 5): the pass-rate haircut and the DSR gate used two different "trial counts" under one name.
+    # Label this one. It is THIS RUN's search evaluations only; the DSR gate's ``raw_trials`` / ``effective_trials`` (see
+    # DeflatedSharpeGateResult) also include the ledger, external trials and the family prior.
+    evidence["haircut_trials"] = int(n_trials)
+    evidence["haircut_trials_basis"] = ("this run's search evaluations only; the Deflated Sharpe gate's raw_trials / effective_trials "
+                                        "also include the trial ledger, external trials and the family prior")
     if verdict == "READY" and deflated * 100.0 < min_pct <= headline_p * 100.0:
         demote("MARGINAL", f"SEARCH BIAS: the headline per-attempt pass rate {headline_p * 100:.0f}% falls to ~{deflated * 100:.0f}% after "
                            f"deflating for {n_trials} configurations tried (~{n_eff:.0f} independent observations); below the {min_pct:.0f}% READY bar.")

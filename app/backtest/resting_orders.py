@@ -131,6 +131,7 @@ def simulate_resting_orders(
             exit_reason=reason, commission=float(comm), equity_after=float(equity),
             initial_risk=float(dec.stop_distance), intended_risk_dollars=float(dec.budget),
             risk_at_stop_dollars=float(dec.risk_at_stop), stop_capped=bool(dec.stop_capped),
+            planned_risk_dollars=dec.planned_risk,
             sizing_mode=risk.sizing_mode, used_micro=bool(dec.used_micro), contracts=float(dec.contracts),
         ))
     return trades

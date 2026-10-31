@@ -289,6 +289,8 @@ class WalkforwardGAResult:
     selection_chained_score: float | None = None
     honest_median_fold_score: float | None = None
     honest_fold_scores: list = field(default_factory=list)
+    # 2026-10-31 audit: the never-worse decision (see app.optimize.never_worse); accept=False means the parent rule was kept.
+    never_worse: dict | None = None
 
     @property
     def headline_score(self) -> float | None:
@@ -960,6 +962,30 @@ def run_walkforward_aware_refinement(
             if pool_tmp_dir is not None:
                 shutil.rmtree(pool_tmp_dir, ignore_errors=True)
 
+        # 2026-10-31 audit (section 5, change 1): NEVER-WORSE rule on the genes the GA touched. The parent (baseline) is always a candidate; the
+        # champion replaces it only if its lower-confidence-bound expectancy at stressed costs on inner purged folds of the development bars
+        # (never the reserved tail) beats the parent's by more than one standard error. See app.optimize.never_worse.
+        never_worse_info = None
+        if cfg.never_worse_enabled and best_ever is not baseline and list(best_ever.genome) != list(baseline.genome):
+            from app.optimize.never_worse import run_never_worse
+            try:
+                _dev_df = df.iloc[: int(max_test_bar_used)] if max_test_bar_used else df
+                _nw = run_never_worse(_dev_df, build(baseline.genome), build(best_ever.genome), risk, adaptive_risk,
+                                      n_folds=cfg.never_worse_folds, cost_multiplier=cfg.never_worse_cost_multiplier,
+                                      se_multiple=cfg.never_worse_se_multiple)
+                never_worse_info = _nw.to_dict()
+                log(f"Never-worse check: {_nw.reason}")
+                if not _nw.accept:
+                    warnings.append(
+                        "Never-worse rule: the GA's best genome did not beat the starting (parent) configuration by more than "
+                        f"{cfg.never_worse_se_multiple:g} standard error on inner purged folds at {cfg.never_worse_cost_multiplier:g}x costs, "
+                        "so the parent configuration is returned unchanged. " + _nw.reason)
+                    best_ever = baseline
+            except Exception as exc:  # noqa: BLE001 - an improvement that cannot be confirmed is not taken
+                never_worse_info = {"accept": False, "reason": f"check failed: {type(exc).__name__}: {exc}"}
+                warnings.append(f"Never-worse check could not run ({type(exc).__name__}: {exc}); the parent configuration is returned.")
+                best_ever = baseline
+
         in_sample_fitness = full_df_fitness(best_ever.genome)
         overfitting_gap = None
         if math.isfinite(in_sample_fitness) and math.isfinite(best_ever.fitness):
@@ -1055,6 +1081,7 @@ def run_walkforward_aware_refinement(
             selection_chained_score=best_ever.fitness if math.isfinite(best_ever.fitness) else None,
             honest_median_fold_score=honest_median if (honest_median is not None and math.isfinite(honest_median)) else None,
             honest_fold_scores=honest_scores,
+            never_worse=never_worse_info,
         )
     finally:
         if tmp_dir is not None:

@@ -192,6 +192,8 @@ def rescue(df, cfg: dict, risk: RiskConfig, *, holdout_frac: float = 0.3, min_ga
         try:
             from app.validation import trial_ledger
             trial_ledger.record(ledger_label, trials)
+        except trial_ledger.TrialLedgerError:
+            raise    # 2026-10-31 audit: trials that could not be recorded must stop the run
         except Exception:  # noqa: BLE001 -- bookkeeping must never break a search
             pass
     return RescueResult(copy.deepcopy(cfg), best, base_train, cur, base_h, best_h, trials, steps, changes)

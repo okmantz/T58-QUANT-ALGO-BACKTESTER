@@ -248,8 +248,11 @@ def build_report(
     baseline_parameters: dict[str, str] | None = None,
     ev_verdict: dict | None = None,
     ladder: dict | None = None,
+    data_stamp: dict | None = None,
 ) -> dict[str, Any]:
     report = {
+        # 2026-10-31 audit (section 6): what was done to the price frame this report ran on (back-adjusted? how many rolls? fingerprint).
+        "data_stamp": data_stamp,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "strategy": {
             "name": strategy_name,
@@ -1005,15 +1008,28 @@ def _risk_reconciliation_section(stats: dict) -> str:
     realized_loss = stats.get("avg_realized_loss_on_losers", 0.0)
     pct_capped = stats.get("pct_trades_position_capped", 0.0)
     pct_overshoot = stats.get("pct_trades_risk_overshoot", 0.0)
-    table = _dict_to_table({
-        "Configured target risk per trade (avg)": intended,
+    planned_mode = stats.get("risk_baseline") == "planned"
+    rows = {"Configured risk cap per trade (avg)" if planned_mode else "Configured target risk per trade (avg)": intended}
+    if planned_mode:
+        rows["rr_planned PLANNED risk per trade (avg) = anchor / RR"] = stats.get("avg_planned_risk_dollars", 0.0)
+    rows.update({
         "Actual risk at stop, given size taken (avg)": actual,
         "Realized loss on losing trades (avg)": realized_loss,
-        "% of trades sized below the configured target (cap/throttle engaged)": pct_capped,
+        ("% of trades sized below the rr_planned plan (rounding / micro fallback)" if planned_mode
+         else "% of trades sized below the configured target (cap/throttle engaged)"): pct_capped,
         "% of trades whose realized loss exceeded their own stop risk (gap-through)": pct_overshoot,
     })
+    if stats.get("pct_trades_substituted_stop"):
+        rows["% of trades on a substituted 1%-of-price stop (excluded above)"] = stats.get("pct_trades_substituted_stop", 0.0)
+    table = _dict_to_table(rows)
     cap_note = ""
-    if pct_capped >= 5.0:
+    if planned_mode:
+        cap_note = (
+            "<p class='muted'>sizing_mode = rr_planned: each trade plans <b>planned_target_dollars / RR</b> of risk, which is deliberately "
+            "BELOW the configured cap, so high-RR setups carry the least size. This is a sizing policy, not a position cap -- it changes "
+            "dollar expectancy and pass odds, not per-trade R.</p>"
+        )
+    elif pct_capped >= 5.0:
         cap_note = (
             f"<p class='muted'>{pct_capped:.0f}% of trades risked meaningfully LESS than the "
             "configured target -- a max-position-size cap or adaptive-risk throttle is engaging "
@@ -1036,6 +1052,35 @@ def _risk_reconciliation_section(stats: dict) -> str:
 {cap_note}{overshoot_note}"""
 
 
+def _sizing_policy_html(report: dict, stats: dict) -> str:
+    """2026-10-31 audit (section 3): the sizing policy (mode, cap, rr_planned anchor, micro fallback, share of micro trades) printed in the
+    report header so a reader never has to guess why a run risked $44 a trade on a $500 budget. Returns "" when the report carries no
+    risk configuration."""
+    try:
+        import dataclasses
+        from html import escape
+        from app.backtest.risk import RiskConfig, sizing_policy_line
+        rc = report.get("risk_config")
+        if not isinstance(rc, dict):
+            return ""
+        names = {f.name for f in dataclasses.fields(RiskConfig)}
+        kw = {k: v for k, v in rc.items() if k in names and k != "prop_account_rules"}
+        return "<br><b>" + escape(sizing_policy_line(RiskConfig(**kw), stats)) + "</b>"
+    except Exception:  # noqa: BLE001 - a header line must never break report generation
+        return ""
+
+
+def _data_stamp_html(report: dict) -> str:
+    """The data-frame stamp line (adjusted? rolls removed? residual splices? fingerprint) for the report header; "" when absent."""
+    try:
+        from html import escape
+        from app.data.frame_stamp import frame_stamp_line
+        line = frame_stamp_line(report.get("data_stamp"))
+        return f"<br><b>{escape(line)}</b>" if line else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _reliability_header(report: dict) -> str:
     """Trade count, attempt count and sizing-skip rate at the very top of
     every report, so a number is never read without its sample size."""
@@ -1052,7 +1097,8 @@ def _reliability_header(report: dict) -> str:
         if skip > 20:
             flag += f" {skip:.0f}% of signals were skipped for sizing."
         return (f'<div class="{cls}" style="padding:8px 12px;border:1px solid #ccc;margin:8px 0">'
-                f'<b>Sample:</b> {n_tr} trades (full window) &middot; {att} account attempt(s) &middot; {skip:.0f}% of signals skipped for sizing.{flag}</div>')
+                f'<b>Sample:</b> {n_tr} trades (full window) &middot; {att} account attempt(s) &middot; {skip:.0f}% of signals skipped for sizing.{flag}'
+                f'{_sizing_policy_html(report, st)}{_data_stamp_html(report)}</div>')
     except Exception:  # noqa: BLE001
         return ""
 
@@ -1432,6 +1478,7 @@ def generate_full_report(
     tested_strategy_name: str = "",
     ev_verdict: dict | None = None,
     ladder: dict | None = None,
+    data_stamp: dict | None = None,
 ) -> dict[str, Path]:
     """Builds the report dict and writes JSON + summary CSV + trades CSV + HTML to output_dir.
 
@@ -1451,7 +1498,7 @@ def generate_full_report(
         backtest_result, prop_rules, prop_single_run, monte_carlo_result,
         holdout_comparison=holdout_comparison, risk_config=risk_config,
         verdict=verdict, verdict_reasons=verdict_reasons, final_parameters=final_parameters,
-        baseline_parameters=baseline_parameters, ev_verdict=ev_verdict, ladder=ladder,
+        baseline_parameters=baseline_parameters, ev_verdict=ev_verdict, ladder=ladder, data_stamp=data_stamp,
     )
     # Which strategy and which test this report is for (shown in a banner at the top of the HTML and kept
     # in the JSON). ``tested_strategy`` is the plain name of the strategy the person picked; ``strategy.name``

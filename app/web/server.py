@@ -12429,14 +12429,23 @@ def forge_job_status(job_id):
 @app.route("/trial-ledger")
 def trial_ledger_page():
     """Plain-language view of how many trials the Deflated Sharpe check corrects for (reads the same ledger the verdict reads)."""
+    from app.validation.trial_ledger import TrialLedgerError
     from app.validation.trial_ledger_plain import plain_summary
-    return render_template("trial_ledger.html", s=plain_summary(), active_page="graveyard")
+    try:
+        summary = plain_summary()
+    except TrialLedgerError as exc:      # 2026-10-31 audit: a corrupt ledger is reported, never shown as "0 trials"
+        return Response(f"Trial ledger problem: {exc}", status=500, mimetype="text/plain")
+    return render_template("trial_ledger.html", s=summary, active_page="graveyard")
 
 
 @app.route("/api/trial-ledger")
 def trial_ledger_api():
+    from app.validation.trial_ledger import TrialLedgerError
     from app.validation.trial_ledger_plain import plain_summary
-    return jsonify(plain_summary())
+    try:
+        return jsonify(plain_summary())
+    except TrialLedgerError as exc:
+        return jsonify({"error": str(exc), "ledger_corrupt": True}), 500
 
 
 @app.route("/graveyard")

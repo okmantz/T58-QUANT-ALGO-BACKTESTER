@@ -86,6 +86,8 @@ def preregister(family: str, primary_instrument: str, replication_instrument: st
     try:
         from app.validation import trial_ledger
         trial_ledger.record(f"family:{family}", 1)
+    except trial_ledger.TrialLedgerError:
+        raise    # 2026-10-31 audit: a preregistration whose trial was not counted is not a preregistration
     except Exception:  # noqa: BLE001
         pass
     return reg

@@ -124,6 +124,7 @@ from app.strategy.library import (
     simple_run_name,
 )
 from app.validation.icir import ICIRGateResult, run_icir_gate_from_backtest
+from app.validation.trial_ledger import TrialLedgerError as _TrialLedgerError
 
 ProgressCallback = "Callable[[str], None]"
 
@@ -994,6 +995,8 @@ def run_quick_optimize(
             for _note in _qo_inputs.notes:
                 log(f"  Trial ledger: {_note}.")
             _tl.record(_qo_name, int(max(1, ga_result.total_evaluations)) if mutated_by_ga else 1, data_fp=_qo_fp)
+        except _TrialLedgerError:
+            raise    # 2026-10-31 audit: a corrupt/unwritable ledger aborts the run instead of silently dropping the prior count
         except Exception as exc:  # noqa: BLE001 -- ledger is best-effort; the run's own count still applies
             log(f"  Trial ledger unavailable for Quick Optimize ({exc}); using this run's evaluations only.")
         icir_gate = run_icir_gate_from_backtest(

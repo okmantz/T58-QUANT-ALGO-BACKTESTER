@@ -819,6 +819,12 @@ class DeflatedSharpeGateResult:
     benchmark_sharpe: float          # E[best Sharpe by chance] across n_trials
     reason: str                      # one human-readable line, pass or fail
     dsr_result: "DeflatedSharpeResult | None" = None
+    # 2026-10-31 audit (section 4): the two trial counts were printed under one name. ``raw_trials`` is every evaluation counted
+    # (this run's GA + earlier runs + external + family prior); ``effective_trials`` is that count after clustering return streams.
+    # ``n_trials`` above is the one the deflation used. None when the caller did not supply them.
+    raw_trials: int | None = None
+    effective_trials: int | None = None
+    trial_clustering: str = ""
 
 
 def deflated_sharpe_gate(
@@ -829,6 +835,9 @@ def deflated_sharpe_gate(
     returns_skew: float = 0.0,
     returns_kurtosis: float = 3.0,
     min_probabilistic_sharpe: float = 0.95,
+    raw_trials: int | None = None,
+    effective_trials: int | None = None,
+    trial_clustering: str = "",
 ) -> DeflatedSharpeGateResult:
     """The Deflated Sharpe Ratio as a REJECT gate, not a score penalty.
 
@@ -882,4 +891,5 @@ def deflated_sharpe_gate(
         benchmark_sharpe=dsr.benchmark_sharpe,
         reason=reason,
         dsr_result=dsr,
+        raw_trials=raw_trials, effective_trials=effective_trials, trial_clustering=trial_clustering,
     )

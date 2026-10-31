@@ -71,6 +71,7 @@ class SizingDecision:
     commission_per_contract: float = 0.0    # per-contract commission actually used (micro-aware)
     used_micro: bool = False
     above_budget: bool = False              # True only for fixed_contracts when the stop risk exceeds the budget
+    planned_risk: float | None = None       # rr_planned only: the per-trade $ risk the sizer PLANNED (anchor / RR, capped at the budget)
 
 
 # Defaults that match PropRules.account_size and charge REAL friction. A backtest with zero spread/slippage/commission
@@ -458,6 +459,7 @@ class RiskConfig:
         # the planned risk for THIS setup. planned_avail is what sizing
         # may actually spend; the cap only bounds it.
         planned_avail: float | None = None
+        planned_dollars: float | None = None
         if mode == "rr_planned":
             budget = self.risk_amount(self.initial_balance) if self.initial_balance else budget
             avail = budget - fixed
@@ -467,6 +469,7 @@ class RiskConfig:
                 if rr > 0:
                     planned = min(budget, float(self.planned_target_dollars) / rr)
             planned_avail = planned - fixed
+            planned_dollars = planned
 
         # -- fractional-unit instruments (FX/CFD/crypto): no whole-contract
         # constraint, so every mode reduces to "size so the worst case fits".
@@ -485,7 +488,7 @@ class RiskConfig:
                 units=units, contracts=0.0, stop_distance=D, original_stop_distance=D, budget=budget,
                 risk_at_stop=self.worst_case_loss(units, D), contract_size=None,
                 commission_per_contract=self.commission_per_contract,
-                skip_reason=None if units > 0 else SKIP_NO_BUDGET,
+                skip_reason=None if units > 0 else SKIP_NO_BUDGET, planned_risk=planned_dollars,
             )
 
         cs = float(self.contract_size)
@@ -514,12 +517,13 @@ class RiskConfig:
                 stop_capped=capped, stop_scale=(dist / D) if D else 1.0, budget=budget,
                 risk_at_stop=self.worst_case_loss(units, dist, contract_units, per_contract_commission),
                 contract_size=contract_units, commission_per_contract=per_contract_commission,
-                used_micro=micro, above_budget=above,
+                used_micro=micro, above_budget=above, planned_risk=planned_dollars,
             )
 
         def _skip(reason: str, dist: float = D) -> "SizingDecision":
             return SizingDecision(budget=budget, original_stop_distance=D, stop_distance=dist,
-                                  skip_reason=reason, contract_size=cs, commission_per_contract=cpc)
+                                  skip_reason=reason, contract_size=cs, commission_per_contract=cpc,
+                                  planned_risk=planned_dollars)
 
         if mode == "fixed_contracts":
             n = _cap_contracts(max(int(self.fixed_contracts), 1), cs)
@@ -1101,6 +1105,16 @@ def position_sizing_deviation_message(
                 f"multiplier of {avg_adaptive_multiplier:.2f}x (see Adaptive Risk in the report for "
                 "which rule(s) fired)"
             )
+        elif stats.get("risk_baseline") == "planned" or stats.get("sizing_mode") == "rr_planned":
+            # 2026-10-31 audit (section 3): under rr_planned the baseline is the sizer's own PLAN (planned_target_dollars / RR), which is
+            # deliberately below the configured cap. Name the mode and the plan so the cap is never blamed for a planned size.
+            planned = stats.get("avg_planned_risk_dollars") or 0.0
+            plan_txt = f" (average plan ${planned:,.2f} per trade)" if planned else ""
+            direction = (
+                f"sized BELOW the rr_planned PLAN{plan_txt} -- sizing_mode=rr_planned plans planned_target_dollars / RR "
+                "of risk per trade, NOT the configured cap, so this gap is whole-contract rounding or the micro "
+                "fallback on a coarse-granularity instrument, not a position cap"
+            )
         else:
             direction = (
                 "sized BELOW the configured risk target (a max-position-size cap, whole-contract "
@@ -1120,6 +1134,38 @@ def position_sizing_deviation_message(
         "avg_actual_stop_risk_dollars) before trusting the headline eval-pass/risk-of-ruin numbers "
         "at face value."
     )
+
+
+def sizing_policy_summary(risk: "RiskConfig", stats: dict | None = None) -> dict:
+    """The sizing policy a report header must print (2026-10-31 audit, section 3): mode, cap, anchor, micro fallback on/off and the
+    share of trades that actually traded micros. ``stats`` is a BacktestStatistics dict (optional)."""
+    mode = risk.sizing_mode if risk.sizing_mode in SIZING_MODES else "skip"
+    out = {
+        "sizing_mode": mode,
+        "risk_cap_dollars": risk.risk_amount(risk.initial_balance) if risk.initial_balance else risk.risk_amount(0.0),
+        "max_contracts": risk.max_contracts,
+        "planned_target_dollars": float(risk.planned_target_dollars) if mode == "rr_planned" else None,
+        "micro_fallback": bool(risk.micro_contract_size) and mode in ("micro_fallback", "rr_planned"),
+    }
+    if stats is not None:
+        out["pct_trades_on_micros"] = float(stats.get("pct_trades_micro", 0.0) or 0.0)
+        out["pct_trades_substituted_stop"] = float(stats.get("pct_trades_substituted_stop", 0.0) or 0.0)
+    return out
+
+
+def sizing_policy_line(risk: "RiskConfig", stats: dict | None = None) -> str:
+    """One human-readable line of ``sizing_policy_summary`` for report headers."""
+    p = sizing_policy_summary(risk, stats)
+    parts = [f"mode={p['sizing_mode']}", f"risk cap=${p['risk_cap_dollars']:,.0f}/trade",
+             f"max contracts={p['max_contracts'] if p['max_contracts'] is not None else 'none'} (mini-equivalents)"]
+    if p["planned_target_dollars"] is not None:
+        parts.append(f"rr_planned anchor=${p['planned_target_dollars']:,.0f} (planned risk = anchor / RR)")
+    parts.append("micro fallback " + ("ON" if p["micro_fallback"] else "OFF"))
+    if "pct_trades_on_micros" in p:
+        parts.append(f"{p['pct_trades_on_micros']:.0f}% of trades on micros")
+        if p["pct_trades_substituted_stop"]:
+            parts.append(f"{p['pct_trades_substituted_stop']:.0f}% on a substituted 1%-of-price stop (excluded from risk comparisons)")
+    return "Sizing policy: " + "; ".join(parts) + "."
 
 
 def instrument_scale_mismatch_message(pip_size: float) -> str:

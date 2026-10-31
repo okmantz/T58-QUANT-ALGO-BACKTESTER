@@ -244,11 +244,22 @@ class RefinementConfig:
     # (previous behavior, byte-identical search).
     plateau_patience: int = 4
     plateau_min_delta: float = 1e-6
+    # 2026-10-31 audit (section 5, change 1): NEVER-WORSE rule. The parent (baseline) rule is always a candidate; the search's champion
+    # replaces it only if its lower-confidence-bound expectancy at stressed costs on inner purged folds beats the parent's by more than
+    # ``never_worse_se_multiple`` standard errors (see app.optimize.never_worse). Otherwise the parent is returned, so refinement can
+    # never walk away from a rule that was already better.
+    never_worse_enabled: bool = True
+    never_worse_folds: int = 5
+    never_worse_cost_multiplier: float = 2.0
+    never_worse_se_multiple: float = 1.0
 
     def __post_init__(self):
         self.flatline_patience = max(int(self.flatline_patience), 0)
         self.plateau_patience = max(int(self.plateau_patience), 0)
         self.plateau_min_delta = max(float(self.plateau_min_delta), 0.0)
+        self.never_worse_folds = max(int(self.never_worse_folds), 3)
+        self.never_worse_cost_multiplier = max(float(self.never_worse_cost_multiplier), 1.0)
+        self.never_worse_se_multiple = max(float(self.never_worse_se_multiple), 0.0)
         self.population_size = max(int(self.population_size), 4)
         self.generations = max(int(self.generations), 1)
         self.elite_count = max(1, min(int(self.elite_count), self.population_size - 1))
@@ -332,6 +343,9 @@ class RefinementResult:
     # OOS/regime numbers exist inside this loop, so those are never
     # fabricated here).
     distribution_summary: dict | None = None
+    # 2026-10-31 audit: the never-worse decision (NeverWorseDecision.to_dict()) when the guard ran; None when it was off or the search
+    # returned the baseline itself. ``accept`` False means the parent rule was kept even though the search found a higher raw fitness.
+    never_worse: dict | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1643,6 +1657,26 @@ def run_iterative_refinement(
                     "plateau_robust_selection=False to restore the old raw-best behavior."
                 )
 
+        never_worse_info: dict | None = None
+        if cfg.never_worse_enabled and best_ever is not baseline and list(best_ever.genome) != list(baseline.genome):
+            from app.optimize.never_worse import run_never_worse
+            try:
+                _nw = run_never_worse(df, build(baseline.genome), build(best_ever.genome), risk, adaptive_risk,
+                                      n_folds=cfg.never_worse_folds, cost_multiplier=cfg.never_worse_cost_multiplier,
+                                      se_multiple=cfg.never_worse_se_multiple)
+                never_worse_info = _nw.to_dict()
+                log(f"Never-worse check: {_nw.reason}")
+                if not _nw.accept:
+                    warnings.append(
+                        "Never-worse rule: the search's best configuration did not beat the starting (parent) configuration by more than "
+                        f"{cfg.never_worse_se_multiple:g} standard error on inner purged folds at {cfg.never_worse_cost_multiplier:g}x costs, "
+                        "so the parent configuration is returned unchanged. " + _nw.reason)
+                    best_ever = baseline
+            except Exception as exc:  # noqa: BLE001 - an improvement that cannot be confirmed is not taken
+                never_worse_info = {"accept": False, "reason": f"check failed: {type(exc).__name__}: {exc}"}
+                warnings.append(f"Never-worse check could not run ({type(exc).__name__}: {exc}); the parent configuration is returned.")
+                best_ever = baseline
+
         log("Running full-fidelity Monte Carlo on the best-ever configuration...")
         best_strategy = build(best_ever.genome)
         final_fitness, final_stats, final_prop, final_mc_summary, final_bt, final_mc, final_single = _evaluate(
@@ -1696,6 +1730,7 @@ def run_iterative_refinement(
             # lookups. total_evaluations = search evaluations + probes.
             total_evaluations=len(all_evaluated) + plateau_probes,
             distribution_summary=distribution_summary,
+            never_worse=never_worse_info,
         )
     finally:
         if tmp_dir is not None:

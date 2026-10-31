@@ -14,6 +14,18 @@ historical window two years ago carries exactly the same selection bias today, s
 data fingerprint (``fp``, see ``app.discovery_engine.provenance.data_fingerprint``). When the caller passes ``current_fp`` to
 ``total`` / ``family_prior``, entries whose fingerprint EQUALS it keep full weight; entries with a different (or no) fingerprint
 age as before. Callers that pass no ``current_fp`` get the old behaviour byte for byte.
+
+2026-10-31 audit (section 4, "the trial ledger is a counter, not a ledger"): the ledger now FAILS LOUDLY. A corrupt or unreadable file
+used to load as an empty ledger (trial count 0, so the deflated-Sharpe bar silently fell) and a failed write was swallowed while
+``record`` still returned a total. Now:
+
+* ``_load`` raises ``TrialLedgerError`` for a file that exists but cannot be parsed as a JSON object, after copying the bad file to
+  ``trial_ledger.corrupt-<hash>.json`` for forensics. The original is left in place, so every later call keeps raising until a human
+  repairs or restores it -- it never reads as empty. A file that does not exist is a genuinely empty ledger.
+* ``_write`` raises ``TrialLedgerError`` when the atomic write fails, so ``record`` / ``book_run`` / ``mark_clock_epoch`` abort the
+  run instead of reporting a total that was never saved.
+* Same-data trials never decay: callers pass ``current_fp`` (``data_fingerprint(df)``) and ``data_fp``; ``decay_report`` says which
+  rule fired for a label so a report can state it.
 """
 from __future__ import annotations
 
@@ -25,7 +37,12 @@ import threading
 import time
 from pathlib import Path
 
-_LOCK = threading.Lock()
+class TrialLedgerError(RuntimeError):
+    """The trial ledger is corrupt, unreadable or unwritable. Trial counts feed the multiple-testing penalty, so a ledger that cannot be
+    trusted must stop the run rather than read as empty."""
+
+
+_LOCK = threading.RLock()
 _PATH = Path(__file__).resolve().parents[2] / "reports" / "trial_ledger.json"
 DEFAULT_HALF_LIFE_DAYS = 730.0
 
@@ -35,29 +52,55 @@ def _key(label) -> str:
 
 
 def _load() -> dict:
+    """The ledger as a dict. A missing file is an empty ledger; a file that exists but is unreadable or not a JSON object raises."""
     try:
-        return json.loads(_PATH.read_text(encoding="utf-8"))
-    except Exception:
+        raw = _PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return {}
+    except OSError as exc:
+        raise TrialLedgerError(f"Trial ledger {_PATH} could not be read ({exc}). Refusing to treat it as empty: that would drop the "
+                               "trial count to zero and lower the deflated-Sharpe bar.") from exc
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        _quarantine(raw)
+        raise TrialLedgerError(f"Trial ledger {_PATH} is corrupt ({exc}). A copy was saved beside it as trial_ledger.corrupt-*.json. "
+                               "Restore it from backup or repair it by hand; it is NOT being treated as empty.") from exc
+    if not isinstance(data, dict):
+        _quarantine(raw)
+        raise TrialLedgerError(f"Trial ledger {_PATH} does not hold a JSON object (found {type(data).__name__}); refusing to use it.")
+    return data
+
+
+def _quarantine(raw: str) -> None:
+    """Best-effort forensic copy of a corrupt ledger (named by content hash, so repeated failures do not pile up copies)."""
+    try:
+        import hashlib
+        tag = hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:10]
+        dest = _PATH.with_name(f"trial_ledger.corrupt-{tag}.json")
+        if not dest.exists():
+            dest.write_text(raw, encoding="utf-8")
+    except OSError:
+        pass
 
 
 def _write(data: dict) -> None:
-    """Atomic write (temp file + replace) so a crash mid-write can never truncate the whole ledger."""
+    """Atomic write (temp file + replace) so a crash mid-write can never truncate the whole ledger. Raises ``TrialLedgerError`` on failure."""
+    tmp = None
     try:
         _PATH.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(prefix=".trial_ledger.", suffix=".tmp", dir=str(_PATH.parent))
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(json.dumps(data, indent=1, sort_keys=True))
-            os.replace(tmp, _PATH)
-        except Exception:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(data, indent=1, sort_keys=True))
+        os.replace(tmp, _PATH)
+    except Exception as exc:  # noqa: BLE001 - re-raised as the ledger's own error
+        if tmp:
             try:
                 os.unlink(tmp)
             except OSError:
                 pass
-            raise
-    except Exception:
-        pass
+        raise TrialLedgerError(f"Trial ledger {_PATH} could not be written ({exc}). The trials of this run were NOT recorded, so the "
+                               "run is aborted rather than reporting a count that was never saved.") from exc
 
 
 def _entries(value) -> list[dict]:
@@ -108,6 +151,25 @@ def total(label, half_life_days: float | None = DEFAULT_HALF_LIFE_DAYS, now: flo
         w = 1.0 if (t is None or same_window) else 0.5 ** (max(0.0, now - float(t)) / 86400.0 / float(half_life_days))
         acc += n * w
     return int(-(-acc // 1)) if acc > 0 else 0
+
+
+def decay_report(label, half_life_days: float | None = DEFAULT_HALF_LIFE_DAYS, now: float | None = None,
+                 current_fp: str | None = None) -> dict:
+    """Which aging rule fired for ``label`` -- so a report can state it instead of leaving the reader to guess.
+
+    Returns ``{"raw": int, "aged": int, "same_data": int, "aged_by_half_life": int, "rule": str}`` where ``same_data`` counts trials
+    recorded on exactly ``current_fp`` (never decayed) and ``aged_by_half_life`` counts the rest."""
+    ents = _entries(_load().get(_key(label), 0))
+    raw = int(sum(int(e.get("n", 0)) for e in ents))
+    same = int(sum(int(e.get("n", 0)) for e in ents if current_fp and e.get("fp") == current_fp))
+    aged = total(label, half_life_days=half_life_days, now=now, current_fp=current_fp)
+    if half_life_days is None:
+        rule = "no aging (half-life disabled): every trial counts in full"
+    elif current_fp and same:
+        rule = f"data fingerprint {current_fp} matched {same} trial(s): they do not decay; the other {raw - same} age with a {half_life_days:g}-day half-life"
+    else:
+        rule = f"no trial shares the current data fingerprint: all age with a {half_life_days:g}-day half-life"
+    return {"raw": raw, "aged": aged, "same_data": same, "aged_by_half_life": raw - same, "rule": rule}
 
 
 CLOCK_EPOCHS_KEY = "_clock_epochs"

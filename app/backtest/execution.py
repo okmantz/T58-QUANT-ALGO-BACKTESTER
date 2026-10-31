@@ -42,6 +42,7 @@ import numpy as np
 import pandas as pd
 
 from app.backtest.adaptive_risk import AdaptiveRiskConfig, AdaptiveRiskState, volatility_percentile_series
+from app.backtest.equity_reconciliation import enforce as _enforce_equity_recon, reconcile_equity as _reconcile_equity
 from app.backtest.risk import RiskConfig, SizingDecision
 
 try:
@@ -126,6 +127,13 @@ class Trade:
     attempt_id: int = 0                # which purchased evaluation/funded account this trade belongs to
     fill_resolution: str = "bar"       # "bar" (stop/target from the bar's high/low) or "intrabar" (finer-bar replay)
     instrument: str | None = None      # which instrument/leg traded it (set by the portfolio engine; None for single-instrument runs)
+    planned_risk_dollars: float | None = None
+    # 2026-10-31 audit (section 3): sizing_mode="rr_planned" plans anchor / RR dollars of risk per trade, deliberately BELOW the
+    # configured cap (intended_risk_dollars). Reconciliation compares the actual stop risk against THIS figure when present, so a
+    # planned sub-cap size is never mislabelled as a "max-position-size cap". None for every other sizing mode.
+    used_fallback_stop: bool = False
+    # True when the strategy defined no stop and the engine substituted the 1%-of-price placeholder stop. Such trades are sized on a
+    # stop nobody would place and are excluded from risk comparisons.
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -706,7 +714,7 @@ def run_execution(
                     f"starts fresh at ${acct.balance:,.2f} (evaluation profit is not carried over)."
                 ),
             })
-        equity = acct.balance
+        _set_equity(acct.balance, "prop_account_sync")
 
     def _settle_exit(open_pos: dict, raw_exit_price: float, reason: str, direction_: int, i: int) -> float:
         nonlocal equity, gap_loss_count, last_close_bar_idx
@@ -734,6 +742,8 @@ def run_execution(
             adaptive_risk_multiplier=open_pos["adaptive_multiplier"],
             adaptive_risk_rules_active=tuple(open_pos["adaptive_rules_active"]),
             intended_risk_dollars=open_pos.get("intended_risk_dollars"),
+            planned_risk_dollars=open_pos.get("planned_risk_dollars"),
+            used_fallback_stop=bool(open_pos.get("used_fallback_stop", False)),
             worst_price=open_pos.get("worst_price"),
             mfe_price=open_pos.get("mfe_price"),
             exit_cause=_exit_cause_for(reason, open_pos),
@@ -791,6 +801,8 @@ def run_execution(
             adaptive_risk_multiplier=open_pos["adaptive_multiplier"],
             adaptive_risk_rules_active=tuple(open_pos["adaptive_rules_active"]),
             intended_risk_dollars=open_pos.get("intended_risk_dollars"),
+            planned_risk_dollars=open_pos.get("planned_risk_dollars"),
+            used_fallback_stop=bool(open_pos.get("used_fallback_stop", False)),
             worst_price=open_pos.get("worst_price"),
             mfe_price=open_pos.get("mfe_price"),
             exit_cause="take_profit",  # partial scale-out is a take-profit mechanism
@@ -879,13 +891,24 @@ def run_execution(
             prop_done = True
             return
         attempt_id += 1
-        equity = float(prop_rules.account_size)
+        _set_equity(float(prop_rules.account_size), "attempt_reset")
         payout_target_baseline = equity
         adaptive_state.reset()
         _prop_new_account(i_)
 
     if prop_mode:
         _prop_new_account(0)
+
+    # 2026-10-31 audit (section 3, fix 7): every change to ``equity`` that is NOT a settled trade goes through ``_set_equity`` so the
+    # run can prove final equity == start + sum(trade P&L) + logged adjustments (see app.backtest.equity_reconciliation).
+    _ledger_start_equity = equity
+    _ledger_adjustments: list[tuple[str, float]] = []
+
+    def _set_equity(new_value: float, kind: str) -> None:
+        nonlocal equity
+        new_value = float(new_value)
+        _ledger_adjustments.append((kind, new_value - equity))
+        equity = new_value
 
     for i in range(n):
         bar_date = day_idx[i]
@@ -1325,7 +1348,7 @@ def run_execution(
                         f"Fresh ${risk.initial_balance:,.2f} account started; trading continues."
                     ),
                 })
-                equity = risk.initial_balance
+                _set_equity(risk.initial_balance, "breach_reset")
                 equity_arr[i] = equity
                 payout_target_baseline = risk.initial_balance
                 adaptive_state.reset()  # a new account must not inherit the old one's throttle state
@@ -1368,7 +1391,7 @@ def run_execution(
                     f"${payout_target_baseline:,.2f}; trading continues."
                 ),
             })
-            equity = payout_target_baseline
+            _set_equity(payout_target_baseline, "payout")
             equity_arr[i] = equity
             adaptive_state.reset()  # "progress to target" / drawdown triggers start over
 
@@ -1529,6 +1552,12 @@ def run_execution(
         equity_df.attrs["prop_rules"] = prop_rules
     equity_df.attrs["account_reset_events"] = reset_events
     equity_df.attrs["payout_events"] = [ev for ev in reset_events if ev.get("kind") == "payout"]
+    # 2026-10-31 audit (section 3, fix 7): per-run ledger check -- start + sum(trade P&L) - payouts + resets must equal final equity.
+    _payout_total = sum(float(ev.get("payout_amount") or 0.0) for ev in reset_events if ev.get("kind") == "payout")
+    _recon = _reconcile_equity(_ledger_start_equity, [t.pnl for t in trades], _ledger_adjustments, equity,
+                               payout_total=_payout_total)
+    equity_df.attrs["equity_reconciliation"] = _recon.to_dict()
+    _enforce_equity_recon(_recon)
     equity_df.attrs["breach_events"] = [ev for ev in reset_events if ev.get("kind", "breach") == "breach"]
     equity_df.attrs["zero_size_contract_floor_count"] = zero_size_contract_floor_count
     equity_df.attrs["min_contract_rescue_count"] = min_contract_rescue_count

@@ -91,6 +91,14 @@ class BacktestStatistics:
     avg_realized_loss_on_losers: float = 0.0
     pct_trades_position_capped: float = 0.0
     pct_trades_risk_overshoot: float = 0.0
+    # 2026-10-31 audit (section 3): sizing policy + planned-risk reconciliation. ``sizing_mode`` is the dominant mode across the trades;
+    # ``risk_baseline`` says whether the "sized below" comparison used the sizer's PLAN (rr_planned) or the configured target;
+    # substituted-stop trades (the 1%-of-price placeholder) are excluded from every risk comparison and counted here.
+    sizing_mode: str = ""
+    risk_baseline: str = "configured"
+    avg_planned_risk_dollars: float = 0.0
+    pct_trades_micro: float = 0.0
+    pct_trades_substituted_stop: float = 0.0
     # ADAPTIVE-RISK-ATTRIBUTION (2026-09-24): pct_trades_position_capped
     # above previously left "why" as an unresolved three-way guess (max-
     # position-size cap? adaptive-risk throttle? whole-contract rounding?)
@@ -357,16 +365,27 @@ def compute_risk_reconciliation(trades: list[Trade]) -> dict:
     exceeding that same trade's own actual stop risk -- the opposite
     direction (risking more than intended), tracked separately.
     """
-    intended = [t.intended_risk_dollars for t in trades if t.intended_risk_dollars]
+    # 2026-10-31 audit (section 3): trades whose stop was the 1%-of-price placeholder (the strategy defined none) are sized on a stop
+    # nobody would place; they are excluded from every risk comparison below and counted separately.
+    substituted = [t for t in trades if getattr(t, "used_fallback_stop", False)]
+    trades_cmp = [t for t in trades if not getattr(t, "used_fallback_stop", False)]
+
+    def _baseline(t):
+        """The dollar risk this trade was SUPPOSED to carry: the sizer's plan under rr_planned, else the configured target."""
+        planned = getattr(t, "planned_risk_dollars", None)
+        return planned if planned else t.intended_risk_dollars
+
+    intended = [t.intended_risk_dollars for t in trades_cmp if t.intended_risk_dollars]
+    planned_list = [t.planned_risk_dollars for t in trades_cmp if getattr(t, "planned_risk_dollars", None)]
     # Costs now sit inside the sizing budget (RiskConfig.size_for_stop), so the
     # honest "what the stop would have cost" is the cost-inclusive worst case
     # the sizer recorded; the bare stop distance x size is only the fallback
     # for trades that predate it.
     pairs = [
-        (t.intended_risk_dollars,
+        (_baseline(t),
          (getattr(t, "risk_at_stop_dollars", None) or t.initial_risk * t.size))
-        for t in trades
-        if t.intended_risk_dollars and t.initial_risk and t.size
+        for t in trades_cmp
+        if _baseline(t) and t.initial_risk and t.size
     ]
     losers = [t.pnl for t in trades if t.pnl < 0]
 
@@ -391,7 +410,7 @@ def compute_risk_reconciliation(trades: list[Trade]) -> dict:
         return t.initial_risk * t.size if (t.initial_risk and t.size) else None
     overshoot_flags = [
         abs(t.pnl) > _budgeted(t) * 1.01
-        for t in trades
+        for t in trades_cmp
         if t.pnl < 0 and _budgeted(t)
     ]
     pct_overshoot = float(sum(overshoot_flags) / len(overshoot_flags) * 100) if overshoot_flags else 0.0
@@ -406,7 +425,18 @@ def compute_risk_reconciliation(trades: list[Trade]) -> dict:
     adaptive_active_flags = [bool(t.adaptive_risk_rules_active) for t in trades]
     pct_adaptive_active = float(sum(adaptive_active_flags) / len(adaptive_active_flags) * 100) if adaptive_active_flags else 0.0
 
+    modes = [getattr(t, "sizing_mode", None) for t in trades if getattr(t, "sizing_mode", None)]
+    sizing_mode = max(set(modes), key=modes.count) if modes else ""
+    n_all = len(trades)
+    pct_micro = float(sum(1 for t in trades if getattr(t, "used_micro", False)) / n_all * 100) if n_all else 0.0
+    pct_substituted = float(len(substituted) / n_all * 100) if n_all else 0.0
+
     return {
+        "sizing_mode": sizing_mode,
+        "risk_baseline": "planned" if planned_list else "configured",
+        "avg_planned_risk_dollars": float(np.mean(planned_list)) if planned_list else 0.0,
+        "pct_trades_micro": pct_micro,
+        "pct_trades_substituted_stop": pct_substituted,
         "avg_intended_risk_dollars": avg_intended,
         "avg_actual_stop_risk_dollars": avg_actual_stop,
         "avg_realized_loss_on_losers": avg_realized_loss,
@@ -727,6 +757,10 @@ def compute_statistics(
         pct_trades_adaptive_throttle_active=risk_recon["pct_trades_adaptive_throttle_active"],
         pct_trades_position_capped=risk_recon["pct_trades_position_capped"],
         pct_trades_risk_overshoot=risk_recon["pct_trades_risk_overshoot"],
+        sizing_mode=risk_recon["sizing_mode"], risk_baseline=risk_recon["risk_baseline"],
+        avg_planned_risk_dollars=risk_recon["avg_planned_risk_dollars"],
+        pct_trades_micro=risk_recon["pct_trades_micro"],
+        pct_trades_substituted_stop=risk_recon["pct_trades_substituted_stop"],
         avg_mae_dollars=avg_mae_dollars,
         max_mae_dollars=max_mae_dollars,
         sharpe_per_trade=_sr_trade, pnl_skew=_skew_trade, pnl_kurtosis=_kurt_trade,
