@@ -68,7 +68,7 @@ def _key_for(provider: Provider) -> str | tuple[str, str]:
     if provider.key_field == "alpaca":
         from app.data import alpaca_credentials
         creds = alpaca_credentials.load_credentials()
-        return (creds.api_key, creds.secret_key) if creds and creds.is_usable() else ""
+        return (creds.api_key, creds.secret_key) if creds and creds.is_usable else ""
     if not provider.key_field:
         return "free"
     from app.accounts.api_keys import load_settings
@@ -89,6 +89,29 @@ def key_hint(provider: Provider) -> str:
     if not k:
         return ""
     return "\u2022\u2022\u2022\u2022" + k[-4:] if len(k) >= 8 else "\u2022\u2022\u2022\u2022"
+
+
+_ALPACA_CRYPTO = ("BTC", "ETH", "SOL", "DOGE", "LTC", "AVAX", "LINK", "UNI", "AAVE", "BCH", "XRP", "DOT", "SHIB", "USDT", "USDC")
+_FX_CCY = ("EUR", "USD", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD")
+
+
+def _alpaca_symbol(symbol: str) -> tuple[str, str]:
+    """(symbol, asset class) for Alpaca: crypto pairs need the slash form (BTC/USD); forex is not an Alpaca market."""
+    raw = symbol.strip().upper().replace("-", "/").replace("_", "/")
+    base, sep, quote = raw.partition("/")
+    if not sep and len(raw) in (6, 7, 8):
+        for q in ("USDT", "USDC", "USD"):
+            if raw.endswith(q) and raw[:-len(q)] in _ALPACA_CRYPTO:
+                base, quote, sep = raw[:-len(q)], q, "/"
+                break
+    if sep:
+        if base in _ALPACA_CRYPTO or quote in ("USDT", "USDC"):
+            return f"{base}/{quote}", "Crypto"
+        if base in _FX_CCY and quote in _FX_CCY:
+            raise DataSourceError("Alpaca has no forex market. Use London Strategic Edge, Twelve Data or Dukascopy for forex pairs.")
+    elif len(raw) == 6 and raw[:3] in _FX_CCY and raw[3:] in _FX_CCY:
+        raise DataSourceError("Alpaca has no forex market. Use London Strategic Edge, Twelve Data or Dukascopy for forex pairs.")
+    return raw, "Stock"
 
 
 def provider_list() -> list[dict]:
@@ -226,7 +249,7 @@ def fetch(provider_id: str, symbol: str, timeframe: str, start: str = "", end: s
     if provider_id == "alpaca":
         from app.data.alpaca_source import fetch_bars
         label = {"1m": "1Min", "5m": "5Min", "15m": "15Min", "30m": "30Min", "1h": "1Hour", "4h": "1Hour", "1d": "1Day"}[timeframe]
-        asset = "Crypto" if "/" in symbol and symbol.upper().split("/")[1] in ("USD", "USDT", "USDC", "BTC", "ETH") else "Stock"
+        symbol, asset = _alpaca_symbol(symbol)
         df = fetch_bars(key[0], key[1], symbol, asset, label, start, end)
         df = df.rename(columns={c: c.lower() for c in df.columns})
         if "timestamp" not in df.columns:

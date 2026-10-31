@@ -147,6 +147,75 @@ def _normalize_candles(raw, symbol: str) -> pd.DataFrame:
     return out
 
 
+_FX_CCY = frozenset(("EUR", "USD", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD", "SEK", "NOK", "MXN", "ZAR", "SGD", "HKD", "TRY", "CNH"))
+_METALS = frozenset(("XAU", "XAG", "XPT", "XPD"))
+_PAGE_ROWS = 5000
+_MAX_PAGES = 80                     # 80 pages x 5,000 bars = 400,000 bars per download, then it stops with a note
+
+
+def _market_guesses(symbol: str) -> list:
+    """Markets to try, in order, when the catalogue cannot place a symbol by itself (forex vs futures vs crypto ...). None means "let
+    the client resolve it"; the contract markets (CME, options) are never guessed."""
+    s = symbol.strip().upper().replace("-", "/").replace("_", "/")
+    base, _, quote = s.partition("/")
+    bare = s.replace("/", "")
+    guesses: list = [None]
+    if quote and base in _FX_CCY | _METALS and quote in _FX_CCY:
+        guesses += ["forex", "commodities"]
+    elif quote:
+        guesses += ["crypto", "forex"]
+    elif len(bare) == 6 and bare[:3] in _FX_CCY | _METALS and bare[3:] in _FX_CCY:
+        guesses += ["forex", "commodities"]
+    else:
+        guesses += ["futures", "indices", "commodities", "us_stocks", "crypto", "forex"]
+    seen, out = set(), []
+    for g in guesses:
+        if g not in seen:
+            seen.add(g)
+            out.append(g)
+    return out
+
+
+def _rows_for(client, symbol: str, tf: str, start: str, end: str, limit: int, market):
+    """One candles() call, with the market passed the way the installed lse-data understands (3.0: market=, 0.x: dataset=)."""
+    kwargs = {"start": start, "end": end, "limit": limit}
+    if market is None:
+        return client.candles(symbol, tf, **kwargs)
+    try:
+        return client.candles(symbol, tf, market=market, **kwargs)
+    except TypeError:
+        legacy = {"forex": "Forex", "futures": "Futures", "crypto": "Crypto", "indices": "Index", "commodities": "Commodity",
+                  "us_stocks": "Stock"}.get(market)
+        if not legacy:
+            raise
+        return client.candles(symbol, tf, dataset=legacy, **kwargs)
+
+
+def _first_page(client, symbol: str, tf: str, start: str, end: str, market, LSEError):
+    """Find the market that holds ``symbol`` and return (market, first page of rows)."""
+    tried, last_exc = [], None
+    guesses = [market] if market else _market_guesses(symbol)
+    for g in guesses:
+        try:
+            rows = _rows_for(client, symbol, tf, start, end, _PAGE_ROWS, g)
+        except LSEError as exc:
+            last_exc = exc
+            code = str(getattr(exc, "code", "") or "")
+            tried.append(g or "auto")
+            if code in ("market-ambiguous", "symbol-unknown", "market-unknown", "data-unavailable", "date-not-trading") or exc.status in (400, 404):
+                continue                      # this market does not hold it / has nothing in that range: try the next one
+            raise
+        if rows is not None and len(rows) > 0:
+            return g, rows
+        tried.append(g or "auto")
+    if last_exc is not None:
+        raise LSEFetchError(f"London Strategic Edge has no {symbol} candles for {start} to {end} at {tf} (tried: {', '.join(tried)}). "
+                            f"Last answer: {last_exc.message} (status {last_exc.status}). Check the symbol against the catalogue "
+                            "(forex like EUR/USD, futures like GC or ES, crypto like BTC/USD) and your plan's history limit.") from last_exc
+    raise LSEFetchError(f"London Strategic Edge returned no candles for {symbol} between {start} and {end} at {tf} (tried: {', '.join(tried)}). "
+                        "Try a wider date range, a coarser timeframe, or another symbol spelling.")
+
+
 def fetch_candles(
     api_key: str,
     symbol: str,
@@ -154,28 +223,48 @@ def fetch_candles(
     start: str,
     end: str,
     limit: int | None = None,
+    market: str | None = None,
 ) -> pd.DataFrame:
-    """Fetches historical OHLCV candles for one instrument (any asset
-    class LSE covers -- 'AAPL', 'EUR/USD', 'BTC/USD', 'GC' futures code,
-    etc.). start/end are 'YYYY-MM-DD' (or full ISO 8601) strings. A single
-    candles() call returns one page (LSE's own pagination, per the
-    lse-data README); for a deep multi-year pull beyond one page,
-    fetch_history() below runs LSE's vault export job instead."""
+    """Fetches historical OHLCV candles for one instrument from LSE: forex ('EUR/USD', 'XAUUSD'), futures ('GC', 'ES'), crypto
+    ('BTC/USD'), indices, commodities or stocks. The market is worked out from the symbol (and tried in turn if the catalogue
+    lists the symbol in several), or pass ``market=`` explicitly. Windows longer than one page (5,000 bars) are read page by page
+    up to ``limit`` bars (default: everything up to a 400,000-bar safety stop). start/end are 'YYYY-MM-DD'."""
     client = _client(api_key)
     from lse import LSEError
 
     if timeframe_label not in TIMEFRAME_CHOICES:
         raise LSEFetchError(f"Unknown timeframe '{timeframe_label}'. Choose one of: {', '.join(TIMEFRAME_CHOICES)}.")
-    kwargs = {"start": start, "end": end}
-    if limit:
-        kwargs["limit"] = limit
+    symbol = (symbol or "").strip()
+    if not symbol:
+        raise LSEFetchError("Enter an instrument.")
+    cap = int(limit) if limit else _PAGE_ROWS * _MAX_PAGES
     try:
-        raw = client.candles(symbol, timeframe_label, **kwargs)
+        mkt, rows = _first_page(client, symbol, timeframe_label, start, end, market, LSEError)
+        frames = [_normalize_candles(rows, symbol)]
+        pages = 1
+        while len(rows) >= _PAGE_ROWS and sum(len(f) for f in frames) < cap and pages < _MAX_PAGES:
+            last = frames[-1]["timestamp"].iloc[-1]
+            cursor = (last + pd.Timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S")
+            if end and pd.Timestamp(cursor, tz="UTC") >= pd.Timestamp(end, tz="UTC") + pd.Timedelta(days=1):
+                break
+            try:
+                rows = _rows_for(client, symbol, timeframe_label, cursor, end, _PAGE_ROWS, mkt)
+            except LSEError as exc:
+                if str(getattr(exc, "code", "")) in ("data-unavailable", "date-not-trading") or exc.status == 404:
+                    break
+                raise
+            if rows is None or len(rows) == 0:
+                break
+            frames.append(_normalize_candles(rows, symbol))
+            pages += 1
+    except LSEFetchError:
+        raise
     except LSEError as exc:
         raise LSEFetchError(f"London Strategic Edge request failed for {symbol}: {exc.message} (status {exc.status}).") from exc
     except Exception as exc:  # noqa: BLE001
         raise LSEFetchError(f"London Strategic Edge request failed for {symbol}: {exc}") from exc
-    return _normalize_candles(raw, symbol)
+    df = pd.concat(frames, ignore_index=True).drop_duplicates(subset="timestamp").sort_values("timestamp").reset_index(drop=True)
+    return df.head(cap) if limit else df
 
 
 def fetch_history(api_key: str, symbol: str, timeframe_label: str, start: str) -> pd.DataFrame:
