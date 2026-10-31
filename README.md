@@ -109,8 +109,10 @@ holds, no hedging, size cap, daily-loss and drawdown halts); start on a demo. Fo
 Finds new strategies without hand-picking parameters. Effort budgets are **5,000+ (Quick), 10,000+ (Standard) and 15,000+ (Deep)** evaluated
 configurations. Candidates are drawn from paper-sourced families, the full indicator pool (about 300 indicators as trend / revert / slope rules) and
 the graveyard (known-dead neighbourhoods are skipped). Every configuration is optimized, then verified with real-engine backtests plus a lookahead
-test: a prefix-invariance check on the signals and a second probe on the full history, so a signal that peeks at the future is rejected. The trial
-count feeds the Deflated Sharpe correction. Details: [docs/DISCOVERY_ENGINE.md](docs/DISCOVERY_ENGINE.md).
+test: a prefix-invariance check on the signals and a second probe on an early slice of the history, so a signal that peeks at the future is rejected.
+A finalist must also clear **Full Pipeline's own preflight** (the same sizing resolution on the full-size contract, at least 100 trades and at most 25% of
+signals skipped for sizing) before it is called a winner, so every winner can be run through Full Pipeline. The trial count feeds the Deflated Sharpe
+correction. Details: [docs/DISCOVERY_ENGINE.md](docs/DISCOVERY_ENGINE.md).
 
 - **Strategy Graveyard** — searchable by market and text, with **See all** and **Revive**, which re-optimizes a dead strategy on a chosen market.
   New installs ship with 1,100+ measured failures (rebuild with `scripts/build_graveyard_seed.py`, extend with `scripts/expand_graveyard_seed.py`,
@@ -249,10 +251,12 @@ strategies to compare, and you can promote a strategy from there. See the Deploy
 ## Account, ranks and themes
 
 **Account Settings** holds your research profile: a rank and title earned from XP, collectible metallic badges, a three-badge showcase, shareable
-achievement cards and downloadable certificates (SVG or PNG). The **Achievements** page filters by status, difficulty and category. Three scenes unlock
-through achievements (Obsidian Gold, Sakura Reverie, Abyssal Blue; locked tiles show what to do), five whole-interface themes can be switched on, and your
-theme, accent and background sync with the account. The bell beside your picture is the notification inbox; a weekly digest arrives on Sundays.
-Personalization also offers the original mountains and four seasonal scenes, and an optional Bible verse bar (off by default). There are no online
+achievement cards and downloadable certificates (SVG or PNG). The **Achievements** page filters by status, difficulty and category. Six scenes unlock
+through achievements (Obsidian Gold, Sakura Reverie, Abyssal Blue, Endless Sands, Coastal Italy, Bioluminescence; locked tiles show what to do), five
+whole-interface themes and six **Workspace presets** (Obsidian, Cyberpunk, Nordic, Evergreen, Sovereign, Midnight -- each an earned reward) can be switched on,
+and your theme, preset, accent and background sync with the account. The Sakura, Abyssal and other animated scenes follow one shared clock, so the
+Sakura sky moves through sunrise, morning, noon, afternoon, sunset, evening and night continuously, whichever page you are on. The bell beside your picture is the notification inbox; a weekly digest arrives on Sundays.
+Personalization also offers the original mountains, the Nordic Kingdom fjord (available as soon as you are signed in) and four seasonal scenes, and an optional Bible verse bar (off by default). There are no online
 leaderboards: nothing in the app talks to a T58 server for that.
 
 ## Settings and defaults
