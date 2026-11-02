@@ -13,9 +13,9 @@ from app.forward_test.journal import ForwardTestJournal
 
 
 def test_mt5_unavailable_reports_clearly(monkeypatch):
-    # Simulate a machine with no MT5 backend at all (no native MetaTrader5 package and no mt5linux bridge client).
+    # Simulate a machine with no MT5 backend at all (no native MetaTrader5 package and no rpyc bridge client).
     # Done explicitly so the test doesn't depend on what happens to be pip-installed: config/requirements.txt
-    # installs mt5linux on Linux/macOS, which makes is_available() True there.
+    # installs rpyc on Linux/macOS, which makes is_available() True there.
     monkeypatch.setattr(mt5_connector, "mt5", None)
     monkeypatch.setattr(mt5_connector, "_bridge_package_available", lambda: False)
     assert mt5_connector.is_available() is False

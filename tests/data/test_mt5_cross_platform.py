@@ -76,8 +76,9 @@ class _FakeBridgeMT5:
 
 
 def test_connect_through_bridge_translates_path(monkeypatch):
-    fake_mod = types.SimpleNamespace(MetaTrader5=_FakeBridgeMT5)
-    monkeypatch.setitem(sys.modules, "mt5linux", fake_mod)
+    from app.forward_test import mt5_bridge, mt5_bridge_manager
+    monkeypatch.setattr(mt5_bridge, "MT5BridgeClient", _FakeBridgeMT5)
+    monkeypatch.setattr(mt5_bridge_manager, "port_open", lambda h, p, timeout=1.5: True)
     monkeypatch.setattr(mc, "mt5", None)
     monkeypatch.setattr(mc, "_NATIVE_MT5", None)
     monkeypatch.setattr(mc, "_BRIDGE_KEY", None)
@@ -95,14 +96,16 @@ def test_connect_through_bridge_translates_path(monkeypatch):
 
 
 def test_bridge_unreachable_gives_actionable_message(monkeypatch):
+    from app.forward_test import mt5_bridge, mt5_bridge_manager
     def boom(host, port):
         raise ConnectionRefusedError("refused")
-    monkeypatch.setitem(sys.modules, "mt5linux", types.SimpleNamespace(MetaTrader5=boom))
+    monkeypatch.setattr(mt5_bridge, "MT5BridgeClient", boom)
+    monkeypatch.setattr(mt5_bridge_manager, "port_open", lambda h, p, timeout=1.5: True)
     monkeypatch.setattr(mc, "mt5", None)
     monkeypatch.setattr(mc, "_NATIVE_MT5", None)
     monkeypatch.setattr(mc, "_bridge_package_available", lambda: True)
     res = mc.MT5Connector("1", "p", "s").connect()
-    assert not res.ok and "bridge" in res.message.lower() and "mt5_bridge_server" in res.message
+    assert not res.ok and "bridge" in res.message.lower() and "mt5_bridge_server" in res.message and "refused" in res.message
 
 
 def test_bridge_endpoint_precedence(monkeypatch, tmp_path):
