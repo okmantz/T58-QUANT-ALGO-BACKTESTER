@@ -2614,6 +2614,61 @@ def _cap_optimize_bars(df, form):
         "Raise \"Max bars\" under Advanced options (0 = use everything) to search more history, or pick a coarser timeframe.")
 
 
+# A strategy that needs a long warm-up (a 200-day trend filter, "14 complete prior sessions", ...) places NO trades in a short
+# recent slice: 150,000 one-minute bars is only ~100 trading days. Every engine then optimizes an empty baseline and reports
+# "$0 -> $0", which looks like the optimizer doing nothing. So the job first checks the baseline inside the capped window and,
+# when it cannot trade there, widens the window step by step (x2, up to the whole file) until it places enough trades.
+OPTIMIZE_MIN_BASELINE_TRADES = 30
+
+
+def _baseline_trade_count(df, strategy, risk) -> int:
+    """Trades the strategy places on `df` with the run's risk settings; -1 when the baseline itself cannot run (the engines
+    report that error in their own words, so it must not be swallowed here as '0 trades')."""
+    try:
+        return len(run_backtest(df, strategy, risk).trades)
+    except Exception:  # noqa: BLE001
+        return -1
+
+
+def _widen_optimize_window(df_full, df, strategy, risk, log, cancel_event=None, min_trades: int = OPTIMIZE_MIN_BASELINE_TRADES):
+    """The slice of `df_full` an Optimize run should search: `df` (the capped most-recent window) when the strategy trades
+    enough inside it, otherwise a progressively longer most-recent window. Always returns a DataFrame; logs what it did."""
+    total = len(df_full)
+    if df is None or total <= len(df):
+        return df
+    cap = len(df)
+    log(f"Search-window check: running the strategy once on the most recent {cap:,} bars to make sure it can trade there...")
+    n = _baseline_trade_count(df, strategy, risk)
+    if n < 0 or n >= min_trades:
+        if n >= 0:
+            log(f"The strategy places {n} trades in that window -- enough to optimize.")
+        return df
+    log(f"It placed only {n} trade{'s' if n != 1 else ''} in {cap:,} bars (at least {min_trades} are needed to tune anything). "
+        "Strategies with a long warm-up (e.g. a 200-day trend filter) cannot trade in a short recent slice, so the window is being widened.")
+    while cap < total:
+        if cancel_event is not None and cancel_event.is_set():
+            return df
+        nxt = min(total, cap * 2)
+        wider = df_full.tail(nxt).reset_index(drop=True)
+        n2 = _baseline_trade_count(wider, strategy, risk)
+        df, cap = wider, nxt
+        if n2 < 0:
+            log(f"Widened to {cap:,} bars, but the baseline run failed there -- the engines below will report why.")
+            return df
+        log(f"{cap:,} bars: {n2} trades.")
+        if n2 >= min_trades:
+            n = n2
+            break
+        n = n2
+    if n >= min_trades:
+        log(f"Searching the most recent {cap:,} of {total:,} bars (widened automatically so the strategy can trade). "
+            "This is slower than the default window; pick a coarser timeframe if you want it faster.")
+    else:
+        log(f"Even on all {cap:,} bars this strategy placed only {n} trade{'s' if n != 1 else ''}, so any result here rests on very little. "
+            "Check the strategy's entry rules and the dataset/timeframe before trusting an optimization.")
+    return df
+
+
 def _bounded_int(form, key: str, default: int, lo: int, hi: int) -> int:
     """An int form field, defaulted when blank/unreadable and clamped to [lo, hi]."""
     try:
@@ -2895,12 +2950,17 @@ def job_strategy_name(job_id):
 
 
 def _run_optimize_simple_job(job_id: str, df, strategy, risk, rules, engines, form, library_ref=None, dataset_label="",
-                             cancel_event=None) -> None:
+                             cancel_event=None, df_full=None, auto_widen: bool = True) -> None:
     _stamp_job_strategy(job_id, strategy, library_ref=library_ref)
     summary: dict = {}
     tracker = SimpleProgress(engine_total=len(engines))
     JOB_MANAGER.update(job_id, progress=tracker.payload())
     try:
+        if auto_widen and df_full is not None and len(df_full) > len(df):
+            try:
+                df = _widen_optimize_window(df_full, df, strategy, risk, lambda m: JOB_MANAGER.log(job_id, m), cancel_event)
+            except Exception as exc:  # noqa: BLE001 -- the check is a convenience; the run continues on the capped window
+                JOB_MANAGER.log(job_id, f"(Search-window check skipped: {exc})")
         for _eng_i, eng in enumerate(engines):
             if cancel_event is not None and cancel_event.is_set():
                 JOB_MANAGER.finish(job_id, cancelled=True, summary=summary, progress=tracker.payload())
@@ -3040,6 +3100,7 @@ def optimize_simple_start():
         df, tf_note, tf_error, _tf_label = _apply_timeframe_choice(df, form)
         if tf_error:
             return render_template("optimize_simple.html", **ctx(error=tf_error)), 400
+        df_full = df                                  # kept so the job can widen the window if the strategy cannot trade in it
         df, _cap_note = _cap_optimize_bars(df, form)
         strategy, library_ref = _simple_load_strategy(form)
         try:
@@ -3082,7 +3143,8 @@ def optimize_simple_start():
         threading.Thread(target=_run_optimize_simple_job,
                          args=(job_id, df, strategy, risk, rules, engines, form),
                          kwargs={"library_ref": library_ref, "dataset_label": active_label,
-                                 "cancel_event": cancel_event},
+                                 "cancel_event": cancel_event, "df_full": df_full,
+                                 "auto_widen": (form.get("auto_widen_window", "on") == "on")},
                          daemon=True).start()
         return redirect(url_for("optimize_simple_job", job_id=job_id))
     except (StrategyError, RefinementError, ValueError) as exc:

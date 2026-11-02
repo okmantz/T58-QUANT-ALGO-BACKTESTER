@@ -13,13 +13,13 @@ Backends (chosen automatically, see `_activate_backend`):
            directly. (MetaQuotes only ships it for Windows.)
   bridge   Linux, macOS -- and also a Windows terminal on another machine or
            VPS. The MT5 terminal runs under Wine (or on that remote Windows
-           host) next to a small RPyC server (`mt5linux`); this process
+           host) next to T58's own small RPyC server (mt5_rpc_server.py); this process
            connects to it over TCP and drives the SAME API (`initialize`,
            `login`, `copy_rates_from_pos`, `order_send`, ...), so every
            method below works unchanged. Host/port come from the saved
            settings or T58_MT5_BRIDGE_HOST / T58_MT5_BRIDGE_PORT
-           (default localhost:18812). See docs/MT5_CROSS_PLATFORM.md and
-           scripts/mt5_bridge_server.py.
+           (default localhost:18812). On the same machine the bridge is started and
+           set up automatically (mt5_bridge_manager.py). See docs/MT5_CROSS_PLATFORM.md.
 
 Getting a free MT5 demo account: any MT5-supporting broker's own website
 ("open a demo account"), or the prop firm's own demo/trial account if they
@@ -67,8 +67,9 @@ def platform_kind() -> str:
 
 
 def _bridge_package_available() -> bool:
+    """The bridge client is app/forward_test/mt5_bridge.py; its only third-party dependency is `rpyc`."""
     try:
-        return importlib.util.find_spec("mt5linux") is not None
+        return importlib.util.find_spec("rpyc") is not None
     except Exception:  # noqa: BLE001
         return False
 
@@ -101,19 +102,40 @@ def _activate_backend(host: str | None = None, port: int | str | None = None, fo
         return True
     if mt5 is not None and mt5 is not _NATIVE_MT5 and not force_bridge:
         # already a bridge client (or a test double): keep it unless the endpoint changed
-        if _BRIDGE_KEY is None or _BRIDGE_KEY == bridge_endpoint(host, port):
-            return True
+        if _BRIDGE_KEY is None:
+            return True                       # injected test double
+        if _BRIDGE_KEY == bridge_endpoint(host, port):
+            try:
+                from app.forward_test.mt5_bridge_manager import port_open
+                if port_open(*_BRIDGE_KEY):
+                    return True
+            except Exception:  # noqa: BLE001
+                return True
+            # the bridge process died since last time: fall through and start/connect again
     if _NATIVE_MT5 is not None and not force_bridge:
         mt5 = _NATIVE_MT5
         return True
     if not _bridge_package_available():
-        _BRIDGE_ERROR = "the 'mt5linux' package is not installed"
+        _BRIDGE_ERROR = "the 'rpyc' package is not installed (run: pip install \"rpyc>=5.3,<7\")"
         return False
     h, pt = bridge_endpoint(host, port)
     try:
-        from mt5linux import MetaTrader5 as _Bridge  # type: ignore
-        client = _Bridge(host=h, port=pt)
-    except Exception as exc:  # noqa: BLE001 -- connection refused, version mismatch, ...
+        from app.forward_test import mt5_bridge_manager as mgr
+        if not mgr.port_open(h, pt):
+            # Local bridge not running yet: start (and on first use, set up) it automatically -- no manual steps.
+            terminal = None
+            try:
+                from app.forward_test.mt5_settings import load_settings
+                terminal = load_settings().terminal_path or None
+            except Exception:  # noqa: BLE001
+                pass
+            ok, msg = mgr.ensure_bridge(h, pt, terminal)
+            if not ok:
+                _BRIDGE_ERROR = msg
+                return False
+        from app.forward_test.mt5_bridge import MT5BridgeClient
+        client = MT5BridgeClient(host=h, port=pt)
+    except Exception as exc:  # noqa: BLE001 -- connection refused, protocol mismatch, ...
         _BRIDGE_ERROR = f"could not reach the MT5 bridge at {h}:{pt} ({type(exc).__name__}: {exc})"
         return False
     mt5 = client
@@ -129,15 +151,9 @@ def get_backend():
 
 
 def to_local(value):
-    """Bridge results (numpy rate arrays, tuples) arrive as RPyC proxies; copy them into this process so pandas
-    and numpy see real data. No-op for the native backend and for plain values."""
-    if backend_name() != "bridge" or value is None:
-        return value
-    try:
-        from rpyc.utils.classic import obtain  # type: ignore
-        return obtain(value)
-    except Exception:  # noqa: BLE001
-        return value
+    """Kept for callers written against the old mt5linux proxies. The T58 bridge already returns local numpy
+    arrays and plain rows, so this is now a pass-through."""
+    return value
 
 
 def backend_name() -> str:
@@ -148,8 +164,8 @@ def backend_name() -> str:
 
 
 def is_available() -> bool:
-    """True if a MetaTrader5 API is usable here: the native Windows package, or the mt5linux bridge client
-    package (Linux/macOS/remote). Does NOT mean a terminal is actually running/logged in -- call connect()
+    """True if a MetaTrader5 API is usable here: the native Windows package, or the built-in bridge client
+    (needs only rpyc; Linux/macOS/remote). Does NOT mean a terminal is actually running/logged in -- call connect()
     to find that out."""
     return mt5 is not None or _bridge_package_available()
 
@@ -166,9 +182,9 @@ def unavailable_reason() -> str:
     where = "macOS" if kind == "macos" else "Linux" if kind == "linux" else "this operating system"
     return (
         f"MetaQuotes only ships the MetaTrader5 Python package for Windows, so on {where} the app talks to the terminal "
-        "through the MT5 bridge: run the MT5 terminal under Wine (or on a Windows PC/VPS), start the bridge server next "
-        "to it, and `pip install mt5linux` here. Step-by-step setup is in docs/MT5_CROSS_PLATFORM.md "
-        "(scripts/mt5_bridge_server.py prints the exact commands for this machine)."
+        "through the built-in MT5 bridge, which needs `pip install \"rpyc>=5.3,<7\"` here and the MT5 terminal under Wine "
+        "(or on a Windows PC/VPS). The app starts and prepares the bridge itself once rpyc is installed; "
+        "docs/MT5_CROSS_PLATFORM.md has the details."
     )
 
 
@@ -402,11 +418,9 @@ class MT5Connector:
         if not _activate_backend(self.bridge_host, self.bridge_port):
             h, pt = bridge_endpoint(self.bridge_host, self.bridge_port)
             return ConnectionResult(ok=False, message=(
-                f"MT5 bridge unavailable: {_BRIDGE_ERROR}.\n\n"
-                f"Start the bridge server next to your MT5 terminal (it must listen on {h}:{pt}) -- "
-                "run `python scripts/mt5_bridge_server.py --help` for the exact commands, or see "
-                "docs/MT5_CROSS_PLATFORM.md. If the terminal is on another machine, set the bridge host/port "
-                "(T58_MT5_BRIDGE_HOST / T58_MT5_BRIDGE_PORT) and make sure that port is reachable."))
+                f"MT5 bridge unavailable: {_BRIDGE_ERROR}\n\n"
+                f"(The app looks for the bridge at {h}:{pt}. See docs/MT5_CROSS_PLATFORM.md, or run "
+                "`python scripts/mt5_bridge_server.py --check`.)"))
         try:
             login_int = int(self.login)
         except ValueError:

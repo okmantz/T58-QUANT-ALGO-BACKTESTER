@@ -244,7 +244,7 @@ def _all_strategy_options() -> str:
 
 @quant_lab_bp.route("/translator", methods=["GET", "POST"])
 def translator():
-    from app.strategy.library import load_strategy_text
+    from app.strategy.library import list_saved_strategies, load_strategy_text
     from app.strategy.translator import TranslationError, translate_strategy
 
     form_html = (
@@ -255,6 +255,15 @@ def translator():
             '<select id="target" name="target"><option value="pinescript">PineScript v5</option>'
             '<option value="mql5">MQL5</option><option value="python">Python</option></select>',
         )
+        + '<div style="margin-top:14px;padding:12px;border:1px dashed var(--border,#444);border-radius:8px">'
+          '<strong>Hand-written strategy? Pick market data too.</strong>'
+          '<p style="margin:4px 0 8px;opacity:.8;font-size:13px">Strategies the translator can read directly (Strategy Builder, or code with the '
+          'round-trip directive) convert as-is and ignore this. Any other strategy -- including your own pandas code -- is run on the data below '
+          'and exported as a <em>trade replay</em> that reproduces its entries and exits in PineScript or MQL5.</p>'
+        + _dataset_select_html("dataset_label")
+        + '<label for="data_csv">...or upload OHLCV (CSV)</label><input type="file" id="data_csv" name="data_csv" accept=".csv">'
+        + _field("data_tz", "Timezone of the data's timestamps", "text", "UTC")
+        + "</div>"
     )
     result_html, error = None, None
     if request.method == "POST":
@@ -268,20 +277,57 @@ def translator():
                 source = json.loads(load_strategy_text("manual", name))
             else:
                 source = load_strategy_text(source_type, name)
-            code = translate_strategy(source_type, source, target)
-            result_html = _pre(code)
+            try:
+                code = translate_strategy(source_type, source, target)
+                result_html = _pre(code)
+            except TranslationError as exc:
+                if source_type == "manual" or target == source_type:
+                    raise
+                result_html = _translator_replay(source_type, name, target, str(exc))
         except (TranslationError, json.JSONDecodeError, KeyError, FileNotFoundError, ValueError) as exc:
             error = str(exc)
+        except Exception as exc:  # noqa: BLE001 -- a strategy that crashes on the data must give a message, not a 500 page
+            error = f"The translator could not process this strategy: {type(exc).__name__}: {exc}"
     return _render(
         "Universal Strategy Translator",
-        "Convert any saved strategy -- Manual Strategy Builder config, Python, PineScript, or MQL5 "
-        "-- into any of the other code targets. A file this tool generated (or one manually "
-        "annotated with its round-trip directive) translates perfectly; a hand-written Pine/MQL5 "
-        "file translates via a real parse of its supported subset; hand-written Python has no safe "
-        "general reduction back to structured conditions and can only be translated if it carries "
-        "that same directive.",
+        "Convert any saved strategy -- Manual Strategy Builder config, Python, PineScript, or MQL5 -- into PineScript, MQL5 or Python. "
+        "Strategy Builder configs and files this tool generated convert exactly; hand-written Pine/MQL5 converts via a real parse of "
+        "its supported subset. Anything else (for example your own pandas Python) is exported as a trade replay: pick market data "
+        "and the strategy is run on it, then the same entries and exits are written as PineScript or MQL5.",
         form_html, result_html, error,
     )
+
+
+def _translator_replay(source_type: str, name: str, target: str, why: str) -> str:
+    """Fallback for strategies the structured translator cannot read: run it on the chosen data and export a replay."""
+    from app.strategy.library import list_saved_strategies
+    from app.strategy.library_loader import load_strategy_object
+    from app.strategy.replay_export import ReplayError, collect_replay, render_replay
+
+    if target == "python":
+        raise ValueError(f"{why}\n\nA trade replay can only be written as PineScript or MQL5.")
+    has_data = bool((request.files.get("data_csv") and request.files["data_csv"].filename) or (request.form.get("dataset_label") or "").strip())
+    if not has_data:
+        raise ValueError(
+            "This strategy can't be converted directly (" + why.split(" -- ")[0].strip() + "). It can still be exported as a trade replay: "
+            "choose market data in the box below the target (or upload a CSV) and run again.")
+    match = [s for s in list_saved_strategies(strategy_type=source_type) if s.name == name]
+    if not match:
+        raise ValueError(f"Could not find '{name}' in the library.")
+    strategy = load_strategy_object(match[0])
+    df = _load_ohlcv_from_form("data_csv", "dataset_label")
+    tz = (request.form.get("data_tz") or "UTC").strip() or "UTC"
+    try:
+        rd = collect_replay(strategy, df, name, tz=tz, max_bars=300000)
+        code = render_replay(rd, target)
+    except ReplayError as exc:
+        raise ValueError(str(exc)) from exc
+    import html
+    banner = (f'<p style="padding:10px;border-radius:8px;background:rgba(255,193,7,.12)"><strong>Trade replay.</strong> '
+              f"The strategy was run on {rd.n_bars:,} bars and its {len(rd.events)} entries/exits were written into the file. "
+              "It reproduces that history; it does not contain the strategy's logic. "
+              + html.escape(" ".join(rd.notes)) + "</p>")
+    return banner + _pre(code)
 
 
 # ---------------------------------------------------------------------------

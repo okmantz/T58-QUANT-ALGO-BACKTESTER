@@ -34,7 +34,7 @@ class MT5Settings:
     symbol: str = DEFAULT_SYMBOL
     timeframe_minutes: int = DEFAULT_TIMEFRAME_MINUTES
     terminal_path: str = ""       # optional: path to terminal64.exe if MT5 can't auto-locate it
-    # Linux / macOS / remote-Windows only: where the mt5linux bridge server is listening (blank = env var or
+    # Linux / macOS / remote-Windows only: where the T58 MT5 bridge server is listening (blank = env var or
     # localhost:18812). Ignored on Windows with the native MetaTrader5 package.
     bridge_host: str = ""
     bridge_port: int = 0          # 0 = default

@@ -68,7 +68,7 @@ class ForwardTestMixin:
                 text="To use this tab: have an MT5 terminal installed and logged into a demo account "
                      "(any MT5 broker's site offers a free demo account signup). On Windows make sure "
                      "`pip install MetaTrader5` succeeded; on Linux/macOS run the terminal under Wine and "
-                     "start the mt5linux bridge (`python scripts/mt5_bridge_server.py` prints the steps). The "
+                     "install `pip install rpyc` -- the app then starts the MT5 bridge itself (docs/MT5_CROSS_PLATFORM.md). The "
                      "rest of this tab still works for entering settings -- Start Live Demo Test "
                      "will just fail with a clear message until MT5 is reachable.",
                 bg=PANEL, fg=TEXT_DIM, font=_safe_font(8), wraplength=820, justify="left",

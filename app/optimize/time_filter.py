@@ -109,12 +109,24 @@ def run_time_filter_optimization(df, strategy, risk, *, slots_text: str = "", li
     log("Time filter: baseline run...")
     base = run_backtest(df, strategy, risk)
     out = {"ran": True, "baseline": _stats(base), "suggestion": None, "slots": "", "saved": False}
+    if not base.trades:
+        # Nothing to filter. Say WHY instead of reporting "$0 -> $0" / "no weekday stands out" (which reads as the
+        # optimizer finding nothing): an empty baseline almost always means the search window was shorter than the
+        # strategy's warm-up (e.g. a 200-day trend filter needs 200+ prior sessions before its first trade).
+        out.update(items=[], improved=False, no_baseline_trades=True, note=(
+            f"The strategy placed no trades in the {len(df):,} bars this engine was given, so there is nothing to filter. "
+            "Most often it needs more history than the search window held (a long warm-up such as a 200-day trend filter). "
+            "Leave 'Widen the window automatically' ticked, or raise 'Max bars to search' (0 = all) under Advanced options, then run again."))
+        return out
     given = format_slots(parse_slots(slots_text)) if slots_text else ""
     if given:
         chosen, items = given, [{"slot": s, "why": "chosen by you"} for s in given.splitlines()]
     else:
         pnl, cnt = grid_from_trades(base.trades)
-        sug = suggest_blocked_slots(pnl, cnt, max_slots=max_slots)
+        # a sparse strategy never puts 5 trades in one weekday/hour cell, so scale the per-cell minimum with the trade count
+        # (3..5) instead of silently finding nothing to restrict
+        min_cell_trades = max(3, min(5, len(base.trades) // 20))
+        sug = suggest_blocked_slots(pnl, cnt, max_slots=max_slots, min_trades=min_cell_trades)
         chosen, items = sug["text"], sug["items"]
         out["suggestion"] = sug
     out["items"] = items

@@ -141,27 +141,45 @@ def load_experiment(lab: str, exp_id: str) -> Optional[dict]:
 
 
 def list_experiments(lab: str | None = None, limit: int = 30) -> list[dict]:
-    root = _base_dir() / "data" / "research_labs"
-    if not root.is_dir():
+    """Newest-first summaries of saved experiments. NEVER raises: an unreadable, truncated or oddly-shaped file (or a
+    missing/unwritable store) is skipped, because a damaged old result must not be able to take a lab page down."""
+    try:
+        root = _base_dir() / "data" / "research_labs"
+        if not root.is_dir():
+            return []
+        labs = [lab] if lab else [p.name for p in root.iterdir() if p.is_dir()]
+    except Exception:  # noqa: BLE001
         return []
     out: list[dict] = []
-    labs = [lab] if lab else [p.name for p in root.iterdir() if p.is_dir()]
     for name in labs:
-        d = root / name
-        if not d.is_dir():
+        try:
+            d = root / name
+            if not d.is_dir():
+                continue
+            files = list(d.glob("*.json"))
+        except Exception:  # noqa: BLE001
             continue
-        for f in d.glob("*.json"):
+        for f in files:
             if f.name == "ledger.json":
                 continue
             try:
                 doc = json.loads(f.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
+                if not isinstance(doc, dict):
+                    continue
+                results = doc.get("results")
+                headline = results.get("headline") if isinstance(results, dict) else None
+                try:
+                    created = float(doc.get("created_utc") or 0)
+                except (TypeError, ValueError):
+                    created = 0.0
+                out.append({"id": str(doc.get("id") or f.stem), "lab": str(doc.get("lab") or name),
+                            "title": str(doc.get("title") or name), "created_utc": created,
+                            "status": doc.get("status"), "headline": headline if isinstance(headline, str) else None,
+                            "spec_hash": doc.get("spec_hash")})
+            except Exception:  # noqa: BLE001 -- OSError, ValueError, RecursionError, odd encodings ...
                 continue
-            out.append({"id": doc.get("id"), "lab": doc.get("lab"), "title": doc.get("title"),
-                        "created_utc": doc.get("created_utc", 0), "status": doc.get("status"),
-                        "headline": (doc.get("results") or {}).get("headline"), "spec_hash": doc.get("spec_hash")})
-    out.sort(key=lambda r: r.get("created_utc") or 0, reverse=True)
-    return out[:limit]
+    out.sort(key=lambda r: r["created_utc"], reverse=True)
+    return out[:max(0, int(limit))]
 
 
 # --------------------------------------------------------------------------------------------------------------

@@ -6,6 +6,7 @@ data fingerprint and spec hash -- so what the engine assumed always travels with
 """
 from __future__ import annotations
 
+import importlib
 import io
 import json
 from pathlib import Path
@@ -153,6 +154,33 @@ def _read_table(field: str) -> pd.DataFrame | None:
     return pd.read_csv(io.BytesIO(up.read()))
 
 
+def _note_page(title: str, message: str, status: int = 200):
+    """A readable page (inside the app's normal look) instead of a bare 'Internal Server Error'."""
+    import html
+    body = (f"<!doctype html><meta charset='utf-8'><title>{html.escape(title)}</title>"
+            "<body style='font-family:system-ui,sans-serif;max-width:720px;margin:48px auto;padding:0 16px;line-height:1.5'>"
+            f"<p><a href='/research-labs/'>&larr; Research Labs</a></p><h1>{html.escape(title)}</h1>"
+            f"<pre style='white-space:pre-wrap;background:#8881;padding:12px;border-radius:8px'>{html.escape(message)}</pre></body>")
+    return body, status
+
+
+@research_lab_bp.errorhandler(Exception)
+def _lab_error(exc):
+    """Any failure inside the Research Lab shows what went wrong (and is logged) rather than a blank server-error page."""
+    from werkzeug.exceptions import HTTPException
+
+    if isinstance(exc, HTTPException):
+        return exc
+    import logging
+    import traceback
+    logging.getLogger("t58.research_labs").error("Research Lab error on %s: %s", request.path, traceback.format_exc())
+    detail = f"{type(exc).__name__}: {exc}"
+    if request.method == "POST":
+        return jsonify({"ok": False, "error": f"The lab hit an unexpected error: {detail}"}), 500
+    return _note_page("This lab could not open", detail + "\n\nThe rest of the Research Labs still work. If this keeps happening, "
+                      "send this message to support.", 500)
+
+
 @research_lab_bp.route("/")
 def hub():
     labs = [{"slug": s, **{k: v for k, v in cfg.items() if k in ("title", "badge", "summary", "why", "data")}} for s, cfg in LABS.items()]
@@ -168,9 +196,14 @@ def lab_page(slug: str):
         from app.research_labs.hypothesis_lab import default_spec
 
         spec = json.dumps(default_spec(), indent=2)
-    mod = __import__(f"app.research_labs.{lab['module']}", fromlist=["LAB"])
+    # `lab` for the saved-runs list is the module's LAB id; fall back to the module name if the import is odd
+    lab_id = lab["module"]
+    try:
+        lab_id = getattr(importlib.import_module(f"app.research_labs.{lab['module']}"), "LAB", lab["module"])
+    except Exception:  # noqa: BLE001 -- the page still opens; running the lab will report the import problem itself
+        pass
     return render_template("research_lab.html", slug=slug, lab=cfg, datasets=_stored_datasets(), default_spec=spec,
-                           recent=C.list_experiments(lab=mod.LAB, limit=8), active_page="research_labs")
+                           recent=C.list_experiments(lab=lab_id, limit=8), active_page="research_labs")
 
 
 @research_lab_bp.route("/<slug>/run", methods=["POST"])
@@ -179,7 +212,7 @@ def run_lab(slug: str):
     form = request.form
     seed = _num(form, "seed", C.DEFAULT_SEED, int)
     try:
-        mod = __import__(f"app.research_labs.{lab['module']}", fromlist=["run"])
+        mod = importlib.import_module(f"app.research_labs.{lab['module']}")
         if slug == "order-book":
             book, trades = _read_table("book"), _read_table("trades")
             rec = mod.run(book, trades, label="uploaded book", levels=_num(form, "levels", 5, int), horizon=_num(form, "horizon", 20, int),
@@ -239,6 +272,8 @@ def run_lab(slug: str):
     except (ValueError, KeyError) as exc:
         return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
     except Exception as exc:  # noqa: BLE001
+        import logging
+        logging.getLogger("t58.research_labs").exception("Research Lab run failed: %s", slug)
         return jsonify({"ok": False, "error": f"The lab hit an unexpected error: {type(exc).__name__}: {exc}"}), 500
 
 

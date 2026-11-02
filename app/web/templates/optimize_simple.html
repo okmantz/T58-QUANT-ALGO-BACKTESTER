@@ -135,6 +135,7 @@
         <div class="lc-adv-field"><label class="flabel">GA population (Quick Optimize)</label><input type="number" name="ga_population" value="24" min="4" max="200"></div>
         <div class="lc-adv-field"><label class="flabel">GA generations (Quick Optimize)</label><input type="number" name="ga_generations" value="8" min="2" max="60"></div>
         <div class="lc-adv-field"><label class="flabel">Max bars to search (0 = all)</label><input type="number" name="max_bars" value="150000" min="0" step="5000" title="Searches the most recent bars so the run finishes quickly. Raise it, or set 0, to search all of your history."></div>
+        <div class="lc-adv-field"><label class="flabel">Widen the window automatically if the strategy cannot trade in it</label><input type="checkbox" name="auto_widen_window" checked title="Strategies with a long warm-up (e.g. a 200-day trend filter) place no trades in a short recent slice, so there is nothing to optimize. When this is ticked the run checks first and searches a longer window if needed."></div>
         <div class="lc-adv-field"><label class="flabel">Population (Refine)</label><input type="number" name="population_size" value="10"></div>
         <div class="lc-adv-field"><label class="flabel">Generations (Refine)</label><input type="number" name="generations" value="5"></div>
         <div class="lc-adv-field"><label class="flabel">Monte-Carlo sims</label><input type="number" name="mc_sims" value="500"></div>
