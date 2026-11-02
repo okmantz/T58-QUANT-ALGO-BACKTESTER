@@ -6,36 +6,45 @@ through `app/forward_test/mt5_connector.py`. It picks a backend automatically:
 | Where the app runs | Backend | What you need |
 |---|---|---|
 | Windows | **native** — official `MetaTrader5` package | MT5 terminal installed (nothing else) |
-| Linux | **bridge** — `mt5linux` RPyC client | MT5 terminal under Wine + bridge server |
-| macOS | **bridge** | MT5 under MetaQuotes' macOS app / CrossOver / Wine + bridge server |
-| any OS, terminal on another PC/VPS | **bridge** | Windows host running the bridge server |
+| Linux / macOS | **bridge** — the app's own built-in bridge | MT5 terminal under Wine (or MetaQuotes' macOS app / CrossOver) + `pip install rpyc` |
+| any OS, terminal on another PC/VPS | **bridge** | Windows host running `mt5_rpc_server.py` |
 
-MetaQuotes only publishes the Python package for Windows, which is why non-Windows systems need the bridge: a
-Windows Python (inside Wine, or on a Windows machine) runs the MT5 package and exposes it on a TCP port; this app
-connects to that port and calls the identical API, so no other code differs by OS.
+MetaQuotes only publishes the Python package for Windows, which is why non-Windows systems need a bridge: a Windows
+Python (inside Wine, or on a Windows machine) runs the MT5 package and exposes it on a TCP port; this app connects
+to that port and calls the same API. The bridge is T58's own (`app/forward_test/mt5_bridge.py` client,
+`app/forward_test/mt5_rpc_server.py` server). It no longer uses the third-party `mt5linux` package, whose newer
+releases changed their API and caused `No module named 'mt5linux.metatrader5'`.
 
-## Setup (Linux / macOS)
+## Linux / macOS: automatic
 
-`python scripts/mt5_bridge_server.py` prints the commands tailored to your machine. In short:
+1. Install Wine and your broker's MT5 once, and log in to the demo account once.
+2. `pip install -r config/requirements.txt` (installs `rpyc`).
+3. Forward Test tab → enter the account → *Save & Test Connection*.
 
-1. Install Wine (or CrossOver / MetaQuotes' macOS installer) and your broker's MT5 setup; log in to the demo account once.
-2. Install Windows Python in the same Wine prefix and run `wine python -m pip install MetaTrader5 mt5linux`.
-3. Start the server and leave it running: `wine python -m mt5linux --host 127.0.0.1 --port 18812`.
-4. In the app's environment: `pip install mt5linux` (already in `config/requirements.txt` for non-Windows).
-5. Forward Test tab → *Save & Test Connection*. *Auto-detect* searches Wine, CrossOver, Bottles and MetaQuotes-app prefixes for
-   `terminal64.exe`; host paths are translated to `C:\...` for the bridge automatically.
+On the first connection the app, by itself: finds your Wine prefix and `terminal64.exe`; installs Windows Python
+inside Wine if it is missing; installs `MetaTrader5`, `rpyc`, `numpy` inside Wine (one time, needs internet); starts
+the bridge server on `127.0.0.1:18812`; then connects. Later runs start the bridge in a couple of seconds. If a step
+cannot be done, the message names the step and gives the one command to run by hand.
 
-Check the link any time with `python scripts/mt5_bridge_server.py --check`.
+Check the link any time with `python scripts/mt5_bridge_server.py --check`; `--setup` runs the one-time preparation
+without connecting.
 
-## Remote terminal
+## Remote terminal (Windows PC / VPS)
 
-Run the server on the Windows machine (`python -m mt5linux --host 0.0.0.0 --port 18812`), open that port to the app only
-(firewall / VPN / SSH tunnel — the bridge has **no authentication**; never expose it to the internet), then set
-`T58_MT5_BRIDGE_HOST` / `T58_MT5_BRIDGE_PORT` or the bridge host/port in the saved MT5 settings.
+On the Windows machine: `pip install MetaTrader5 rpyc numpy`, copy `app/forward_test/mt5_rpc_server.py` there and run
+
+    python mt5_rpc_server.py --host 0.0.0.0 --port 18812 --token <a long secret>
+
+Set the same secret here as `T58_MT5_BRIDGE_TOKEN`, and set `T58_MT5_BRIDGE_HOST` / `T58_MT5_BRIDGE_PORT` (or the
+bridge host/port in the saved MT5 settings). Only an allow-list of MetaTrader5 functions can be called, but anyone
+who can reach the port and knows the token can trade the account: keep it on a VPN / SSH tunnel / firewall, never on
+the open internet.
 
 ## Troubleshooting
 
-* *"MT5 bridge unavailable … could not reach the MT5 bridge"* — the server isn't running, or host/port differ.
-* *-10003 IPC initialize failed* — the terminal wasn't found by the Windows-side Python; give the Wine-side path in *Terminal path*.
-* Package versions: the `mt5linux` client and server must be the same version.
-* Not verified against a live broker terminal in CI: the connector is tested with fake backends (tests/data/test_mt5_cross_platform.py).
+* *"MT5 bridge unavailable …"* — the message states which step failed (Wine missing, Python/MetaTrader5 install inside
+  Wine failed, remote host unreachable).
+* *protocol mismatch* — restart the bridge so it uses the app's current `mt5_rpc_server.py`.
+* *-10003 IPC initialize failed* — the Windows-side Python could not find the terminal; give the path in *Terminal path*.
+* Tested in CI with a stub MetaTrader5 module and a fake Wine (tests/data/test_mt5_rpc_bridge.py); not exercised
+  against a live broker terminal under real Wine.
