@@ -51,6 +51,7 @@ except Exception as exc:  # noqa: BLE001 -- absence is expected on non-Windows/d
 
 _NATIVE_MT5 = mt5            # remembered so a bridge can be swapped out again
 _BRIDGE_ERROR: Optional[str] = None
+_BRIDGE_PROBLEM = None       # app.forward_test.mt5_diagnostics.Problem for the last failed _activate_backend, if any
 _BRIDGE_KEY: Optional[tuple] = None
 
 
@@ -94,10 +95,14 @@ def bridge_endpoint(host: str | None = None, port: int | str | None = None) -> t
     return h, pt
 
 
-def _activate_backend(host: str | None = None, port: int | str | None = None, force_bridge: bool = False) -> bool:
+def _activate_backend(host: str | None = None, port: int | str | None = None, force_bridge: bool = False,
+                      progress=None, terminal_hint: str | None = None) -> bool:
     """Makes the module-level ``mt5`` usable. Native package if loaded (unless force_bridge), else an
-    RPyC bridge client. Returns True when ``mt5`` is ready; on failure stores the reason in _BRIDGE_ERROR."""
-    global mt5, _BRIDGE_ERROR, _BRIDGE_KEY
+    RPyC bridge client. Returns True when ``mt5`` is ready; on failure stores the reason in _BRIDGE_ERROR
+    (plain text) and _BRIDGE_PROBLEM (structured: title / steps / technical). ``progress(text)`` receives
+    human-readable status lines while the bridge is being set up or started."""
+    global mt5, _BRIDGE_ERROR, _BRIDGE_PROBLEM, _BRIDGE_KEY
+    _BRIDGE_PROBLEM = None
     if mt5 is not None and not force_bridge and mt5 is _NATIVE_MT5:
         return True
     if mt5 is not None and mt5 is not _NATIVE_MT5 and not force_bridge:
@@ -115,10 +120,13 @@ def _activate_backend(host: str | None = None, port: int | str | None = None, fo
     if _NATIVE_MT5 is not None and not force_bridge:
         mt5 = _NATIVE_MT5
         return True
+    from app.forward_test import mt5_diagnostics as diag
     if not _bridge_package_available():
-        _BRIDGE_ERROR = "the 'rpyc' package is not installed (run: pip install \"rpyc>=5.3,<7\")"
+        _BRIDGE_PROBLEM = diag.rpyc_missing()
+        _BRIDGE_ERROR = _BRIDGE_PROBLEM.plain_text()
         return False
     h, pt = bridge_endpoint(host, port)
+    say = progress or (lambda _m: None)
     try:
         from app.forward_test import mt5_bridge_manager as mgr
         if not mgr.port_open(h, pt):
@@ -129,14 +137,19 @@ def _activate_backend(host: str | None = None, port: int | str | None = None, fo
                 terminal = load_settings().terminal_path or None
             except Exception:  # noqa: BLE001
                 pass
-            ok, msg = mgr.ensure_bridge(h, pt, terminal)
-            if not ok:
-                _BRIDGE_ERROR = msg
+            if terminal_hint:
+                terminal = terminal_hint
+            res = mgr.ensure_bridge_detailed(h, pt, terminal, log=say)
+            if not res.ok:
+                _BRIDGE_PROBLEM = res.problem
+                _BRIDGE_ERROR = res.message
                 return False
+        say("Connecting to the MT5 helper...")
         from app.forward_test.mt5_bridge import MT5BridgeClient
         client = MT5BridgeClient(host=h, port=pt)
     except Exception as exc:  # noqa: BLE001 -- connection refused, protocol mismatch, ...
-        _BRIDGE_ERROR = f"could not reach the MT5 bridge at {h}:{pt} ({type(exc).__name__}: {exc})"
+        _BRIDGE_PROBLEM = diag.bridge_unreachable(h, pt, f"{type(exc).__name__}: {exc}")
+        _BRIDGE_ERROR = _BRIDGE_PROBLEM.plain_text()
         return False
     mt5 = client
     _BRIDGE_KEY = (h, pt)
@@ -368,6 +381,11 @@ class ConnectionResult:
     equity: float | None = None
     currency: str | None = None
     resolved_terminal_path: str | None = None  # set only when auto-detection found a working path the caller didn't supply
+    problem: dict | None = None   # when not ok: {kind,title,summary,steps,commands,technical,retry_ok} for the UI to render
+
+
+def _fail_result(problem) -> "ConnectionResult":
+    return ConnectionResult(ok=False, message=problem.plain_text(), problem=problem.to_dict())
 
 
 @dataclass
@@ -408,23 +426,38 @@ class MT5Connector:
         self.bridge_host = bridge_host or None
         self.bridge_port = bridge_port or None
         self._connected = False
+        # Optional status hook: on_progress(step_id, text). step_id is one of prepare | helper | terminal | login | trading.
+        # The web "Start forward test" job sets it so the page can show a live checklist; None = silent.
+        self.on_progress = None
+
+    def _say(self, step: str, text: str) -> None:
+        cb = self.on_progress
+        if cb is not None:
+            try:
+                cb(step, text)
+            except Exception:  # noqa: BLE001 -- a UI callback must never break a connection
+                pass
 
     def _bridge_is_local(self) -> bool:
         return bridge_endpoint(self.bridge_host, self.bridge_port)[0].lower() in ("localhost", "127.0.0.1", "::1", "0.0.0.0")
 
     def connect(self) -> ConnectionResult:
+        from app.forward_test import mt5_diagnostics as diag
+        self._say("prepare", "Checking your MT5 setup...")
         if not is_available():
-            return ConnectionResult(ok=False, message=unavailable_reason())
-        if not _activate_backend(self.bridge_host, self.bridge_port):
+            if platform_kind() == "windows":
+                return _fail_result(diag.windows_package_missing(_MT5_IMPORT_ERROR or ""))
+            return _fail_result(diag.rpyc_missing())
+        if not _activate_backend(self.bridge_host, self.bridge_port, progress=lambda m: self._say("helper", m),
+                                 terminal_hint=self.terminal_path):
             h, pt = bridge_endpoint(self.bridge_host, self.bridge_port)
-            return ConnectionResult(ok=False, message=(
-                f"MT5 bridge unavailable: {_BRIDGE_ERROR}\n\n"
-                f"(The app looks for the bridge at {h}:{pt}. See docs/MT5_CROSS_PLATFORM.md, or run "
-                "`python scripts/mt5_bridge_server.py --check`.)"))
+            problem = _BRIDGE_PROBLEM or diag.unknown_problem(
+                f"MT5 bridge unavailable: {_BRIDGE_ERROR} (looked at {h}:{pt}; see docs/MT5_CROSS_PLATFORM.md)")
+            return _fail_result(problem)
         try:
             login_int = int(self.login)
         except ValueError:
-            return ConnectionResult(ok=False, message=f"MT5 login must be numeric, got '{self.login}'.")
+            return _fail_result(diag.login_not_numeric(self.login))
 
         # Why "terminal didn't respond in time" (-10005/-10004) happens: initialize(login=..., password=...) asks a COLD terminal to
         # start, load its history and authorize in one call, and the package gives up after its timeout while the terminal is still
@@ -432,13 +465,27 @@ class MT5Connector:
         # retries, (3) only then log in on the already-running terminal (login() has its own timeout).
         ok, code, desc = self._attach(login_int)
         if not ok:
-            return ConnectionResult(ok=False, message=describe_mt5_error(code, desc))
+            return _fail_result(diag.problem_from_mt5_error(code, desc))
 
         info = mt5.account_info()
         if info is None:
             code, desc = mt5.last_error()
             mt5.shutdown()
-            return ConnectionResult(ok=False, message=f"Connected but could not read account info ({code}): {desc}")
+            return _fail_result(diag.problem_from_mt5_error(code, f"connected but could not read account info: {desc}"))
+
+        # Automated orders only work when the terminal's Algo Trading button is on. Tell the user NOW, in plain words,
+        # instead of letting every order be rejected quietly later.
+        self._say("trading", "Checking that Algo Trading is on in MT5...")
+        try:
+            ti = mt5.terminal_info()
+            if ti is not None and getattr(ti, "trade_allowed", None) is False:
+                try:
+                    mt5.shutdown()
+                except Exception:  # noqa: BLE001
+                    pass
+                return _fail_result(diag.algo_trading_off())
+        except Exception:  # noqa: BLE001 -- an unreadable flag must not block a connection that otherwise works
+            pass
 
         self._connected = True
         return ConnectionResult(
@@ -489,7 +536,11 @@ class MT5Connector:
                 if kind == "windows":
                     subprocess.Popen([path], cwd=os.path.dirname(path), close_fds=True)
                 else:
-                    wine = shutil.which("wine64") or shutil.which("wine")
+                    try:
+                        from app.forward_test.mt5_bridge_manager import find_wine
+                        wine = find_wine()          # also finds MetaQuotes' bundled Wine and Homebrew installs
+                    except Exception:  # noqa: BLE001
+                        wine = shutil.which("wine64") or shutil.which("wine")
                     if wine is None:
                         return path       # nothing to launch with; the bridge-side initialize() may still start it
                     env = dict(os.environ)
@@ -520,10 +571,13 @@ class MT5Connector:
     def _attach(self, login_int: int, attempts: int = 4):
         """Returns (ok, code, desc). Order: attach to the running/auto-launched terminal, then authorize."""
         path = self.terminal_path
+        self._say("terminal", "Opening MetaTrader 5 (this can take up to a minute)...")
         self.launch_terminal()
         path = self.terminal_path
         ok, code, desc = False, -10003, "not attempted"
         for n in range(attempts):
+            if n:
+                self._say("terminal", f"MT5 is still starting, waiting for it (try {n + 1} of {attempts})...")
             ok, code, desc = self._init_once(path)
             if not ok and code == -10003 and not path:
                 for cand in find_terminal_candidates():
@@ -545,6 +599,7 @@ class MT5Connector:
             return False, code, desc
         info = mt5.account_info()
         if info is None or int(getattr(info, "login", 0) or 0) != login_int:
+            self._say("login", f"Logging in to account {login_int}...")
             authorised = False
             for n in range(3):
                 try:
@@ -644,6 +699,17 @@ class MT5Connector:
             si = mt5.symbol_info(symbol)
         return float(si.point)
 
+    def check_symbol(self, symbol: str):
+        """None when the broker has this symbol (and it is now selected in Market Watch), else a
+        mt5_diagnostics.Problem telling the user how to find the right spelling."""
+        from app.forward_test import mt5_diagnostics as diag
+        try:
+            if mt5.symbol_select(symbol, True) and mt5.symbol_info(symbol) is not None:
+                return None
+        except Exception:  # noqa: BLE001
+            pass
+        return diag.symbol_not_found(symbol)
+
     def fetch_completed_bars(self, symbol: str, timeframe_minutes: int, count: int) -> pd.DataFrame:
         """Returns the last `count` fully-CLOSED bars as a DataFrame with
         this app's standard timestamp/open/high/low/close/volume schema
@@ -690,6 +756,50 @@ class MT5Connector:
             ))
         return out
 
+    def units_to_lots(self, symbol: str, units: float) -> tuple[float, str | None]:
+        """The app sizes trades in generic UNITS (profit = units x price move). MT5 wants LOTS, and one lot is
+        ``trade_contract_size`` units (100,000 for EURUSD, often 100 for XAUUSD). Sending units as lots would place
+        a position hundreds of times too big (or be rejected), so convert with the broker's own numbers, round DOWN
+        to the broker's volume step, and clamp to its max. Returns (lots, note). lots == 0 means "do not trade" and
+        the note says why (the size the risk budget allows is smaller than the broker's minimum lot)."""
+        import math
+        si = mt5.symbol_info(symbol)
+        if si is None:
+            return 0.0, f"MT5 has no details for {symbol}, so the position size can't be converted to lots."
+        contract = float(getattr(si, "trade_contract_size", 0) or 0)
+        step = float(getattr(si, "volume_step", 0) or 0) or 0.01
+        vmin = float(getattr(si, "volume_min", 0) or 0) or step
+        vmax = float(getattr(si, "volume_max", 0) or 0)
+        raw = float(units) / contract if contract > 0 else float(units)
+        lots = math.floor(raw / step + 1e-9) * step
+        decimals = max(0, min(8, -int(math.floor(math.log10(step))) if step < 1 else 0))
+        lots = round(lots, decimals)
+        if lots < vmin - 1e-12:
+            return 0.0, (f"The risk budget allows about {raw:.4f} lots, below this broker's minimum of {vmin} lot for {symbol}. "
+                         "Skipped instead of risking more than you set. Raise 'Risk value' or the initial balance to trade it.")
+        if vmax and lots > vmax:
+            lots = vmax
+        return lots, None
+
+    # MT5 order-filling modes (the broker only accepts some of them per symbol): FOK=0, IOC=1, RETURN=2
+    def _send_with_fill_fallback(self, request: dict):
+        """order_send, retrying with the other filling modes when the broker answers 'unsupported filling mode'
+        (retcode 10030), which is what many brokers do to the IOC default."""
+        modes = [getattr(mt5, "ORDER_FILLING_IOC", 1), getattr(mt5, "ORDER_FILLING_FOK", 0), getattr(mt5, "ORDER_FILLING_RETURN", 2)]
+        result = None
+        for mode in modes:
+            request["type_filling"] = mode
+            result = mt5.order_send(request)
+            if result is None or getattr(result, "retcode", None) != 10030:
+                return result
+        return result
+
+    def _reject_message(self, what: str, result) -> str:
+        from app.forward_test import mt5_diagnostics as diag
+        help_text = diag.order_help(result.retcode)
+        base = f"{what} (retcode {result.retcode}): {result.comment}"
+        return f"{base}. {help_text}" if help_text else base
+
     def place_market_order(
         self, symbol: str, direction: int, volume: float,
         sl_price: float | None = None, tp_price: float | None = None,
@@ -717,12 +827,12 @@ class MT5Connector:
             request["sl"] = float(sl_price)
         if tp_price:
             request["tp"] = float(tp_price)
-        result = mt5.order_send(request)
+        result = self._send_with_fill_fallback(request)
         if result is None:
             code, desc = mt5.last_error()
             return OrderResult(ok=False, message=f"order_send returned None ({code}): {desc}")
         if result.retcode != mt5.TRADE_RETCODE_DONE:
-            return OrderResult(ok=False, message=f"Order rejected (retcode {result.retcode}): {result.comment}")
+            return OrderResult(ok=False, message=self._reject_message("Order rejected", result))
         return OrderResult(ok=True, message="Filled.", ticket=self.position_id_for_order(result) or result.order,
                            price=result.price, volume=result.volume)
 
@@ -747,12 +857,12 @@ class MT5Connector:
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_IOC,
         }
-        result = mt5.order_send(request)
+        result = self._send_with_fill_fallback(request)
         if result is None:
             code, desc = mt5.last_error()
             return OrderResult(ok=False, message=f"order_send returned None ({code}): {desc}")
         if result.retcode != mt5.TRADE_RETCODE_DONE:
-            return OrderResult(ok=False, message=f"Close rejected (retcode {result.retcode}): {result.comment}")
+            return OrderResult(ok=False, message=self._reject_message("Close rejected", result))
         return OrderResult(ok=True, message="Closed.", ticket=result.order, price=result.price, volume=result.volume)
 
     def closed_position_result(self, ticket: int) -> Optional[dict]:

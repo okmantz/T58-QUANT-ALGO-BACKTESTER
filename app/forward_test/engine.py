@@ -97,16 +97,37 @@ class ForwardTestSession:
         self._daily_realized_pnl = 0.0
         self._daily_key: Optional[str] = None
         self._mt5_down = False  # tracks reconnect state across polls, for the recovered-log message
+        self.last_problem = None  # set by start() when it fails: the structured, plain-language explanation
 
     # -- public controls ----------------------------------------------------
 
-    def start(self) -> tuple[bool, str]:
+    def start(self, progress=None) -> tuple[bool, str]:
+        """(ok, message). On failure ``self.last_problem`` holds a plain-language, structured explanation
+        ({title, summary, steps, commands, technical}) that the web page renders; ``message`` is the same as text.
+        ``progress(step_id, text)`` (optional) is called as the connection is prepared."""
+        self.last_problem = None
         if self.status.running:
             return False, "Already running."
+        if progress is not None:
+            try:
+                self.connector.on_progress = progress
+            except Exception:  # noqa: BLE001
+                pass
         conn = self.connector.connect()
         if not conn.ok:
+            self.last_problem = getattr(conn, "problem", None)
             self._log("error", conn.message)
             return False, conn.message
+        checker = getattr(self.connector, "check_symbol", None)
+        if checker is not None:
+            bad = checker(self.cfg.symbol)
+            if bad is not None:
+                self.last_problem = bad.to_dict()
+                self.connector.disconnect()
+                self._log("error", bad.plain_text())
+                return False, bad.plain_text()
+        if progress is not None:
+            progress("strategy", "Starting your strategy...")
         self.status.connected = True
         self.status.balance = conn.balance
         self.status.equity = conn.equity
@@ -306,10 +327,20 @@ class ForwardTestSession:
         target_distance = self._resolve_target_distance(result, price)
         stop_pips = stop_distance / self.cfg.risk.pip_size if self.cfg.risk.pip_size else 0
         equity = self.status.equity or self.cfg.risk.initial_balance
-        volume = self.cfg.risk.position_size(equity, stop_pips)
-        if volume <= 0:
-            self._log("warn", "Computed position size was zero -- skipping entry.")
+        units = self.cfg.risk.position_size(equity, stop_pips)
+        if units <= 0:
+            self._log("warn", "Computed position size was zero -- skipping entry (the stop is too wide for the risk "
+                              "budget, or the budget is zero).")
             return
+        # The sizer works in units (profit = units x price move); MT5 orders are in lots. Convert with the broker's
+        # contract size / volume step / min / max so the order is the size the risk budget meant.
+        volume = units
+        to_lots = getattr(self.connector, "units_to_lots", None)
+        if to_lots is not None:
+            volume, note = to_lots(self.cfg.symbol, units)
+            if volume <= 0:
+                self._log("warn", f"Signal skipped: {note or 'position size converts to 0 lots.'}")
+                return
 
         sl_price = price - signal * stop_distance
         tp_price = price + signal * target_distance if target_distance else None
@@ -326,7 +357,7 @@ class ForwardTestSession:
             self._session_id, order.ticket, signal, order.volume or volume,
             order.price or price, sl_price, tp_price,
         )
-        self._log("info", f"Opened {'LONG' if signal == 1 else 'SHORT'} {order.volume or volume:.2f} "
+        self._log("info", f"Opened {'LONG' if signal == 1 else 'SHORT'} {order.volume or volume:.2f} lots "
                            f"{self.cfg.symbol} @ {order.price or price:.5f} (ticket {order.ticket}).")
 
     def _close_current_trade(self, reason: str) -> None:

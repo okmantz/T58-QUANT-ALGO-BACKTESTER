@@ -1,12 +1,15 @@
 """Starts and prepares the MT5 bridge server for the user, so on Linux/macOS saving the account is enough.
 
-Flow of ``ensure_bridge()`` (only for a bridge on THIS machine; a remote host manages its own server):
+Flow of ``ensure_bridge_detailed()`` (only for a bridge on THIS machine; a remote host manages its own server):
   1. already listening on host:port?  -> done.
   2. find Wine and the Wine prefix that holds the MT5 terminal (or the default prefix).
-  3. find the Windows Python inside that prefix; if the MetaTrader5/rpyc/numpy packages are missing, pip-install them
-     inside Wine (one time).
-  4. start app/forward_test/mt5_rpc_server.py with that Python, wait until it answers.
-Every step that cannot be done returns a plain-language reason plus the single command that fixes it.
+  3. find the Windows Python inside that prefix; install it silently if missing; pip-install MetaTrader5/rpyc/numpy
+     inside Wine if missing (one time).
+  4. copy mt5_rpc_server.py into the prefix's own C: drive, start it with that Python, wait until it answers.
+     The helper's output goes to data/logs/mt5_bridge.log, and if it dies, the last lines of that log are what the
+     user (and support) get to see.
+Every step that cannot be done returns a ``Problem`` (app.forward_test.mt5_diagnostics): a plain-language title,
+numbered fix steps and the technical text kept separate. ``ensure_bridge()`` keeps the old (ok, message) shape.
 """
 from __future__ import annotations
 
@@ -17,12 +20,23 @@ import socket
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
+
+from app.forward_test import mt5_diagnostics as diag
 
 SERVER_SCRIPT = Path(__file__).with_name("mt5_rpc_server.py")
 _PROC: subprocess.Popen | None = None
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1", "0.0.0.0", "")
-PY_INSTALLER_URL = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe"
+PY_INSTALLER_URL = diag.PY_INSTALLER_URL
+WINE_SERVER_DIR = "t58"          # <prefix>/drive_c/t58/mt5_rpc_server.py  ==  C:\t58\mt5_rpc_server.py
+
+
+@dataclass
+class BridgeResult:
+    ok: bool
+    message: str
+    problem: "diag.Problem | None" = None
 
 
 def is_local_host(host: str) -> bool:
@@ -37,16 +51,54 @@ def port_open(host: str, port: int, timeout: float = 1.5) -> bool:
         return False
 
 
+# ---- log file ------------------------------------------------------------------------------------------------
+
+def log_dir() -> Path:
+    try:
+        from app.data.storage import get_app_base_dir
+        d = get_app_base_dir() / "data" / "logs"
+    except Exception:  # noqa: BLE001
+        d = Path.home() / ".t58" / "logs"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        d = Path.home() / ".t58" / "logs"
+        d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def bridge_log_path() -> Path:
+    return log_dir() / "mt5_bridge.log"
+
+
+def read_log_tail(max_chars: int = 1500) -> str:
+    try:
+        text = bridge_log_path().read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    return text[-max_chars:]
+
+
+# ---- finding the pieces --------------------------------------------------------------------------------------
+
 def find_wine() -> str | None:
     for name in ("wine64", "wine"):
         p = shutil.which(name)
         if p:
             return p
-    for p in ("/opt/wine-stable/bin/wine64", "/opt/homebrew/bin/wine64", "/usr/local/bin/wine64",
-              "/Applications/Wine Stable.app/Contents/Resources/wine/bin/wine64",
-              "/Applications/Wine Staging.app/Contents/Resources/wine/bin/wine64"):
+    fixed = ["/opt/wine-stable/bin/wine64", "/opt/homebrew/bin/wine64", "/usr/local/bin/wine64",
+             "/Applications/Wine Stable.app/Contents/Resources/wine/bin/wine64",
+             "/Applications/Wine Staging.app/Contents/Resources/wine/bin/wine64"]
+    for p in fixed:
         if os.path.exists(p):
             return p
+    # MetaQuotes' own macOS app (MetaTrader 5.app) ships its own Wine; use it when it is the only one around.
+    for pat in ("/Applications/MetaTrader*.app/Contents/SharedSupport/wine/bin/wine64",
+                "/Applications/MetaTrader*.app/Contents/SharedSupport/wine/bin/wine",
+                os.path.expanduser("~/Applications/MetaTrader*.app/Contents/SharedSupport/wine/bin/wine64")):
+        for p in sorted(glob.glob(pat)):
+            if os.path.exists(p):
+                return p
     return None
 
 
@@ -78,24 +130,45 @@ def _env(prefix: str | None) -> dict:
 
 
 def wine_path(host_path: str) -> str:
-    """Z: drive path Wine can open for a file on the host filesystem."""
+    """Z: drive path Wine can open for a file on the host filesystem (works only when the prefix still has a Z: drive)."""
     return "Z:" + os.path.abspath(host_path).replace("/", "\\")
+
+
+def stage_server_script(prefix: str) -> tuple[str, str] | None:
+    """Copies mt5_rpc_server.py into the prefix's own C: drive and returns (host_dir, windows_path), e.g.
+    (<prefix>/drive_c/t58, 'C:\\t58\\mt5_rpc_server.py'). Wine can always read its own C: drive, whereas a Z: path
+    to the app folder fails on prefixes without a Z: drive or with unusual characters in the path. Always overwritten,
+    so an app update's new protocol is never shadowed by a stale copy. None when the prefix has no drive_c."""
+    drive_c = Path(prefix) / "drive_c"
+    if not drive_c.is_dir():
+        return None
+    dest = drive_c / WINE_SERVER_DIR
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(SERVER_SCRIPT, dest / SERVER_SCRIPT.name)
+    except OSError:
+        return None
+    return str(dest), f"C:\\{WINE_SERVER_DIR}\\{SERVER_SCRIPT.name}"
 
 
 def _wine_run(wine, prefix, args, timeout=120):
     return subprocess.run([wine, *args], env=_env(prefix), capture_output=True, text=True, timeout=timeout)
 
 
-def packages_ready(wine: str, prefix: str, py: str) -> bool:
+def check_packages(wine: str, prefix: str, py: str) -> tuple[bool, str]:
     try:
         r = _wine_run(wine, prefix, [py, "-c", "import MetaTrader5, rpyc, numpy"], timeout=90)
-        return r.returncode == 0
-    except Exception:  # noqa: BLE001
-        return False
+        return r.returncode == 0, (r.stdout + r.stderr)[-600:]
+    except Exception as exc:  # noqa: BLE001
+        return False, f"{type(exc).__name__}: {exc}"
+
+
+def packages_ready(wine: str, prefix: str, py: str) -> bool:
+    return check_packages(wine, prefix, py)[0]
 
 
 def install_packages(wine: str, prefix: str, py: str, log=lambda m: None) -> tuple[bool, str]:
-    log("Installing MetaTrader5 + rpyc inside Wine (one time, needs internet)...")
+    log("Installing the MT5 connection packages inside Wine (one time, needs internet)...")
     try:
         r = _wine_run(wine, prefix, [py, "-m", "pip", "install", "--upgrade", "MetaTrader5", "rpyc>=5.3,<7", "numpy"], timeout=900)
     except Exception as exc:  # noqa: BLE001
@@ -110,69 +183,129 @@ def install_wine_python(wine: str, prefix: str, log=lambda m: None) -> tuple[boo
     try:
         dst.parent.mkdir(parents=True, exist_ok=True)
         if not dst.exists():
-            log("Downloading Python for Wine...")
+            log("Downloading Python for Wine (one time)...")
             urllib.request.urlretrieve(PY_INSTALLER_URL, dst)
-        log("Installing Python inside Wine...")
+        log("Installing Python inside Wine (one time, about a minute)...")
         r = _wine_run(wine, prefix, [str(dst), "/quiet", "InstallAllUsers=0", "PrependPath=1", "Include_test=0"], timeout=900)
         return r.returncode == 0 and find_wine_python(prefix) is not None, (r.stdout + r.stderr)[-400:]
     except Exception as exc:  # noqa: BLE001
         return False, f"{type(exc).__name__}: {exc}"
 
 
-def ensure_bridge(host: str, port: int, terminal_path: str | None = None, *, install: bool = True,
-                  log=lambda m: None, wait: float = 60.0) -> tuple[bool, str]:
-    """(ok, message). Safe to call repeatedly; returns fast when the bridge is already up."""
+# ---- starting the server -------------------------------------------------------------------------------------
+
+def _start_once(wine: str, prefix: str, py: str, script_arg: str, cwd: str | None, port: int, wait: float, label: str):
+    """Launches the helper once. Returns (listening, returncode_or_None, log_text_written_by_this_attempt)."""
     global _PROC
-    if port_open(host, port):
-        return True, "Bridge is running."
-    if not is_local_host(host):
-        return False, (f"Nothing is listening at {host}:{port}. On that machine start the bridge with the Windows Python: "
-                       f"`python mt5_rpc_server.py --host 0.0.0.0 --port {port} --token <secret>` (copy app/forward_test/mt5_rpc_server.py there; "
-                       "set the same T58_MT5_BRIDGE_TOKEN here), and open that port in its firewall.")
-    if sys.platform.startswith("win"):
-        return False, (f"Nothing is listening at {host}:{port}. On Windows the app talks to MT5 directly (`pip install MetaTrader5`), "
-                       "so no bridge is needed.")
-    wine = find_wine()
-    if not wine:
-        hint = ("`brew install --cask wine-stable` (or install MetaQuotes' MetaTrader 5 for macOS)" if sys.platform == "darwin"
-                else "`sudo apt install wine64` (or your distro's wine package)")
-        return False, f"Wine is not installed, and the MT5 terminal needs it on this OS. Install it with {hint}, install your broker's MT5 in it, then try again."
-    prefix = prefix_of(terminal_path)
-    if not prefix:
-        from app.forward_test.mt5_connector import find_terminal_candidates, wine_prefix_candidates
-        prefix = prefix_of((find_terminal_candidates() or [None])[0]) or (wine_prefix_candidates() or [None])[0] \
-            or os.path.join(os.path.expanduser("~"), ".wine")
-    py = find_wine_python(prefix)
-    if not py and install:
-        ok, tail = install_wine_python(wine, prefix, log)
-        py = find_wine_python(prefix) if ok else None
-        if not py:
-            return False, ("Could not set up Windows Python inside Wine automatically "
-                           f"({tail.strip()[-200:] or 'installer failed'}). Run it by hand once: download {PY_INSTALLER_URL} and "
-                           f"`WINEPREFIX=\"{prefix}\" wine python-3.11.9-amd64.exe /quiet InstallAllUsers=0 PrependPath=1`, then try again.")
-    if not py:
-        return False, f"No Windows Python found inside the Wine prefix {prefix}."
-    if not packages_ready(wine, prefix, py):
-        if not install:
-            return False, "MetaTrader5/rpyc are not installed in the Wine Python."
-        ok, tail = install_packages(wine, prefix, py, log)
-        if not ok or not packages_ready(wine, prefix, py):
-            return False, ("Installing MetaTrader5 inside Wine failed. Run once: "
-                           f"`WINEPREFIX=\"{prefix}\" wine \"{py}\" -m pip install MetaTrader5 rpyc numpy`. Last output: {tail.strip()[-200:]}")
-    log("Starting the MT5 bridge...")
+    path = bridge_log_path()
     try:
-        _PROC = subprocess.Popen([wine, py, wine_path(str(SERVER_SCRIPT)), "--host", "127.0.0.1", "--port", str(port)],
-                                 env=_env(prefix), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
-    except Exception as exc:  # noqa: BLE001
-        return False, f"Could not start the bridge under Wine: {type(exc).__name__}: {exc}"
+        size_before = path.stat().st_size
+    except OSError:
+        size_before = 0
+    cmd = [wine, py, script_arg, "--host", "127.0.0.1", "--port", str(port)]
+    with open(path, "ab", buffering=0) as logf:
+        logf.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')}  starting MT5 helper ({label}): {' '.join(cmd)}\n".encode())
+        try:
+            _PROC = subprocess.Popen(cmd, env=_env(prefix), cwd=cwd if cwd and os.path.isdir(cwd) else None,
+                                     stdout=logf, stderr=subprocess.STDOUT, close_fds=True)
+        except Exception as exc:  # noqa: BLE001
+            logf.write(f"could not launch: {type(exc).__name__}: {exc}\n".encode())
+            return False, -1, f"{type(exc).__name__}: {exc}"
     deadline = time.time() + wait
     while time.time() < deadline:
         if port_open("127.0.0.1", port):
-            return True, "Bridge started."
+            return True, None, ""
         if _PROC.poll() is not None:
-            return False, f"The bridge process exited immediately (code {_PROC.returncode}). Run `python scripts/mt5_bridge_server.py --check` for details."
+            time.sleep(0.3)           # let the OS flush the last lines into the log
+            break
         time.sleep(0.7)
-    return False, f"The bridge did not start listening on port {port} within {int(wait)} seconds."
+    rc = _PROC.poll()
+    try:
+        with open(path, "rb") as f:
+            f.seek(size_before)
+            written = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        written = ""
+    return False, rc, written
+
+
+def _fail(problem: "diag.Problem") -> BridgeResult:
+    return BridgeResult(False, problem.plain_text(), problem)
+
+
+def ensure_bridge_detailed(host: str, port: int, terminal_path: str | None = None, *, install: bool = True,
+                           log=lambda m: None, wait: float = 60.0) -> BridgeResult:
+    """Safe to call repeatedly; returns fast when the bridge is already up."""
+    if port_open(host, port):
+        return BridgeResult(True, "Bridge is running.")
+    if not is_local_host(host):
+        return _fail(diag.remote_unreachable(host, port))
+    if sys.platform.startswith("win"):
+        return _fail(diag.windows_package_missing(f"Nothing is listening at {host}:{port}; on Windows the app talks to MT5 "
+                                                  "directly through the MetaTrader5 package, so no bridge is needed."))
+    log("Looking for Wine and MetaTrader 5...")
+    wine = find_wine()
+    if not wine:
+        return _fail(diag.wine_missing())
+    prefix = prefix_of(terminal_path)
+    if not prefix:
+        from app.forward_test.mt5_connector import find_terminal_candidates, wine_prefix_candidates
+        cands = find_terminal_candidates()
+        prefix = prefix_of(cands[0] if cands else None)
+        if not prefix and (terminal_path or "").strip()[1:2] == ":":
+            prefix = (wine_prefix_candidates() or [os.path.join(os.path.expanduser("~"), ".wine")])[0]   # a C:\ path from settings
+        if not prefix:
+            return _fail(diag.mt5_not_found())
+    py = find_wine_python(prefix)
+    if not py and install:
+        log("Setting up Python for MT5 (first time only, about 2 to 5 minutes)...")
+        ok, tail = install_wine_python(wine, prefix, log)
+        py = find_wine_python(prefix) if ok else None
+        if not py:
+            return _fail(diag.python_setup_failed(prefix, tail))
+    if not py:
+        return _fail(diag.python_setup_failed(prefix, "No Windows Python found inside the Wine prefix."))
+    ok, out = check_packages(wine, prefix, py)
+    if not ok:
+        if not install:
+            return _fail(diag.packages_failed(prefix, py, out or "MetaTrader5/rpyc are not installed in the Wine Python."))
+        ok, tail = install_packages(wine, prefix, py, log)
+        ok2, out2 = check_packages(wine, prefix, py) if ok else (False, tail)
+        if not ok or not ok2:
+            return _fail(diag.packages_failed(prefix, py, out2 or tail))
+
+    log("Starting the MT5 connection helper...")
+    staged = stage_server_script(prefix)
+    attempts = []
+    if staged:
+        attempts.append(("C: copy", staged[1], staged[0]))
+    attempts.append(("Z: path", wine_path(str(SERVER_SCRIPT)), None))
+    last_rc, last_log = None, ""
+    for n, (label, script_arg, cwd) in enumerate(attempts):
+        listening, rc, written = _start_once(wine, prefix, py, script_arg, cwd, port, wait, label)
+        if listening:
+            return BridgeResult(True, "Bridge started.")
+        last_rc, last_log = rc, written
+        if rc is None:                                   # still running but never opened its port
+            return _fail(diag.bridge_timeout(int(wait), written))
+        low = written.lower()
+        if "no module named" in low and install and n == 0:
+            log("A package is missing inside Wine, reinstalling it...")
+            install_packages(wine, prefix, py, log)
+            listening, rc, written = _start_once(wine, prefix, py, script_arg, cwd, port, wait, label + ", after reinstall")
+            if listening:
+                return BridgeResult(True, "Bridge started.")
+            last_rc, last_log = rc, written
+        if "bad cpu type" in low:
+            break                                         # retrying with another path cannot fix this
+    return _fail(diag.bridge_failed(last_rc, last_log or read_log_tail(), prefix, str(bridge_log_path())))
+
+
+def ensure_bridge(host: str, port: int, terminal_path: str | None = None, *, install: bool = True,
+                  log=lambda m: None, wait: float = 60.0) -> tuple[bool, str]:
+    """(ok, message): the original shape, kept for callers that only want text."""
+    r = ensure_bridge_detailed(host, port, terminal_path, install=install, log=log, wait=wait)
+    return r.ok, r.message
 
 
 def stop_bridge() -> None:
