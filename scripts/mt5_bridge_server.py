@@ -6,6 +6,7 @@ prepares the bridge itself the first time you connect. Use it to check or pre-wa
     python scripts/mt5_bridge_server.py --check    # start the bridge if needed and test that the terminal answers
     python scripts/mt5_bridge_server.py --setup    # one-time preparation: Windows Python + MetaTrader5 inside Wine, then start
     python scripts/mt5_bridge_server.py --serve    # (WINDOWS Python only) run the bridge server in the foreground
+    python scripts/mt5_bridge_server.py --log      # print the MT5 helper's own log (what it said when it last started/stopped)
 
 See docs/MT5_CROSS_PLATFORM.md.
 """
@@ -38,6 +39,7 @@ def _status() -> str:
         lines.append("Windows Python in Wine: " + (py or "not yet (the app installs it on first connect)"))
         lines.append(f"rpyc installed here: {mc._bridge_package_available()}")
         lines.append(f"bridge listening: {mgr.port_open(h, p)}")
+        lines.append(f"helper log file: {mgr.bridge_log_path()}   (python scripts/mt5_bridge_server.py --log)")
     return "\n".join(lines)
 
 
@@ -64,10 +66,15 @@ def main() -> int:
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--setup", action="store_true")
     ap.add_argument("--serve", action="store_true")
+    ap.add_argument("--log", action="store_true")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=mc.DEFAULT_BRIDGE_PORT)
     ap.add_argument("--token", default=os.environ.get("T58_MT5_BRIDGE_TOKEN", ""))
     a = ap.parse_args()
+    if a.log:
+        tail = mgr.read_log_tail(6000)
+        print(f"[{mgr.bridge_log_path()}]\n" + (tail or "(empty: the helper has not been started on this machine yet)"))
+        return 0
     if a.serve:
         sys.argv = ["mt5_rpc_server.py", "--host", a.host, "--port", str(a.port)] + (["--token", a.token] if a.token else [])
         runpy.run_path(str(mgr.SERVER_SCRIPT), run_name="__main__")
