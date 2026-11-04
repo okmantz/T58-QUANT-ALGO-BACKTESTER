@@ -1254,6 +1254,27 @@ def ready_eligibility(preset: "PropFirmPreset", today: "date | None" = None) -> 
     return True, ""
 
 
+def rules_stamp_state(preset: "PropFirmPreset", today: "date | None" = None) -> tuple[str, str]:
+    """2026-11-04 audit (P1-3): ("ok" | "stale" | "unverified", reason).
+
+    ``stale`` = the rules WERE verified against the firm's own page (primary tier, valid date, source URL) but the stamp is older than
+    RULES_STAMP_MAX_AGE_DAYS. A stale stamp is a fact about the calendar, not about the strategy: it no longer changes the VERDICT, it
+    raises a banner and becomes a blocker on the deployment checklist (re-check the firm's page before buying). ``unverified`` (never
+    verified, non-primary tier, unreadable date) still caps the verdict -- those rules were never confirmed at all."""
+    if not (preset.verified_on and preset.source_url):
+        return "unverified", f"preset '{preset.key}' has no verified_on / source_url (rules not verified against a firm page)"
+    if preset.verification_tier not in READY_VERIFICATION_TIERS:
+        return "unverified", (f"preset '{preset.key}' rules are only '{preset.verification_tier or 'unstamped'}'-verified "
+                              "(READY needs the firm's own page: tier 'primary')")
+    age = rules_stamp_age_days(preset, today)
+    if age is None:
+        return "unverified", f"preset '{preset.key}' has an unreadable verified_on date {preset.verified_on!r}"
+    if age > RULES_STAMP_MAX_AGE_DAYS:
+        return "stale", (f"preset '{preset.key}' rules were last verified {age} days ago ({preset.verified_on}); "
+                         f"re-check the firm's page (stamps older than {RULES_STAMP_MAX_AGE_DAYS} days are flagged before any purchase)")
+    return "ok", ""
+
+
 def is_ready_eligible(preset: "PropFirmPreset", today: "date | None" = None) -> bool:
     """A preset can support a READY / HIGH CONFIDENCE verdict only if its RULES were verified against the firm's
     own page (primary tier) within RULES_STAMP_MAX_AGE_DAYS. Anything else caps at MARGINAL."""

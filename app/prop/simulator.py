@@ -284,6 +284,9 @@ class AttemptRecord:
     # passed its evaluation. Defaults keep every existing constructor call working.
     calendar_days_used: int = 0
     days_to_pass: int | None = None
+    # 2026-11-04 audit: CALENDAR days from this attempt's first trade day through the day it passed its evaluation (None = never
+    # passed). ``days_to_pass`` above is a TRADING-day count and must not be used as calendar time.
+    calendar_days_to_pass: int | None = None
 
 
 @dataclass
@@ -298,6 +301,8 @@ class AccountSimResult:
     first_payout_day_index: int | None
     first_payout_amount: float | None
     payouts: list[PayoutEvent] = field(default_factory=list)
+    # CALENDAR-day twin of days_to_pass (first pass in the chain); see AttemptRecord.calendar_days_to_pass.
+    calendar_days_to_pass: int | None = None
     final_balance: float = 0.0
     max_drawdown_pct_reached: float = 0.0
     trading_days_count: int = 0
@@ -552,6 +557,7 @@ def simulate_account(
     overall_payouts: list[PayoutEvent] = []
     overall_passed_evaluation = False
     overall_days_to_pass = None
+    overall_calendar_days_to_pass = None
     overall_first_payout_day_index = None
     overall_first_payout_amount = None
     overall_max_dd_pct_reached = 0.0
@@ -669,11 +675,13 @@ def simulate_account(
             ending_balance=balance,
             calendar_days_used=_attempt_calendar_days(day_dates, attempt_start_day_idx, acct.attempt_last_day_index),
             days_to_pass=acct.days_to_pass,
+            calendar_days_to_pass=acct.calendar_days_to_pass,
         ))
         overall_payouts.extend(payouts_this_attempt)
         if not overall_passed_evaluation and acct.passed_evaluation:
             overall_passed_evaluation = True
             overall_days_to_pass = acct.days_to_pass
+            overall_calendar_days_to_pass = acct.calendar_days_to_pass
         if overall_first_payout_day_index is None and acct.first_payout_day_index is not None:
             overall_first_payout_day_index = acct.first_payout_day_index
             overall_first_payout_amount = acct.first_payout_amount
@@ -695,6 +703,7 @@ def simulate_account(
         failure_reason=failure_reason,
         failure_day_index=failure_day_index,
         days_to_pass=overall_days_to_pass,
+        calendar_days_to_pass=overall_calendar_days_to_pass,
         first_payout_day_index=overall_first_payout_day_index,
         first_payout_amount=overall_first_payout_amount,
         payouts=overall_payouts,

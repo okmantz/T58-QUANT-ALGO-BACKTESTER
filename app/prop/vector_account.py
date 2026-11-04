@@ -102,6 +102,15 @@ class VecResult(NamedTuple):
     attempts_failed: np.ndarray     # per-path attempts that failed
     attempts_reached_payout: np.ndarray  # per-path attempts reaching first payout
     first_attempt_bust: np.ndarray  # per-path bool: attempt #1 failed without passing
+    # 2026-11-04 audit (Fix 1 / P3): CALENDAR time. ``days_to_pass`` above counts TRADING days; these do not.
+    #   calendar_days_to_pass  per path: calendar days from the (current) attempt's first trade day to its pass day, -1 = never
+    #   first_attempt_state    per path: how the FIRST purchased attempt's evaluation ended: 0 = still open when the data ran out,
+    #                          1 = passed, 2 = breached before passing
+    #   first_attempt_days     per path: calendar days that first attempt's evaluation lasted (to the pass day or the breach day);
+    #                          0 where state is 0 (the caller uses the span to the last traded day)
+    calendar_days_to_pass: np.ndarray | None = None
+    first_attempt_state: np.ndarray | None = None
+    first_attempt_days: np.ndarray | None = None
 
 
 def simulate_paths(
@@ -186,8 +195,15 @@ def simulate_paths(
     n_att_failed = np.zeros(P, dtype=np.int64)
     n_att_payout = np.zeros(P, dtype=np.int64)
     first_bust = np.zeros(P, dtype=bool)
+    # 2026-11-04: calendar-time bookkeeping (see VecResult). start_slot = slot the CURRENT attempt began on (0 for the first).
+    cal_pass = np.full(P, -1, dtype=np.int64)
+    fa_state = np.zeros(P, dtype=np.int8)
+    fa_days = np.zeros(P, dtype=np.int64)
+    start_slot = np.zeros(P, dtype=np.int64)
+    start_pending = np.zeros(P, dtype=bool)
 
     cal0, gap = tables.cal0, tables.gap
+    _cal_top = max(len(cal0) - 1, 0)
 
     def floor_of(pk):
         if not trailing:
@@ -216,7 +232,7 @@ def simulate_paths(
     for t in range(n_steps):
         valid = path_len > t
         # S1: snapshot failed flags to detect newly-breached paths at the end of this step
-        was_failed = failed.copy() if reset_on_breach else None
+        was_failed = failed.copy()
         pnl, mae, mfe, risk, slot, is_last = get_step(t)
         # max losing streak runs over EVERY resampled trade (as _max_losing_streak does)
         loss = (pnl <= 0) & valid
@@ -227,6 +243,11 @@ def simulate_paths(
         if not act.any():
             continue
         sl = slot
+        if reset_on_breach:
+            _st = act & start_pending
+            if _st.any():
+                start_slot = np.where(_st, sl, start_slot)
+                start_pending = start_pending & ~_st
         # ---- new session day: roll the per-day trackers ---------------------------------
         new_day = act & (cur_slot != sl)
         if new_day.any():
@@ -345,6 +366,12 @@ def simulate_paths(
             funded = funded | cond
             passed = passed | cond
             days_to_pass = np.where(cond, tds, days_to_pass)
+            _cs = cal0[np.clip(sl, 0, _cal_top)] - cal0[np.clip(start_slot, 0, _cal_top)] + 1
+            cal_pass = np.where(cond, _cs, cal_pass)
+            _sp = cond & (fa_state == 0) & (n_attempts == 1)
+            if _sp.any():
+                fa_state = np.where(_sp, 1, fa_state).astype(np.int8)
+                fa_days = np.where(_sp, _cs, fa_days)
             if fresh:
                 bal = np.where(cond, acct, bal)
                 peak = np.where(cond, acct, peak)
@@ -386,6 +413,11 @@ def simulate_paths(
                     last_payout = np.where(pay, sl, last_payout)
                     best_since = np.where(pay, 0.0, best_since)
                     peak = np.where(pay, np.maximum(peak - w, bal), peak)
+        # 2026-11-04: the first attempt's evaluation ended in a breach this step (before it ever passed)
+        _nb = failed & ~was_failed & valid & ~passed & (fa_state == 0) & (n_attempts == 1)
+        if _nb.any():
+            fa_state = np.where(_nb, 2, fa_state).astype(np.int8)
+            fa_days = np.where(_nb, cal0[np.clip(last_slot, 0, _cal_top)] + 1, fa_days)
         # S1 (2026-10-19): reset-on-breach -- paths that breached this step start a fresh
         # attempt on the next trade (same semantics as simulate_account's reset loop).
         if reset_on_breach:
@@ -411,6 +443,8 @@ def simulate_paths(
                 funded[do_reset] = False
                 passed[do_reset] = False
                 days_to_pass[do_reset] = -1
+                cal_pass[do_reset] = -1
+                start_pending[do_reset] = True
                 locked[do_reset] = -1
                 cur_slot[do_reset] = -1
                 # last_slot keeps the position (used for calendar mapping)
@@ -441,4 +475,5 @@ def simulate_paths(
         last_slot=last_slot, max_losing_streak=streak_best,
         total_attempts=n_attempts, attempts_passed=n_att_passed, attempts_failed=n_att_failed,
         attempts_reached_payout=n_att_payout, first_attempt_bust=first_bust,
+        calendar_days_to_pass=cal_pass, first_attempt_state=fa_state, first_attempt_days=fa_days,
     )

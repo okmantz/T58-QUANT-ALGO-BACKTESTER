@@ -164,7 +164,11 @@ class PropAccount:
         # -- outcome -----------------------------------------------------
         self.stage = "evaluation"
         self.passed_evaluation = False
-        self.days_to_pass: int | None = None
+        self.days_to_pass: int | None = None          # TRADING days (days with >= 1 trade) from the attempt's first trade day
+        # 2026-11-04 audit (P3 / Fix 1): the same moment in CALENDAR days, first trade day through the pass day inclusive.
+        # ``days_to_pass`` skips days with no trade and counts weekends as nothing, so it is NOT a calendar number; anything that
+        # bills by the month or measures speed must use this one. None when no calendar is available.
+        self.calendar_days_to_pass: int | None = None
         self.failed = False
         self.failure_reason: str | None = None
         self.failure_day_index: int | None = None
@@ -527,6 +531,11 @@ class PropAccount:
                     self.stage = "funded"
                     self.passed_evaluation = True
                     self.days_to_pass = trading_days_so_far
+                    if self.day_dates is not None:
+                        try:
+                            self.calendar_days_to_pass = _days_between(self.day_dates[cur], self.day_dates[self.start_day_index]) + 1
+                        except Exception:  # noqa: BLE001 -- bookkeeping must never sink a simulation
+                            self.calendar_days_to_pass = None
                     if getattr(r, "funded_starts_fresh", False):
                         # AUDIT 2026-10-12: fresh funded account (Topstep XFA).
                         self.balance = float(r.account_size)
@@ -613,7 +622,7 @@ class PropAccount:
             "status": self.status(), "stage": self.stage, "balance": self.balance,
             "trailing_peak": self.trailing_peak, "floor": self.floor(),
             "failure_reason": self.failure_reason, "passed_evaluation": self.passed_evaluation,
-            "days_to_pass": self.days_to_pass, "n_trades": self.n_trades,
+            "days_to_pass": self.days_to_pass, "calendar_days_to_pass": self.calendar_days_to_pass, "n_trades": self.n_trades,
             "payouts": len(self.payouts), "max_dd_pct_reached": self.max_dd_pct_reached,
         }
 
