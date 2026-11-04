@@ -101,6 +101,15 @@ class MonteCarloConfig:
     # alongside (see MonteCarloResult); lifetime-in-sample ruin stays available as
     # per_attempt_bust_probability.
     ruin_horizon_days: int = 90
+    # 2026-11-04 audit (P0-1): when >= 8, the trade-sample interval on the pass / paid probabilities comes from an OUTER bootstrap
+    # (see app.monte_carlo.outer_bootstrap): resample whole session days of the source trades, re-run a small Monte Carlo on each
+    # replicate, and take the ``outer_bootstrap_quantile`` percentile. 0 (default) skips it -- the inner loops of the searches only
+    # need point estimates -- and the interval then falls back to the Wilson interval over independent 30-day windows.
+    outer_bootstrap_reps: int = 0
+    outer_bootstrap_sims: int = 400
+    outer_bootstrap_quantile: float = 0.10
+    # Speed preference (app.scoring.speed): exponent of the (30 / calendar days to pass) factor used for speed_adjusted_pass_pct.
+    speed_exponent: float = 0.5
 
 
 # Fixed reporting windows for time-bounded ruin (calendar days).
@@ -297,6 +306,22 @@ class MonteCarloResult:
     per_attempt_paid_ci95_sample: tuple = (0.0, 0.0)
     effective_independent_attempts: float = 0.0
     funded_attempts: int = 0                      # attempts that passed the evaluation (denominator of the funded-stage rates)
+
+    # -- 2026-11-04 audit: CALENDAR time, speed, and the outer-bootstrap interval --------------------------------------------
+    # ``median_days_to_pass`` above is a TRADING-day count (days that contained a trade). Everything below is CALENDAR days of the
+    # FIRST purchased attempt's evaluation, which is what a subscription bills by and what "30 days" means to a trader.
+    median_calendar_days_to_pass: float | None = None
+    calendar_days_to_pass_percentiles: dict = field(default_factory=dict)     # {10, 25, 50, 75, 90: calendar days}, passers only
+    pass_within_days_pct: dict = field(default_factory=dict)                  # {30, 60, 90, 180: % of purchased attempts that passed within N calendar days}
+    speed_factor: float | None = None                                         # app.scoring.speed.speed_factor(median_calendar_days_to_pass)
+    speed_adjusted_pass_pct: float = 0.0                                      # per_attempt_pass_probability x speed_factor (ranking number, never a gate)
+    # One entry per simulated path (the first purchased attempt): how its evaluation ended and how many calendar days it lasted.
+    # outcomes: 1 = passed, 2 = breached before passing, 0 = still open when the history ran out (days = span to the last traded day).
+    attempt_outcomes: list = field(default_factory=list)
+    attempt_calendar_days: list = field(default_factory=list)
+    # How per_attempt_*_ci95_sample were produced: "outer_bootstrap" or "wilson_trade_sample" (legacy fallback), plus the replicate summary.
+    pass_interval_method: str = "wilson_trade_sample"
+    outer_bootstrap: dict = field(default_factory=dict)
 
     # -- headline numbers (Owen's accounting) --------------------------------
     # What reports/dashboards should show as "the" eval-pass / payout
@@ -836,6 +861,14 @@ class _SimRow(NamedTuple):
     # payouts it never reached. Different costs, so they are reported (and scored) separately.
     failed_days_eval: tuple = ()
     failed_days_funded: tuple = ()
+    # 2026-11-04 audit (Fix 1 / P3): CALENDAR time of the FIRST purchased attempt's evaluation.
+    #   first_attempt_state: 0 = still open when the history ran out, 1 = passed, 2 = breached before passing
+    #   first_attempt_days: calendar days that evaluation lasted (to the pass day or the breach day); 0 when state is 0
+    #   calendar_days_to_pass: calendar days from the attempt's first trade day to its pass day (None = never passed)
+    # ``days_to_pass`` above is a TRADING-day count (days with a trade); it is never used as calendar time any more.
+    first_attempt_state: int = 0
+    first_attempt_days: int = 0
+    calendar_days_to_pass: Any = None
 
 
 def _mc_simulate_path(sim_pnls, base_dates, rules, day_structure, reset_on_breach, sim_risks) -> _SimRow:
@@ -858,6 +891,12 @@ def _mc_simulate_path(sim_pnls, base_dates, rules, day_structure, reset_on_breac
         trade_mfe=sim_mfe,
     )
     first_attempt = result.attempts[0] if result.attempts else None
+    _fa_state, _fa_days = 0, 0
+    if first_attempt is not None:
+        if first_attempt.passed_evaluation:
+            _fa_state, _fa_days = 1, int(first_attempt.calendar_days_to_pass or 0)
+        elif first_attempt.failed:
+            _fa_state, _fa_days = 2, int(first_attempt.calendar_days_used or 0)
     return _SimRow(
         passed=result.passed_evaluation,
         reached_first_payout=result.reached_first_payout,
@@ -880,6 +919,8 @@ def _mc_simulate_path(sim_pnls, base_dates, rules, day_structure, reset_on_breac
         funded_failed=sum(1 for a in result.attempts if a.failed and a.passed_evaluation),
         failed_days_eval=tuple(int(a.calendar_days_used or 0) for a in result.attempts if a.failed and not a.passed_evaluation),
         failed_days_funded=tuple(int(a.calendar_days_used or 0) for a in result.attempts if a.failed and a.passed_evaluation),
+        first_attempt_state=_fa_state, first_attempt_days=_fa_days,
+        calendar_days_to_pass=getattr(result, "calendar_days_to_pass", None),
     )
 
 
@@ -911,6 +952,10 @@ def _vec_rows_from_result(res, rules, tables) -> list:
     n_att_f = res.attempts_failed.tolist()
     n_att_pay = res.attempts_reached_payout.tolist()
     first_bust = res.first_attempt_bust.tolist()
+    _has_cal = getattr(res, "first_attempt_state", None) is not None
+    fa_state = res.first_attempt_state.tolist() if _has_cal else [0] * len(passed)
+    fa_days = res.first_attempt_days.tolist() if _has_cal else [0] * len(passed)
+    cal_pass = res.calendar_days_to_pass.tolist() if _has_cal else [-1] * len(passed)
     rows = []
     for k in range(len(passed)):
         p, f = passed[k], failed[k]
@@ -937,6 +982,8 @@ def _vec_rows_from_result(res, rules, tables) -> list:
             funded_failed=1 if (f and p) else 0,
             failed_days_eval=(int(cal_used[k] or 0),) if (f and not p) else (),
             failed_days_funded=(int(cal_used[k] or 0),) if (f and p) else (),
+            first_attempt_state=int(fa_state[k]), first_attempt_days=int(fa_days[k]),
+            calendar_days_to_pass=(cal_pass[k] if cal_pass[k] >= 0 else None),
         ))
     return rows
 
@@ -1305,6 +1352,8 @@ def run_monte_carlo(
 
     passed_flags, first_payout_flags, failed_before_payout_flags, multiple_payout_flags = [], [], [], []
     days_to_pass_list, days_to_first_payout_list = [], []
+    fa_state_list: list[int] = []            # 2026-11-04: first attempt's evaluation outcome per path (0 open, 1 passed, 2 busted)
+    fa_days_list: list[int] = []             # ... and its calendar length
     return_pcts, payout_amounts, drawdown_pcts, losing_streaks = [], [], [], []
     total_withdrawals = 0.0
     attempts_per_path: list[int] = []
@@ -1457,6 +1506,8 @@ def run_monte_carlo(
 
         if row.days_to_pass is not None:
             days_to_pass_list.append(row.days_to_pass)
+        fa_state_list.append(int(row.first_attempt_state))
+        fa_days_list.append(int(row.first_attempt_days))
         if row.first_payout_day_index is not None:
             days_to_first_payout_list.append(row.first_payout_day_index)
 
@@ -1536,16 +1587,54 @@ def run_monte_carlo(
     per_attempt_payout_ci95 = _wilson_score_interval(int(sum_attempts_reached_payout), int(sum_attempts_passed))
 
     # 2026-10-17: intervals that carry TRADE-SAMPLE uncertainty (see app.scoring.edge_bounds).
+    # 2026-11-04 audit (P0-1): the independent-window count NO LONGER depends on how long attempts take (it used the median trading-day
+    # time to pass, so a slow strategy got a wide interval for being slow). The fixed 30-day window is the legacy fallback; the real
+    # answer is the outer bootstrap below, which measures uncertainty in the EDGE.
     from app.scoring.edge_bounds import sample_aware_interval as _sample_ci
-    _attempt_days = float(np.median(days_to_pass_list)) if days_to_pass_list else None
+    from app.scoring.speed import speed_adjusted_pass_pct as _speed_adj, speed_factor as _speed_factor
     _p_pass_pct = float(sum_attempts_passed / sum_total_attempts * 100) if sum_total_attempts else 0.0
     _p_paid_pct = float(sum_attempts_reached_payout / sum_total_attempts * 100) if sum_total_attempts else 0.0
     _pass_ci_s, _n_eff = _sample_ci(
-        _p_pass_pct, len(trades), _cal_span, attempt_days=max(30.0, _attempt_days or 0.0),
+        _p_pass_pct, len(trades), _cal_span, attempt_days=30.0,
         n_simulated_attempts=float(sum_total_attempts))
     _paid_ci_s, _ = _sample_ci(
-        _p_paid_pct, len(trades), _cal_span, attempt_days=max(30.0, _attempt_days or 0.0),
+        _p_paid_pct, len(trades), _cal_span, attempt_days=30.0,
         n_simulated_attempts=float(sum_total_attempts))
+
+    # 2026-11-04: calendar time of the FIRST purchased attempt (one fresh account), per simulated path.
+    _fa_state = np.asarray(fa_state_list, dtype=np.int64)
+    _fa_days = np.asarray(fa_days_list, dtype=np.int64)
+    _open = _fa_state == 0
+    if _open.any():
+        _fa_days = np.where(_open, max(int(_cal_span), 1), _fa_days)
+    _passer_days = _fa_days[_fa_state == 1].astype(float)
+    _med_cal_pass = float(np.median(_passer_days)) if _passer_days.size else None
+    _cal_pcts = {q: float(np.percentile(_passer_days, q)) for q in (10, 25, 50, 75, 90)} if _passer_days.size else {}
+    _n_paths = max(len(_fa_state), 1)
+    _within = {w: float(np.count_nonzero((_fa_state == 1) & (_fa_days <= w)) / _n_paths * 100.0) for w in (30, 60, 90, 180)}
+    _spd_exp = float(getattr(cfg, "speed_exponent", 0.5))
+    _spd = _speed_factor(_med_cal_pass, exponent=_spd_exp)
+    _spd_adj = float(_speed_adj(_p_pass_pct, _med_cal_pass, exponent=_spd_exp) or 0.0)
+
+    _ob = None
+    _interval_method = "wilson_trade_sample"
+    if int(getattr(cfg, "outer_bootstrap_reps", 0) or 0) >= 8 and len(trades) >= MIN_TRADES_FOR_VERDICT:
+        from app.monte_carlo.outer_bootstrap import outer_bootstrap as _outer_bootstrap
+        try:
+            _ob = _outer_bootstrap(trades, rules, cfg, reps=int(cfg.outer_bootstrap_reps), sims=int(cfg.outer_bootstrap_sims),
+                                   quantile=float(cfg.outer_bootstrap_quantile))
+        except Exception:  # noqa: BLE001 -- never lose the headline numbers to the interval
+            _ob = None
+    if _ob is not None:
+        # the headline number is the full-sample point estimate; the interval is the outer-bootstrap one, widened (never narrowed) to contain it
+        _pass_ci_s = (min(_ob["pass"]["lo"], _p_pass_pct), max(_ob["pass"]["hi"], _p_pass_pct))
+        _paid_ci_s = (min(_ob["paid"]["lo"], _p_paid_pct), max(_ob["paid"]["hi"], _p_paid_pct))
+        _interval_method = "outer_bootstrap"
+        _ob_summary = {k: v for k, v in _ob.items() if k not in ("pass", "paid")}
+        _ob_summary["pass"] = {k: v for k, v in _ob["pass"].items() if k != "values"}
+        _ob_summary["paid"] = {k: v for k, v in _ob["paid"].items() if k != "values"}
+    else:
+        _ob_summary = {}
 
     _notes: list[str] = []
     if len(trades) < MIN_TRADES_FOR_VERDICT:
@@ -1634,5 +1723,14 @@ def run_monte_carlo(
         per_attempt_paid_ci95_sample=_paid_ci_s,
         effective_independent_attempts=float(_n_eff),
         funded_attempts=int(sum_attempts_passed),
+        median_calendar_days_to_pass=_med_cal_pass,
+        calendar_days_to_pass_percentiles=_cal_pcts,
+        pass_within_days_pct=_within,
+        speed_factor=_spd,
+        speed_adjusted_pass_pct=_spd_adj,
+        attempt_outcomes=[int(x) for x in _fa_state.tolist()],
+        attempt_calendar_days=[int(x) for x in _fa_days.tolist()],
+        pass_interval_method=_interval_method,
+        outer_bootstrap=_ob_summary,
     )
     return result
