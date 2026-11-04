@@ -93,6 +93,9 @@ PROMOTION_STAGE_TITLES: dict[str, str] = {
 # result tracking lands.
 MIN_FORWARD_TEST_DAYS = 14.0
 
+# One press of Promote may cross several gates, but never past this stage (see evaluate_promotion).
+CASCADE_STOP_STAGES = ("champion_candidate",)
+
 # Thresholds for the Validated -> Champion Candidate gate. Chosen to match
 # the same eval/payout bar Full Pipeline's own scorecard treats as
 # meaningfully strong (see app.scoring.t58_scorecard), not arbitrary.
@@ -176,6 +179,10 @@ class PromotionState:
     can_promote: bool
     requirements: list[PromotionRequirement] = field(default_factory=list)
     promoted_at: dict[str, float] = field(default_factory=dict)  # stage -> unix ts
+    # 2026-11-04: every stage ONE press of Promote crosses, in order. A strategy that has already earned Validated AND Champion Candidate
+    # (all five checks run, thresholds met) used to be offered "Promote to Validated" first and "Promote to Champion Candidate" second;
+    # now the button names the stage it will actually land on and the history records each stage crossed.
+    path: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         stage_idx = PROMOTION_STAGES.index(self.stage)
@@ -207,6 +214,8 @@ class PromotionState:
             "can_promote": self.can_promote,
             "requirements": [r.to_dict() for r in self.requirements],
             "promoted_at": self.promoted_at,
+            "path": list(self.path),
+            "path_titles": [PROMOTION_STAGE_TITLES[x] for x in self.path],
         }
 
 
@@ -225,6 +234,7 @@ def _requirements_for_next_stage(metadata: dict[str, Any], current_stage: str) -
     payout_pct = _num(last_run, "first_payout_probability", "eval_pass_probability")
     oos = oos_pct(last_validation)
     verdict = str(last_champion_check.get("verdict") or last_run.get("verdict") or "").upper()
+    ladder_stage = str(last_champion_check.get("ladder_stage") or "").upper()
 
     if current_stage == "candidate":
         # UPGRADE (2026-09, "5 validation steps" progress fix): this used
@@ -300,9 +310,11 @@ def _requirements_for_next_stage(metadata: dict[str, Any], current_stage: str) -
     if current_stage == "champion_candidate":
         return [
             PromotionRequirement(
-                "champion_check_ready", "Champion Check verdict is READY",
-                verdict == "READY",
-                f"Currently {verdict or 'not checked'}." if verdict != "READY" else "",
+                "champion_check_ready", "Champion Check is READY or a Forward-Test Candidate",
+                verdict == "READY" or ladder_stage in ("FORWARD-TEST CANDIDATE", "EVALUATE", "FUNDED"),
+                ("" if (verdict == "READY" or ladder_stage in ("FORWARD-TEST CANDIDATE", "EVALUATE", "FUNDED"))
+                 else f"Currently {verdict or 'not checked'}" + (f" / {ladder_stage.title()}" if ladder_stage else "")
+                 + ". Forward testing needs either READY, or enough edge evidence to be a Forward-Test Candidate (holdout confirmed, null test passed, positive edge after 2x costs)."),
             ),
             PromotionRequirement(
                 "eval_threshold", f"Eval pass probability >= {FORWARD_TEST_MIN_EVAL_PCT:.0f}%",
@@ -340,6 +352,22 @@ def evaluate_promotion(metadata: dict[str, Any]) -> PromotionState:
     requirements = _requirements_for_next_stage(metadata, stage)
     can_promote = bool(next_stage) and all(r.met for r in requirements)
 
+    # Cascade: when the next stage's gate is met, check whether the stage AFTER it is already earned too (its gate reads the same saved
+    # evidence), and keep going up to Champion Candidate. Forward Testing and Production Ready are never entered by cascade: starting a
+    # forward test is a deliberate act and Production Ready needs elapsed real time.
+    path: list[str] = []
+    if can_promote:
+        cur = stage
+        while True:
+            nxt = PROMOTION_STAGES[PROMOTION_STAGES.index(cur) + 1]
+            if not all(r.met for r in _requirements_for_next_stage(metadata, cur)):
+                break
+            path.append(nxt)
+            if nxt in CASCADE_STOP_STAGES or PROMOTION_STAGES.index(nxt) + 1 >= len(PROMOTION_STAGES):
+                break
+            cur = nxt
+        next_stage = path[-1]
+
     return PromotionState(
         stage=stage,
         stage_title=PROMOTION_STAGE_TITLES[stage],
@@ -348,6 +376,7 @@ def evaluate_promotion(metadata: dict[str, Any]) -> PromotionState:
         can_promote=can_promote,
         requirements=requirements,
         promoted_at=dict(promotion.get("history") or {}),
+        path=path,
     )
 
 
@@ -445,6 +474,18 @@ def pipeline_flow_nodes(rows: list[dict[str, Any]], tested_files: Optional[set] 
     return nodes
 
 
+_NEXT_AFTER: dict[str, str] = {
+    "validated": "Next: open Champion Board and promote it once the pass-probability and out-of-sample thresholds are met.",
+    "champion_candidate": "Next: start a forward test (Forward Test page) on paper or a demo account -- that is the step that proves it with real fills.",
+    "forward_testing": "Next: let the forward test run; Production Ready unlocks after the minimum number of days and a clean result.",
+    "production_ready": "Next: open Deploy Live and follow the connection checklist before risking an evaluation fee.",
+}
+
+
+def _what_next_after(stage: str) -> str:
+    return _NEXT_AFTER.get(stage, "")
+
+
 def promote_strategy(strategy_type: str, filename: str, metadata: Optional[dict[str, Any]] = None) -> tuple[bool, str, Optional[str]]:
     """Attempts to advance one saved strategy to the next promotion stage.
     Never automatic -- this is only ever called from an explicit user
@@ -468,11 +509,21 @@ def promote_strategy(strategy_type: str, filename: str, metadata: Optional[dict[
         return False, f"Can't promote to {state.next_stage_title} yet: {lines}", None
 
     history = dict((metadata.get("promotion") or {}).get("history") or {})
-    history[state.next_stage] = time.time()
+    now = time.time()
+    crossed = state.path or [state.next_stage]
+    for st in crossed:
+        history[st] = now
+    final = crossed[-1]
     save_strategy_metadata(strategy_type, filename, {
-        "promotion": {"stage": state.next_stage, "history": history},
+        "promotion": {"stage": final, "history": history},
     }, merge=True)
-    return True, f"Promoted '{filename}' to {PROMOTION_STAGE_TITLES[state.next_stage]}.", state.next_stage
+    if len(crossed) > 1:
+        passed = " and ".join(PROMOTION_STAGE_TITLES[x] for x in crossed[:-1])
+        msg = (f"Promoted '{filename}' straight to {PROMOTION_STAGE_TITLES[final]} -- it had already earned {passed}, so both were recorded. "
+               f"{_what_next_after(final)}")
+    else:
+        msg = f"Promoted '{filename}' to {PROMOTION_STAGE_TITLES[final]}. {_what_next_after(final)}"
+    return True, msg.strip(), final
 
 
 def demote_strategy(strategy_type: str, filename: str, to_stage: str = "candidate") -> tuple[bool, str]:
@@ -589,10 +640,14 @@ def row_next_step(row: dict[str, Any]) -> dict[str, str]:
     if promo["next_stage"] is None:
         return {"kind": "final", "text": "Final stage reached", "href": "", "label": ""}
     if promo["can_promote"]:
-        return {"kind": "promote", "text": f"Ready for {promo['next_stage_title']}", "href": "", "label": ""}
+        crossed = promo.get("path_titles") or []
+        extra = f" (it has already earned {' and '.join(crossed[:-1])}, so one press records both)" if len(crossed) > 1 else ""
+        return {"kind": "promote", "text": f"Ready for {promo['next_stage_title']}{extra}", "href": "", "label": ""}
 
     unmet = [r for r in promo["requirements"] if not r["met"]]
     first = unmet[0]
+    if promo.get("stage") == "production_ready":
+        return {"kind": "final", "text": "Production Ready -- open Deploy Live and follow its connection checklist", "href": "/deploy-live", "label": "Open Deploy Live"}
     missing_checks = [
         _METHOD_TO_VALIDATE_CHECK[r["key"][len("validated_"):]]
         for r in unmet

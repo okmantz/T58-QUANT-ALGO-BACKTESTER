@@ -63,7 +63,15 @@ already exists:
                                           Market Structure / Liquidity / Supply-Demand primitives
                                           (resolved via app.strategy.dna tags) plus a premium/
                                           discount alignment sub-check (concept from
-                                          app.ai.t58_strategy_engine). See "WHAT THE SCORE MEASURES"
+                                          app.ai.t58_strategy_engine). See "    REWEIGHTED 2026-11-04 (audit P0-2 / P1-5 and the speed preference), still summing to 100: Monte Carlo seed robustness 5 -> 1 (it
+    measures simulation noise, not strategy fragility), parameter stability 5 -> 4, CPCV 3 -> 2, plus two new components:
+        speed_efficiency 4   median CALENDAR days to pass (100 at <= 30 days, x (30/days)**0.5 beyond): a 70%-in-30-days strategy
+                             outranks an 80%-in-150-days one. Never a gate -- see app.scoring.speed.
+        dsr_unseen       2   deflated-Sharpe probability measured on UNSEEN trades only (holdout + out-of-sample); an input, not a gate.
+    The pass / paid lower bounds now come from an OUTER BOOTSTRAP over the trade stream (app.monte_carlo.outer_bootstrap), which measures
+    uncertainty in the edge and no longer depends on how long attempts take.
+
+WHAT THE SCORE MEASURES"
                                           below -- this component deliberately measures something
                                           DIFFERENT from every row above it.
 
@@ -162,7 +170,11 @@ from dataclasses import dataclass, field
 #   replay_pass            the real engine re-run from many real start dates (dependence-aware lower bound)
 #   expectancy_lower_bound lower confidence bound on average R per trade after 2x costs (the size of the edge)
 # Ruin is split by stage: breaching BEFORE passing costs the fee, breaching AFTER funding costs the account.
-SCORECARD_VERSION = "2026-10-17.2"
+# 2026-11-04 audit (P1-5, P0-2, speed preference): Monte Carlo seed robustness measures simulation noise, not strategy fragility, so
+# its weight drops 5 -> 1; two points of parameter stability / CPCV go with it. The freed 6 points become
+#   speed_efficiency   4   how fast the strategy passes in CALENDAR days (app.scoring.speed): prefer 70% in 30 days over 80% in 150
+#   dsr_unseen         2   deflated-Sharpe probability measured on UNSEEN (holdout + out-of-sample) trades; a score input, not a gate
+SCORECARD_VERSION = "2026-11-04.1"
 _WEIGHTS: dict[str, float] = {
     # -- Monte Carlo family (one resampled trade list): 30 points in total --------------------
     "pass_probability": 10.0,
@@ -173,11 +185,13 @@ _WEIGHTS: dict[str, float] = {
     "replay_pass": 15.0,
     "expectancy_lower_bound": 15.0,
     "walk_forward_stability": 15.0,
-    "monte_carlo_robustness": 5.0,
-    "parameter_stability": 5.0,
+    "monte_carlo_robustness": 1.0,
+    "parameter_stability": 4.0,
     "drawdown": 8.0,
     "parsimony": 4.0,
-    "cpcv_supporting": 3.0,
+    "cpcv_supporting": 2.0,
+    "speed_efficiency": 4.0,
+    "dsr_unseen": 2.0,
     # t58_conformance is NO LONGER scored (2026-10-15 audit): informational badge only.
 }
 # Components that all derive from the single Monte Carlo (reported as `mc_weight_share`).
@@ -230,6 +244,9 @@ class T58ScorecardInputs:
     funded_survival: float | None = None
     replay_pass: float | None = None
     expectancy_lower_bound: float | None = None
+    # 2026-11-04: speed (calendar days to pass) and the deflated Sharpe measured on unseen trades
+    speed_efficiency: float | None = None
+    dsr_unseen: float | None = None
     # NEW (P2-9/M8): 0-100 T58 framework-conformance value, e.g. from
     # t58_conformance_score() below. None (the default) keeps the
     # pre-existing prop-survival-only score byte-identical.
@@ -679,6 +696,31 @@ def _expectancy_lb_score(lb_r: float | None) -> float | None:
     return _clip(v / _EXPECTANCY_LB_FULL_SCORE_R * 100.0)
 
 
+def _speed_efficiency_score(mc_result) -> float | None:
+    """0-100 from the MEDIAN CALENDAR DAYS to pass (app.scoring.speed): 100 at <= 30 days, falling as (30/days)**0.5. Missing (not zero) when
+    the result carries no calendar figure (built before 2026-11-04, or nothing passed). It deliberately does not fall back to the trading-day
+    ``median_days_to_pass``: that number is not calendar time."""
+    days = getattr(mc_result, "median_calendar_days_to_pass", None) if mc_result is not None else None
+    if days is None:
+        return None
+    from app.scoring.speed import speed_score
+    return speed_score(days, exponent=float(getattr(mc_result, "speed_exponent", 0.5) or 0.5))
+
+
+def dsr_unseen_to_score(probabilistic_sharpe: float | None) -> float | None:
+    """Probabilistic Sharpe on unseen trades (0-1) -> 0-100. A PSR of 0.5 (no better than the benchmark) scores 0, 0.95 or better scores 100,
+    linear between, so the score moves smoothly instead of flipping at a hard bar."""
+    if probabilistic_sharpe is None:
+        return None
+    try:
+        v = float(probabilistic_sharpe)
+    except (TypeError, ValueError):
+        return None
+    if v != v:
+        return None
+    return _clip((v - 0.5) / 0.45 * 100.0)
+
+
 def _sample_ci(mc_result, name: str):
     """The trade-sample-aware interval (2026-10-17), if this result carries one."""
     ci = getattr(mc_result, name, None)
@@ -737,6 +779,7 @@ def score_from_results(
     mc_dispersion_pts: float | None = None,
     attempt_replay=None,
     expectancy_bound: dict | None = None,
+    dsr_unseen_score: float | None = None,
 ) -> T58ScorecardResult:
     """Convenience entry point: pass whichever of this app's own result
     objects you already have in hand (any/all may be None -- a partial
@@ -845,5 +888,7 @@ def score_from_results(
         parsimony=parsimony_score,
         cpcv_supporting=cpcv_supporting_score,
         t58_conformance=t58_conformance,
+        speed_efficiency=_speed_efficiency_score(mc_result),
+        dsr_unseen=(None if dsr_unseen_score is None else _clip(float(dsr_unseen_score))),
     )
     return compute_t58_score(inputs)
