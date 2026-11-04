@@ -139,6 +139,7 @@ class BookVerdict:
     stage: str
     reasons: list = field(default_factory=list)
     sprt: dict = field(default_factory=dict)
+    prop_account: dict = field(default_factory=dict)   # 2026-11-04 (P2-3): the book run as ONE prop account (see book_prop_account)
 
     def to_dict(self) -> dict:
         d = dict(self.__dict__)
@@ -156,8 +157,31 @@ class BookVerdict:
         return "\n".join(lines)
 
 
+def book_prop_account(cands: list[EdgeCandidate], prop_rules, *, sims: int = 1000, seed: int = 21, outer_reps: int = 0) -> dict:
+    """The admitted edges traded TOGETHER as one prop-firm account (2026-11-04 audit, P2-3).
+
+    A book is bought as one evaluation, so its pass probability must come from ONE account whose equity, daily-loss and drawdown limits
+    see every edge's trades in the order they happened -- not from averaging each edge's own pass rate. Trades from all candidates are
+    merged chronologically (same-day trades keep their order) and run through the same Monte Carlo as a single strategy; the result carries
+    the per-attempt pass probability, its lower bound (outer bootstrap when ``outer_reps`` > 0), the calendar days to pass and the
+    speed-adjusted pass rate that ranks faster books above slower ones. Returns {} when the merged stream is too short or the run fails."""
+    try:
+        from app.monte_carlo.engine import MonteCarloConfig, run_monte_carlo
+        merged = sorted((t for c in cands for t in (c.trades or [])), key=lambda t: (t.entry_time, t.exit_time))
+        if len(merged) < 30:
+            return {}
+        r = run_monte_carlo(merged, prop_rules, MonteCarloConfig(n_simulations=int(sims), random_seed=int(seed), outer_bootstrap_reps=int(outer_reps)),
+                            selection_bias_caveat=False)
+        return {"n_trades": len(merged), "pass_pct": float(r.per_attempt_pass_probability),
+                "pass_lb_pct": float(r.per_attempt_pass_ci95_sample[0]), "interval_method": r.pass_interval_method,
+                "median_calendar_days_to_pass": r.median_calendar_days_to_pass, "speed_adjusted_pass_pct": r.speed_adjusted_pass_pct,
+                "risk_of_ruin_pct": float(r.risk_of_ruin_pct)}
+    except Exception as exc:  # noqa: BLE001
+        return {"error": str(exc)}
+
+
 def evaluate_book(cands: list[EdgeCandidate], *, max_corr: float = 0.5, max_per_instrument: int = 2, min_book_trades: int = 300,
-                  weights: dict[str, float] | None = None, n_boot: int = 2000, seed: int = 21) -> BookVerdict:
+                  weights: dict[str, float] | None = None, n_boot: int = 2000, seed: int = 21, prop_rules=None) -> BookVerdict:
     adm = admit_edges(cands, max_corr=max_corr, max_per_instrument=max_per_instrument)
     ok = [a for a in adm if a.admitted]
     bad = [a for a in adm if not a.admitted]
@@ -191,4 +215,5 @@ def evaluate_book(cands: list[EdgeCandidate], *, max_corr: float = 0.5, max_per_
                 "trades_per_month_per_edge": per_edge_tpm,
                 "months_to_decide_h1": months_to_decide(bnd.expected_trades_h1, per_edge_tpm, len(ok)),
                 "months_to_decide_single_edge": months_to_decide(bnd.expected_trades_h1, per_edge_tpm, 1)}
-    return BookVerdict(ok, bad, n_trades, rs, stage, reasons, sprt)
+    acct = book_prop_account(ok, prop_rules, seed=seed) if (ok and prop_rules is not None) else {}
+    return BookVerdict(ok, bad, n_trades, rs, stage, reasons, sprt, acct)
