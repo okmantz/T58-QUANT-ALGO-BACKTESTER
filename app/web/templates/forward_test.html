@@ -10,6 +10,40 @@
   .ft-stat { flex: 1; min-width: 100px; }
   .ft-stat .label { font-size: 11px; color: var(--lc-muted, #9aa4b2); text-transform: uppercase; letter-spacing: .05em; }
   .ft-stat .value { font-size: 18px; font-weight: 700; }
+
+  /* Ready check + start checklist + problem card */
+  .rc-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:space-between; }
+  .rc-headline { font-weight:600; font-size:15px; }
+  .rc-row { display:flex; gap:10px; align-items:flex-start; padding:9px 0; border-top:1px solid rgba(255,255,255,.07); }
+  .rc-row:first-of-type { border-top:0; }
+  .rc-chip { flex:none; min-width:112px; text-align:center; font-size:11.5px; font-weight:700; letter-spacing:.03em; padding:3px 8px; border-radius:999px; }
+  .rc-chip.ok { background:rgba(72,187,120,.18); color:#68d391; }
+  .rc-chip.auto { background:rgba(99,179,237,.18); color:#90cdf4; }
+  .rc-chip.action { background:rgba(246,173,85,.20); color:#f6ad55; }
+  .rc-body { flex:1; min-width:0; }
+  .rc-label { font-weight:600; font-size:13.5px; }
+  .rc-detail { font-size:12.5px; opacity:.85; margin-top:2px; word-break:break-word; }
+  .rc-fix { margin:6px 0 2px 18px; font-size:12.5px; line-height:1.55; }
+  .cmd { display:flex; gap:8px; align-items:center; margin:6px 0; }
+  .cmd code { flex:1; min-width:0; overflow-x:auto; white-space:nowrap; background:rgba(0,0,0,.35); padding:6px 9px; border-radius:7px; font-size:12px; }
+  .cmd button, .pb-actions button { cursor:pointer; border:1px solid rgba(255,255,255,.2); background:rgba(255,255,255,.07); color:inherit; border-radius:8px; padding:5px 11px; font-size:12px; }
+  .cmd button:hover, .pb-actions button:hover { background:rgba(255,255,255,.14); }
+  .ck-list { list-style:none; margin:8px 0 0; padding:0; }
+  .ck-list li { display:flex; gap:10px; align-items:flex-start; padding:6px 0; font-size:14px; }
+  .ck-ico { flex:none; width:20px; text-align:center; font-weight:700; }
+  .ck-list li.pending { opacity:.45; }
+  .ck-list li.done .ck-ico { color:#68d391; }
+  .ck-list li.error .ck-ico { color:#fc8181; }
+  .ck-list li.active .ck-ico { display:inline-block; animation: ckspin 1s linear infinite; color:#90cdf4; }
+  .ck-sub { font-size:12.5px; opacity:.8; margin-top:1px; }
+  @keyframes ckspin { to { transform: rotate(360deg); } }
+  .problem { border:1px solid var(--err-bd, #7f3b3b); background:var(--err-bg, rgba(127,59,59,.25)); color:var(--lc-text, inherit); border-radius:12px; padding:16px 18px; margin-bottom:14px; }
+  .problem h3 { margin:0 0 6px; font-size:16px; color:var(--err-fg, #feb2b2); }
+  .problem p { margin:0 0 8px; font-size:14px; line-height:1.5; }
+  .problem ol { margin:6px 0 8px 20px; line-height:1.65; font-size:14px; }
+  .problem details { margin-top:8px; font-size:12.5px; }
+  .problem pre { white-space:pre-wrap; word-break:break-word; background:rgba(0,0,0,.35); padding:9px 11px; border-radius:8px; max-height:220px; overflow:auto; }
+  .pb-actions { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
 </style>
 </head>
 <body>
@@ -63,18 +97,29 @@
 </div>
 {% endif %}
 
-<details class="lc-card" id="mt5-guide" style="margin:10px 0;">
-  <summary style="cursor:pointer;font-weight:600;">First time? Set up MT5 in 5 steps (about 3 minutes)</summary>
-  <ol style="line-height:1.7;margin:10px 0 4px 18px;">
-    <li><b>Install MetaTrader 5</b> (64-bit) from your broker or the prop firm's site. Open it once and <b>log into your demo account</b> (File &rarr; Login to Trade Account). Confirm you can see live prices.</li>
-    <li>In MT5 open <b>Tools &rarr; Options &rarr; Expert Advisors</b> and tick <b>Allow algorithmic trading</b>. Click OK. The toolbar's <b>Algo Trading</b> button should be green.</li>
-    <li>In T58 open <b>Settings &rarr; MT5 accounts</b>, add the login number, password and server exactly as shown in MT5's login window. Leave <b>Terminal path</b> blank (auto-detect) or use Browse to pick <code>terminal64.exe</code>.</li>
-    <li>Come back here, pick the account, the symbol (exactly as MT5 names it, e.g. <code>XAUUSD</code> or <code>EURUSD.r</code>) and a saved strategy. Any Python, Pine Script, MQL5 or JSON strategy works.</li>
-    <li>Press <b>Start forward test</b>. T58 opens MT5 for you if it is closed, waits for it to finish loading, logs in and starts placing demo trades on each closed bar. You never need to build an Expert Advisor: T58 sends the orders itself.</li>
-  </ol>
-  <p class="lc-hint"><b>Seeing &ldquo;terminal didn&rsquo;t respond in time&rdquo;?</b> Close any pop-up inside MT5, make sure MT5 and T58 are both run as a normal user (not one as Administrator), keep only one MT5 install open, then press Start again. T58 already waits up to 2 minutes and retries four times.</p>
-</details>
-<div id="error-box"></div>
+<div class="lc-card" id="ready-card">
+  <div class="rc-head">
+    <div><h3 style="margin:0 0 2px;">Ready check</h3><div class="rc-headline" id="rc-headline">Checking your setup&hellip;</div></div>
+    <button type="button" class="lc-btn" id="rc-recheck" style="padding:6px 12px;font-size:12.5px;">Re-check</button>
+  </div>
+  <div id="rc-rows" style="margin-top:8px;"></div>
+  <details style="margin-top:10px;">
+    <summary style="cursor:pointer;font-size:13px;font-weight:600;">How this works</summary>
+    <ol style="line-height:1.7;margin:8px 0 2px 18px;font-size:13px;">
+      <li><b>Once:</b> install MetaTrader 5 (64-bit) from your broker or prop firm, open it, and log in to a demo account. Save that account under <b>Settings &rarr; API Keys &rarr; Brokers/Prop Firms</b>.</li>
+      <li>Pick the account, symbol and strategy below, then press <b>Start forward test</b>.</li>
+      <li>T58 does the rest: sets up its connection helper (first time only), opens MT5 if it is closed, logs in, checks that Algo Trading is on, and starts your strategy. It trades by sending orders to MT5 itself, so you never build or attach an Expert Advisor.</li>
+      <li>If anything stops it, a red card names the problem in plain words and lists the exact steps to fix it.</li>
+    </ol>
+  </details>
+</div>
+
+<div id="problem-box"></div>
+<div class="lc-card" id="start-card" style="display:none;">
+  <h3 style="margin:0;">Starting your forward test&hellip; <span id="ck-elapsed" class="lc-hint" style="font-weight:400;"></span></h3>
+  <ul class="ck-list" id="ck-list"></ul>
+  <p class="lc-hint" id="ck-note" style="margin-top:8px;">The very first start also does a one-time setup that can take 2 to 5 minutes on Mac and Linux. You can leave this page open.</p>
+</div>
 
 <form id="ft-form">
   <div class="lc-card">
@@ -113,11 +158,11 @@
     <h3>3. Risk</h3>
     <div class="lc-row">
       <div class="lc-col"><label class="flabel">Initial balance</label><input type="number" name="initial_balance" value="100000"></div>
-      <div class="lc-col"><label class="flabel">Risk value (% or lots)</label><input type="number" step="0.1" name="risk_value" value="1.0"></div>
+      <div class="lc-col"><label class="flabel">Risk value (% of balance, or $ per trade)</label><input type="number" step="0.1" name="risk_value" value="1.0"></div>
     </div>
     <div class="lc-row">
       <div class="lc-col"><label class="flabel">Risk mode</label>
-        <select name="risk_mode"><option value="percent">% of balance</option><option value="fixed">Fixed lot</option></select></div>
+        <select name="risk_mode"><option value="percent">% of balance</option><option value="fixed">Fixed $ per trade</option></select></div>
       <div class="lc-col"><label class="flabel">Poll interval (seconds)</label><input type="number" name="poll_seconds" value="20"></div>
     </div>
     <label class="flabel">Commission per trade ($)</label><input type="number" step="0.01" name="commission" value="3">
@@ -222,26 +267,124 @@
   const fmt = (v, d) => (v === null || v === undefined) ? '—' : Number(v).toFixed(d === undefined ? 2 : d);
   let polling = null;
 
+  // ---- tiny DOM helper: everything from the server goes in via textContent, never innerHTML ----
+  function h(tag, attrs, kids) {
+    const n = document.createElement(tag);
+    Object.keys(attrs || {}).forEach(k => { if (k === 'text') n.textContent = attrs[k]; else n.setAttribute(k, attrs[k]); });
+    (kids || []).forEach(c => { if (c) n.appendChild(c); });
+    return n;
+  }
+  function cmdRow(text) {
+    const b = h('button', {type: 'button', text: 'Copy'});
+    b.addEventListener('click', () => {
+      const done = () => { b.textContent = 'Copied'; setTimeout(() => { b.textContent = 'Copy'; }, 1500); };
+      if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, done); else done();
+    });
+    return h('div', {'class': 'cmd'}, [h('code', {text: text}), b]);
+  }
+  function stepList(tag, steps, cls) {
+    return h(tag, cls ? {'class': cls} : {}, (steps || []).map(s => h('li', {text: s})));
+  }
+
+  // ---- Ready check ----
+  const CHIP = {ok: 'READY', auto: 'T58 DOES THIS', action: 'YOU NEED TO'};
+  function loadReady(deep) {
+    const sel = document.getElementById('account_id');
+    const q = '?account_id=' + encodeURIComponent(sel ? sel.value : '') + (deep ? '&deep=1' : '');
+    document.getElementById('rc-headline').textContent = 'Checking your setup…';
+    fetch('/forward-test/preflight.json' + q).then(r => r.json()).then(data => {
+      document.getElementById('rc-headline').textContent = data.headline || '';
+      const rows = document.getElementById('rc-rows');
+      rows.textContent = '';
+      (data.checks || []).forEach(c => {
+        const body = h('div', {'class': 'rc-body'}, [h('div', {'class': 'rc-label', text: c.label}), h('div', {'class': 'rc-detail', text: c.detail || ''})]);
+        if (c.status === 'action') {
+          if (c.fix && c.fix.length) body.appendChild(stepList('ol', c.fix, 'rc-fix'));
+          (c.commands || []).forEach(cm => body.appendChild(cmdRow(cm)));
+        }
+        rows.appendChild(h('div', {'class': 'rc-row'}, [h('span', {'class': 'rc-chip ' + c.status, text: CHIP[c.status] || c.status}), body]));
+      });
+    }).catch(() => { document.getElementById('rc-headline').textContent = 'Could not run the setup check (is the T58 server still running?).'; });
+  }
+  document.getElementById('rc-recheck').addEventListener('click', () => loadReady(true));
+  const acctSel = document.getElementById('account_id');
+  if (acctSel) acctSel.addEventListener('change', () => loadReady(false));
+  loadReady(false);
+
+  // ---- Problem card ----
+  function showProblem(p, fallbackText) {
+    const box = document.getElementById('problem-box');
+    box.textContent = '';
+    if (!p) { if (fallbackText) box.appendChild(h('div', {'class': 'problem'}, [h('h3', {text: 'Could not start the forward test'}), h('p', {text: fallbackText})])); return; }
+    const card = h('div', {'class': 'problem'}, [h('h3', {text: p.title}), h('p', {text: p.summary})]);
+    if (p.steps && p.steps.length) { card.appendChild(h('div', {text: 'How to fix it', style: 'font-weight:600;font-size:13px;margin-top:6px;'})); card.appendChild(stepList('ol', p.steps)); }
+    (p.commands || []).forEach(c => card.appendChild(cmdRow(c)));
+    if (p.technical) card.appendChild(h('details', {}, [h('summary', {text: 'Technical details (send this to support if you are stuck)', style: 'cursor:pointer;'}), h('pre', {text: p.technical})]));
+    const actions = h('div', {'class': 'pb-actions'});
+    if (p.retry_ok !== false) { const t = h('button', {type: 'button', text: 'Try again'}); t.addEventListener('click', () => { box.textContent = ''; document.getElementById('ft-form').requestSubmit(); }); actions.appendChild(t); }
+    const d = h('button', {type: 'button', text: 'Dismiss'}); d.addEventListener('click', () => { box.textContent = ''; }); actions.appendChild(d);
+    const rc = h('button', {type: 'button', text: 'Re-check setup'}); rc.addEventListener('click', () => loadReady(true)); actions.appendChild(rc);
+    card.appendChild(actions);
+    box.appendChild(card);
+    card.scrollIntoView({behavior: 'smooth', block: 'center'});
+  }
+
+  // ---- Start: background job + live checklist ----
+  let startPoll = null;
+  const ICON = {pending: '○', active: '◐', done: '✓', error: '✕'};
+  function renderSteps(s) {
+    const ul = document.getElementById('ck-list');
+    ul.textContent = '';
+    (s.steps || []).forEach(st => {
+      const txt = h('div', {}, [h('div', {text: st.label})]);
+      if (st.status === 'active' && st.text) txt.appendChild(h('div', {'class': 'ck-sub', text: st.text}));
+      ul.appendChild(h('li', {'class': st.status}, [h('span', {'class': 'ck-ico', text: ICON[st.status] || '○'}), txt]));
+    });
+    const el = document.getElementById('ck-elapsed');
+    el.textContent = s.elapsed ? '(' + s.elapsed + 's)' : '';
+  }
+  function resetStartButton() {
+    const btn = document.getElementById('start-btn');
+    btn.disabled = false;
+    btn.textContent = '▶ Start forward test';
+  }
+  function watchStart() {
+    if (startPoll) clearInterval(startPoll);
+    document.getElementById('start-card').style.display = 'block';
+    const tick = () => fetch('/forward-test/start-status.json').then(r => r.json()).then(s => {
+      renderSteps(s);
+      if (s.state === 'ok') {
+        clearInterval(startPoll);
+        document.getElementById('start-card').style.display = 'none';
+        document.getElementById('start-btn').style.display = 'none';
+        document.getElementById('stop-btn').style.display = 'inline-block';
+        document.getElementById('status-card').style.display = 'block';
+        resetStartButton();
+        startPolling();
+      } else if (s.state === 'error') {
+        clearInterval(startPoll);
+        resetStartButton();
+        showProblem(s.problem, 'The forward test could not start.');
+        loadReady(false);
+      }
+    }).catch(() => {});
+    tick();
+    startPoll = setInterval(tick, 1200);
+  }
+
   document.getElementById('ft-form').addEventListener('submit', function(e) {
     e.preventDefault();
     const btn = document.getElementById('start-btn');
     btn.disabled = true;
     btn.textContent = 'Starting…';
+    document.getElementById('problem-box').textContent = '';
     fetch('/forward-test/start', {method: 'POST', body: new FormData(this)})
       .then(r => r.json())
       .then(data => {
-        btn.disabled = false;
-        btn.textContent = 'Start Forward Test';
-        document.getElementById('error-box').innerHTML = '';
-        if (!data.ok) {
-          document.getElementById('error-box').innerHTML = `<div class="error">${data.error}</div>`;
-          return;
-        }
-        document.getElementById('start-btn').style.display = 'none';
-        document.getElementById('stop-btn').style.display = 'inline-block';
-        document.getElementById('status-card').style.display = 'block';
-        startPolling();
-      });
+        if (!data.ok) { resetStartButton(); showProblem(data.problem, data.error); return; }
+        watchStart();
+      })
+      .catch(() => { resetStartButton(); showProblem(null, 'Could not reach the T58 server. Is it still running? Reload this page and try again.'); });
   });
 
   function stopSession() {
@@ -277,6 +420,10 @@
   document.getElementById('stop-btn').style.display = 'inline-block';
   document.getElementById('status-card').style.display = 'block';
   startPolling();
+  {% elif starting %}
+  document.getElementById('start-btn').disabled = true;
+  document.getElementById('start-btn').textContent = 'Starting…';
+  watchStart();
   {% endif %}
 </script>
 </body>
