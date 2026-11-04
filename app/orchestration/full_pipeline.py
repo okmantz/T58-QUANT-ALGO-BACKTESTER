@@ -228,6 +228,11 @@ class FullPipelineConfig:
     # Size rr_planned to the drawdown budget: raise planned risk until the baseline's max drawdown uses ``size_to_dd_fraction`` of the
     # firm's limit (capped at ``size_to_dd_max_scale`` x and always under the risk-per-trade cap), instead of leaving the account idle.
     size_to_drawdown_budget: bool = True
+    # 2026-11-04 (P3): "rule" (default) fixes the planned risk from the firm's drawdown limit and a loss-streak budget BEFORE the search, so
+    # the size does not depend on how the dev slice happened to perform; "dev_result" is the old behaviour (scale to the baseline's own drawdown).
+    size_rule: str = "rule"
+    size_rule_loss_streak: int = 8        # consecutive full-stop losses the sized account must survive within the budget
+    size_rule_ref_rr: float = 2.0         # reward:risk used to turn planned risk into the planned_target_dollars anchor
     size_to_dd_fraction: float = 0.5
     size_to_dd_max_scale: float = 4.0
     # Use the holdout to CONFIRM the edge (pooled with the walk-forward out-of-sample trades) instead of MC-simulating a target from it.
@@ -259,8 +264,14 @@ class FullPipelineConfig:
     null_first_batch: int = 100           # v9.16: first batch; the rest only runs when 0.03 < p < 0.30 after it
     cost_stress_min_retained_pct: float = 25.0   # 2026-10-15: READY needs >= this % of base net profit to survive the cost stress
     break_cost_mult: float = 2.0          # v9.5 break-it gate: verdict must survive costs at this multiple
-    seed_rescore_seeds: int = 3           # v9.5: extra Monte Carlo seeds for winner seed-stability check
-    seed_rescore_sims: int = 2000         # sims per seed-rescore run (dispersion check, not the headline MC)
+    seed_rescore_seeds: int = 20          # 2026-11-04 (P1-5): 20+ seeds -- the sd of 3 draws is itself pure noise; below ``seed_gate_min_seeds`` the gate is dropped
+    seed_rescore_sims: int = 300          # sims per seed-rescore run (dispersion check, not the headline MC); the binomial noise of each run is removed
+    seed_gate_min_seeds: int = 20
+    # 2026-11-04 (P0-1): nested-bootstrap pass interval on the final Monte Carlo (0 = legacy Wilson interval)
+    outer_bootstrap_reps: int = 30
+    outer_bootstrap_sims: int = 300
+    outer_bootstrap_quantile: float = 0.10
+    speed_exponent: float = 0.5
     null_p_max: float = 0.10              # READY needs the real result to beat >=90% of random-timing runs
     n_folds: int = 4
     window_mode: str = "rolling"           # for the GA's internal fold split
@@ -272,7 +283,7 @@ class FullPipelineConfig:
     optimizer_mode: str = "genetic"
     # 2026-10 audit: 2026-10-19: default is the blended prop guide score (pass odds + first payout + ruin); the 30-day window is tracked, not the objective. payout_30d remains selectable and scores the
     # Monte Carlo first-payout-within-window rate (app.optimize.refinement._payout_window_fitness).
-    fitness_metric: str = "prop_guide_score"
+    fitness_metric: str = "edge_lb_r"          # 2026-11-04 (P2-3): the search selects on the edge lower bound; pass odds size the edge later
     final_mc_sims: int = 10_000
     # Step 1's baseline Monte Carlo run is diagnostic only -- it's logged
     # and reported alongside the final numbers, but never feeds the
@@ -448,6 +459,17 @@ class FullPipelineConfig:
     # adds (candidates x paths x 2 backtests each).
     pbo_gate_enabled: bool = True
     pbo_max: float = 0.5
+    pbo_informational: bool = True        # 2026-11-04 (P0-3): PBO is reported, not a reject gate (a pool of one family's variants cannot convict)
+    pbo_cluster_corr: float = 0.90        # one representative per return-stream cluster in the PBO pool
+    # 2026-11-04 (P0-2): Deflated Sharpe is evaluated on UNSEEN trades and is a score input + ladder cap, not a NOT READY hard gate
+    dsr_hard_gate: bool = False
+    # 2026-11-04 (P2-2): empirical-Bayes edge shrinkage + SPRT forward-test plan (see audit_layers.edge_shrinkage_and_plan)
+    family_prior_mu0: float = 0.0
+    family_prior_tau: float = 0.15
+    sprt_min_h1_r: float = 0.05
+    shrink_adjust_pass_rate: bool = True
+    shrink_pass_min_unseen_trades: int = 100
+    holdout_replaces_deflation: bool = True
     pbo_max_candidates: int = 8
     pbo_max_paths: int = 10
     # SPEED (v9.4): PBO only ever consumes the RANKING of the candidates
@@ -905,6 +927,8 @@ def _make_verdict_core(
     # gates_advisory_only=True, which records the failure as ADVISORY
     # without changing the verdict (debugging mode).
     dsr_gate_result: "DeflatedSharpeGateResult | None" = None,
+    dsr_hard_gate: bool = False,
+    dsr_unseen_score=None,
     pbo_gate_result: "PBOGateResult | None" = None,
     primary_robustness_method: str = "walk_forward",
     gates_advisory_only: bool = False,
@@ -915,6 +939,7 @@ def _make_verdict_core(
     # the lower bound on expectancy after 2x costs -- feeds the score (see app.scoring.t58_scorecard).
     attempt_replay=None,
     expectancy_bound: dict | None = None,
+    rank_expectancy_bound: dict | None = None,
 ) -> tuple[str, list[str], "T58ScorecardResult", bool, bool]:
     """Pipeline reorg item #1: the verdict is now a hard safety gate
     (risk of ruin, and -- FIX (audit) -- a confirmed lookahead-bias leak)
@@ -968,7 +993,7 @@ def _make_verdict_core(
             prop_max_drawdown_pct=getattr(prop_rules, "max_drawdown_pct", None),
             parsimony_result=parsimony, cpcv_supporting_result=cpcv_supporting_result,
             mc_dispersion_pts=mc_dispersion_pts,
-            attempt_replay=attempt_replay, expectancy_bound=expectancy_bound,
+            attempt_replay=attempt_replay, expectancy_bound=(rank_expectancy_bound or expectancy_bound),
         )
         reasons.append(
             "HARD SAFETY GATE FAILED: the lookahead-bias check detected that this strategy's "
@@ -996,7 +1021,7 @@ def _make_verdict_core(
             prop_max_drawdown_pct=getattr(prop_rules, "max_drawdown_pct", None),
             parsimony_result=parsimony, cpcv_supporting_result=cpcv_supporting_result,
             mc_dispersion_pts=mc_dispersion_pts,
-            attempt_replay=attempt_replay, expectancy_bound=expectancy_bound,
+            attempt_replay=attempt_replay, expectancy_bound=(rank_expectancy_bound or expectancy_bound),
         )
         from app.scoring.t58_scorecard import T58ScorecardInputs, compute_t58_score
         inputs = T58ScorecardInputs(**{k: v["value"] for k, v in scorecard.components.items()})
@@ -1008,7 +1033,7 @@ def _make_verdict_core(
             prop_max_drawdown_pct=getattr(prop_rules, "max_drawdown_pct", None),
             parsimony_result=parsimony, cpcv_supporting_result=cpcv_supporting_result,
             mc_dispersion_pts=mc_dispersion_pts,
-            attempt_replay=attempt_replay, expectancy_bound=expectancy_bound,
+            attempt_replay=attempt_replay, expectancy_bound=(rank_expectancy_bound or expectancy_bound),
         )
 
     # -- The one legitimate hard gate ------------------------------------
@@ -1051,6 +1076,7 @@ def _make_verdict_core(
     _wf_not_proven = False       # pooled OOS edge not proven -> cap at MARGINAL
     _pass_bar_cap = False        # per-attempt pass odds below the HIGH CONFIDENCE bar -> cap at MARGINAL
     _decay_flag = None           # edge-by-year / rolling-slope decay warning -> cap at MARGINAL
+    _dsr_cap = False             # Deflated Sharpe failed but is not a hard gate -> cap at MARGINAL
 
     def _record_gate_failure(reason: str) -> None:
         validation_gate_failures.append(reason)
@@ -1142,9 +1168,19 @@ def _make_verdict_core(
         # not measurable -> UNPROVEN: no rejection; the supporting-diagnostic
         # note below still records what the gate found.
     if dsr_gate_result is not None and not dsr_gate_result.passed:
-        _record_gate_failure(dsr_gate_result.reason)
+        if dsr_hard_gate:
+            _record_gate_failure(dsr_gate_result.reason)
+        else:
+            # 2026-11-04 (P0-2): the DSR was a hard NOT READY on in-sample Sharpe deflated by a search-wide trial count -- it punished the
+            # size of the search, not the strategy. It now (a) feeds the scorecard (dsr_unseen), (b) caps READY at MARGINAL. The edge is
+            # judged on untouched data by the holdout / pooled OOS / null gates.
+            _dsr_cap = True
+            reasons.append(f"DEFLATED SHARPE (score input + cap, not a rejection): {dsr_gate_result.reason}")
     if pbo_gate_result is not None and not pbo_gate_result.passed:
-        _record_gate_failure(pbo_gate_result.reason)
+        if getattr(pbo_gate_result, "informational", False):
+            reasons.append(f"PBO (informational): {pbo_gate_result.reason}")
+        else:
+            _record_gate_failure(pbo_gate_result.reason)
 
     # -- B2(d): per-attempt pass-odds gate ----------------------------------
     # The Monte Carlo chain-level pass probability is inflated (it
@@ -1301,6 +1337,7 @@ def _make_verdict_core(
         (_wf_not_proven, "the pooled purged out-of-sample edge is positive but not yet proven (lower bound not above zero)"),
         (_pass_bar_cap, "per-attempt pass odds are below the HIGH CONFIDENCE bar"),
         (bool(_decay_flag), str(_decay_flag)),
+        (_dsr_cap, "the Deflated Sharpe probability is below its bar after deflating for the search's trials"),
     ):
         if _flag and verdict == "READY":
             verdict = "MARGINAL"
@@ -1374,8 +1411,10 @@ def _make_verdict_inner(*args, attempt_replay=None, replay_disagreement_pts: flo
     _eb = kwargs.pop("expectancy_bound", None)
     if _eb is None and cost_stress:
         _eb = cost_stress.get("expectancy_bound")
+    # 2026-11-04 (P1-2): the verdict GATE uses the unseen-data bound at 2x costs when it exists; the in-sample bound only ranks (scorecard).
+    _rank_eb = (cost_stress or {}).get("expectancy_bound_insample") if cost_stress else None
     out = _make_verdict_core(*args, mc_dispersion_pts=mc_dispersion_pts, attempt_replay=attempt_replay,
-                             expectancy_bound=_eb, **kwargs)
+                             expectancy_bound=_eb, rank_expectancy_bound=_rank_eb, **kwargs)
     verdict, reasons, scorecard, ruin_fail, look_fail = out
     final_mc = args[0] if args else kwargs.get("final_mc")
     if verdict != "READY":
@@ -1557,7 +1596,7 @@ def _make_verdict(*args, **kwargs):
         names = ("final_mc", "oos_validation", "icir_gate")
         core = {n: (args[i] if len(args) > i else kwargs.get(n)) for i, n in enumerate(names)}
         for k in ("statistics", "risk_of_ruin_cap", "cpcv_primary_result", "primary_robustness_method", "dsr_gate_result",
-                  "pbo_gate_result", "holdout", "min_holdout_trades_for_gate", "min_per_attempt_pass_pct", "per_attempt_pass_mode",
+                  "pbo_gate_result", "dsr_hard_gate", "holdout", "min_holdout_trades_for_gate", "min_per_attempt_pass_pct", "per_attempt_pass_mode",
                   "min_trades_for_ready", "lookahead_bug_detected"):
             if k in kwargs:
                 core[k] = kwargs[k]
@@ -1607,6 +1646,47 @@ def _transfer_evidence(final_strategy, dev_df, risk, final_bt, cfg, instrument, 
     except Exception as exc:  # noqa: BLE001
         log(f"  Cross-instrument transfer skipped: {exc}")
         return None
+
+
+def _size_by_rule(strategy, dev_df, risk, baseline_bt, prop_rules, adaptive_risk, cfg, log):
+    """2026-11-04 audit (P3): fix the sizing rule BEFORE the search, from the firm's rules alone.
+
+    The old ``_size_to_drawdown_budget`` scaled risk until the DEV baseline's own max drawdown used half the limit, and refused to scale a
+    losing baseline -- so position size (and with it every pass rate, drawdown and replay number downstream) depended on how the dev slice
+    happened to behave, a hidden fitting step. This rule uses no backtest result at all:
+
+        planned risk per trade = size_to_dd_fraction x (drawdown limit in $) / size_rule_loss_streak
+
+    i.e. a streak of ``size_rule_loss_streak`` consecutive full-stop losses consumes ``size_to_dd_fraction`` of the drawdown limit
+    (defaults 0.5 and 8: a 10% limit -> 0.625% risk per trade). It converts to the rr_planned anchor as planned risk x ``size_rule_ref_rr``.
+    Upward only (never lowers a configured size) and always under the risk-per-trade cap. The baseline is re-run once at the new size so
+    everything downstream sees one consistent size. Returns (risk, baseline_bt, adjustment-dict-or-None). Never raises."""
+    try:
+        if not getattr(cfg, "size_to_drawdown_budget", True) or getattr(risk, "sizing_mode", "") != "rr_planned":
+            return risk, baseline_bt, None
+        limit_pct = float(getattr(prop_rules, "max_drawdown_pct", 0.0) or 0.0)
+        acct = float(getattr(prop_rules, "account_size", 0.0) or 0.0)
+        if limit_pct <= 0 or acct <= 0:
+            return risk, baseline_bt, None
+        streak = max(1, int(getattr(cfg, "size_rule_loss_streak", 8)))
+        planned_risk = float(cfg.size_to_dd_fraction) * acct * limit_pct / 100.0 / streak
+        new_target = planned_risk * float(getattr(cfg, "size_rule_ref_rr", 2.0))
+        base_target = float(risk.planned_target_dollars)
+        if new_target <= base_target * 1.15:
+            return risk, baseline_bt, None                       # the configured size already meets or exceeds the rule
+        cand = replace(risk, planned_target_dollars=new_target)
+        bt2 = run_backtest(dev_df, strategy, cand, adaptive_risk=adaptive_risk)
+        if not bt2.trades:
+            return risk, baseline_bt, None
+        txt = (f"SIZING RULE (fixed before the search, no dev result used): planned risk anchor ${base_target:,.0f} -> ${new_target:,.0f}. "
+               f"A run of {streak} consecutive full-stop losses may use {float(cfg.size_to_dd_fraction) * 100:.0f}% of the firm's {limit_pct:g}% drawdown limit, "
+               f"so risk per trade is ${planned_risk:,.0f} ({planned_risk / acct * 100:.2f}% of the account). Still capped by the risk-per-trade setting.")
+        log("  " + txt)
+        return cand, bt2, {"applied": True, "kind": "rule", "planned_target_before": base_target, "planned_target_after": new_target,
+                           "planned_risk_dollars": planned_risk, "loss_streak": streak, "limit_pct": limit_pct, "text": txt}
+    except Exception as exc:  # noqa: BLE001 -- sizing help must never sink the run
+        log(f"  Rule-based sizing skipped: {exc}")
+    return risk, baseline_bt, None
 
 
 def _size_to_drawdown_budget(strategy, dev_df, risk, baseline_bt, prop_rules, adaptive_risk, cfg, log):
@@ -1699,11 +1779,12 @@ def _gate_vector(core: dict, extra: dict, scorecard=None, core_verdict: str | No
         add("cpcv", "CPCV (primary)", "n/a" if r is None else ("pass" if r.is_robust else "fail"))
     def _dsr():
         d = core.get("dsr_gate_result")
-        add("dsr", "Deflated Sharpe", "n/a" if d is None else ("pass" if d.passed else "fail"),
+        _hard = bool(core.get("dsr_hard_gate", False))
+        add("dsr", "Deflated Sharpe", "n/a" if d is None else ("pass" if d.passed else ("fail" if _hard else "cap")),
             "" if d is None else f"PSR {d.probabilistic_sharpe:.3f} vs benchmark {d.benchmark_sharpe:.3f} over {d.n_trials} trials")
     def _pbo():
         d = core.get("pbo_gate_result")
-        add("pbo", "Probability of backtest overfitting", "n/a" if d is None else ("pass" if d.passed else "fail"))
+        add("pbo", "Probability of backtest overfitting", "n/a" if d is None else ("pass" if d.passed else ("info" if getattr(d, "informational", False) else "fail")))
     def _pass_lb():
         if mc is None:
             return add("pass_lb", "Per-attempt pass odds", "n/a")
@@ -1947,6 +2028,40 @@ def _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt
     except Exception as exc:  # noqa: BLE001
         log(f"  Cost-stress evidence skipped: {exc}")
     return replay, null, cost_stress
+
+
+def _attach_unseen_cost_bound(cost_ev, final_bt, df, dev_df, final_strategy, risk, adaptive_risk, oos_validation, cfg, log):
+    """2026-11-04 audit (P1-2): the expectancy lower bound that GATES the verdict is measured on UNSEEN trades (walk-forward out-of-sample +
+    clean holdout) at stressed costs, not on the in-sample dev slice the search tuned. The stressed unseen R is each unseen trade's R minus
+    the per-trade R the cost stress took off the in-sample run (a constant cost shift, so no extra backtest at 2x on unseen data).
+    The in-sample bound is kept under ``expectancy_bound_insample`` for ranking only. Mutates and returns ``cost_ev``; never raises."""
+    if not cost_ev:
+        return cost_ev
+    try:
+        from app.orchestration.audit_layers import holdout_trades_for
+        from app.scoring.edge_bounds import expectancy_bound as _eb_fn, r_multiples as _rm
+        ins = cost_ev.get("expectancy_bound")
+        if not ins or ins.get("mean") is None:
+            return cost_ev
+        base = _rm(final_bt.trades)
+        delta = max(0.0, (sum(base) / len(base) - float(ins["mean"]))) if base else 0.0
+        oos_r = _oos_fold_r_for_audit(oos_validation)
+        hold = []
+        if bool(getattr(cfg, "reserve_true_holdout", True)) and dev_df is not None and len(dev_df) < len(df):
+            hold = _rm(holdout_trades_for(df, dev_df, final_strategy, risk, adaptive_risk))
+        unseen = [float(x) - delta for x in (list(oos_r) + list(hold))]
+        cost_ev["expectancy_bound_insample"] = ins
+        cost_ev["unseen_cost_shift_r"] = delta
+        if len(unseen) >= int(getattr(cfg, "min_holdout_trades_for_gate", 30)):
+            eb = _eb_fn(unseen)
+            cost_ev["unseen_expectancy_bound"] = eb
+            cost_ev["expectancy_bound"] = eb
+            if eb.get("lb") is not None:
+                log(f"  Unseen-data expectancy at {float(cost_ev.get('multiplier', 2.0)):g}x costs: {eb['mean']:+.3f}R over {eb['n']} unseen trades, "
+                    f"95% lower bound {eb['lb']:+.3f}R (in-sample bound kept for ranking only).")
+    except Exception as exc:  # noqa: BLE001 -- fall back to the in-sample bound
+        log(f"  Unseen-data cost bound skipped ({exc}); the in-sample bound gates instead.")
+    return cost_ev
 
 
 def _payout_window_evidence(final_strategy, full_df, dev_df, risk, prop_rules, cfg, log,
@@ -2467,7 +2582,8 @@ def run_full_pipeline(
         )
     # 2026-10-27 audit (fix 4): size the planned risk to the drawdown budget (verified by a re-run on the dev slice only).
     if baseline_bt.trades:
-        risk, baseline_bt, _dd_adj = _size_to_drawdown_budget(strategy, dev_df, risk, baseline_bt, prop_rules, adaptive_risk, cfg, log)
+        _sizer = _size_by_rule if str(getattr(cfg, "size_rule", "rule")) == "rule" else _size_to_drawdown_budget
+        risk, baseline_bt, _dd_adj = _sizer(strategy, dev_df, risk, baseline_bt, prop_rules, adaptive_risk, cfg, log)
         if _dd_adj is not None:
             warnings.append(_dd_adj["text"])
             if sizing_adjustment is None:
@@ -3209,7 +3325,8 @@ def run_full_pipeline(
         except Exception:  # noqa: BLE001
             pass
         if dsr_gate_result is not None and not dsr_gate_result.passed:
-            _early_fail.append("deflated-Sharpe")
+            if bool(getattr(cfg, "dsr_hard_gate", False)):
+                _early_fail.append("deflated-Sharpe")
         _final_mc_sims = int(cfg.final_mc_sims)
         if _early_fail and not cfg.validation_gates_advisory_only:
             _reduced = min(_final_mc_sims, 2000)
@@ -3222,7 +3339,11 @@ def run_full_pipeline(
         _mc_pool = _make_mc_pool(_mc_workers)
         final_mc = run_monte_carlo(
             final_bt.trades, prop_rules,
-            MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=_final_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
+            MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=_final_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach,
+                             outer_bootstrap_reps=(0 if _early_fail else int(getattr(cfg, "outer_bootstrap_reps", 0) or 0)),
+                             outer_bootstrap_sims=int(getattr(cfg, "outer_bootstrap_sims", 300) or 300),
+                             outer_bootstrap_quantile=float(getattr(cfg, "outer_bootstrap_quantile", 0.10) or 0.10),
+                             speed_exponent=float(getattr(cfg, "speed_exponent", 0.5) or 0.5)),
             # MC-004: these trades came from Step 2's GA search over this
             # same dev_df when refinement actually ran -- see
             # run_monte_carlo's docstring. Steps 4-6 above provide the
@@ -3262,6 +3383,18 @@ def run_full_pipeline(
                             pbo_trades.append(leaderboard_trades.get(_lb_i))
                         except Exception:  # noqa: BLE001 -- one bad genome must not kill the gate
                             continue
+                # 2026-11-04 (P0-3): deduplicate the pool -- one representative per cluster of correlated return streams
+                _n_pool_raw = len(pbo_specs)
+                try:
+                    if len(pbo_specs) >= 3 and all(t is not None for t in pbo_trades):
+                        from app.validation.effective_trials import daily_pnl_series, representatives
+                        _keep = representatives([daily_pnl_series(t) for t in pbo_trades], float(getattr(cfg, "pbo_cluster_corr", 0.90)))
+                        if len(_keep) >= 2:
+                            pbo_specs = [pbo_specs[i] for i in _keep]
+                            pbo_trades = [pbo_trades[i] for i in _keep]
+                        log(f"  PBO pool: {_n_pool_raw} leaderboard candidates -> {len(pbo_specs)} after keeping one per correlation cluster.")
+                except Exception as exc:  # noqa: BLE001
+                    log(f"  PBO pool de-duplication skipped ({exc}).")
                 if len(pbo_specs) >= 2:
                     pbo_res = compute_pbo(
                         dev_df, pbo_specs, risk,
@@ -3277,7 +3410,7 @@ def run_full_pipeline(
                         # 2026-10-17: the DSR step already backtested these exact specs on dev_df -- reuse the trade lists
                         precomputed_trades=pbo_trades if all(t is not None for t in pbo_trades) else None,
                     )
-                    pbo_gate_result = pbo_gate(pbo_res, max_pbo=cfg.pbo_max)
+                    pbo_gate_result = pbo_gate(pbo_res, max_pbo=cfg.pbo_max, informational=bool(getattr(cfg, "pbo_informational", True)), n_pool=len(pbo_specs))
                     log(f"  {pbo_gate_result.reason}")
                 else:
                     pbo_skip_reason = (
@@ -3354,6 +3487,7 @@ def run_full_pipeline(
                 per_attempt_pass_mode=cfg.per_attempt_pass_mode, decay_flag=_decay_text,
                 paid_min_pct=getattr(cfg, "min_per_attempt_paid_pct", 35.0),
                 dsr_gate_result=dsr_gate_result, pbo_gate_result=pbo_gate_result,
+                dsr_hard_gate=bool(getattr(cfg, "dsr_hard_gate", False)),
                 primary_robustness_method=cfg.primary_robustness_method,
                 gates_advisory_only=cfg.validation_gates_advisory_only,
                 **evidence,
@@ -3378,9 +3512,10 @@ def run_full_pipeline(
                 "slow random-entry null and seed-stability re-scoring are skipped.")
         _replay_ev, _null_ev, _cost_ev = _replay_and_null_evidence(
             final_strategy, dev_df, risk, prop_rules, final_bt, cfg, log,
-            workers=_mc_workers, progress_hook=_progress, run_null=_can_be_ready,
+            workers=_mc_workers, progress_hook=_progress, run_null=(_can_be_ready or _pre_verdict == "MARGINAL"),
             median_days_to_pass=getattr(final_mc, "median_days_to_pass", None),
         )
+        _cost_ev = _attach_unseen_cost_bound(_cost_ev, final_bt, df, dev_df, final_strategy, risk, adaptive_risk, oos_validation, cfg, log)
         _payout_ev = _payout_window_evidence(
             final_strategy, df, dev_df, risk, prop_rules, cfg, log,
             workers=_mc_workers, progress_hook=_progress,
@@ -3402,20 +3537,30 @@ def run_full_pipeline(
             import statistics as _stats_mod
 
             _rates = []
-            _rescore_seeds = (11, 101, 1009)[: max(1, int(getattr(cfg, "seed_rescore_seeds", 3)))]
+            _n_seeds = max(1, int(getattr(cfg, "seed_rescore_seeds", 20)))
+            _rescore_seeds = tuple(11 + 90 * i + (i * i) for i in range(_n_seeds))
+            _rescore_sims = int(getattr(cfg, "seed_rescore_sims", 300))
             for _si, _seed in enumerate(_rescore_seeds):
                 _m = run_monte_carlo(
                     final_bt.trades, prop_rules,
-                    MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=int(getattr(cfg, "seed_rescore_sims", 2000)), random_seed=_seed, reset_on_breach=cfg.reset_on_breach),
+                    MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=_rescore_sims, random_seed=_seed, reset_on_breach=cfg.reset_on_breach),
                     max_workers=_mc_workers, pool=_mc_pool,
                     progress_cb=lambda d, t, _i=_si: _progress(
                         7, 0.6 + 0.28 * ((_i + d / max(t, 1)) / max(len(_rescore_seeds), 1)),
                         "Seed-stability Monte Carlo"),
                 )
                 _rates.append(float(_m.per_attempt_pass_probability))
-            if len(_rates) >= 2:
-                _mc_disp = float(_stats_mod.pstdev(_rates))
-                log(f"  Seed stability: per-attempt pass {['%.0f%%' % r for r in _rates]} (sd {_mc_disp:.1f} pts).")
+            if len(_rates) >= int(getattr(cfg, "seed_gate_min_seeds", 20)):
+                # 2026-11-04 (P1-5): the spread of seeds INCLUDES each run's own binomial noise (at 300 sims ~2.9 pts at 50%); only the EXCESS
+                # spread is evidence of instability. Fewer than the minimum number of seeds -> the gate is dropped (informational only).
+                _raw_sd = float(_stats_mod.stdev(_rates))
+                _pm = sum(_rates) / len(_rates) / 100.0
+                _noise_sd = 100.0 * math.sqrt(max(_pm * (1.0 - _pm), 0.0) / max(_rescore_sims, 1))
+                _mc_disp = math.sqrt(max(_raw_sd ** 2 - _noise_sd ** 2, 0.0))
+                log(f"  Seed stability ({len(_rates)} seeds x {_rescore_sims} sims): pass {min(_rates):.0f}%-{max(_rates):.0f}%, raw sd {_raw_sd:.1f} pts, "
+                    f"of which Monte Carlo noise {_noise_sd:.1f}; excess spread {_mc_disp:.1f} pts.")
+            elif len(_rates) >= 2:
+                log(f"  Seed stability: only {len(_rates)} seeds (< {int(getattr(cfg, 'seed_gate_min_seeds', 20))}) -- spread is not a reliable statistic at that size; gate dropped.")
         except Exception as exc:  # noqa: BLE001
             if _can_be_ready:
                 log(f"  Seed-stability check skipped: {exc}")
@@ -3470,15 +3615,31 @@ def run_full_pipeline(
             final_strategy=final_strategy, risk=risk, adaptive_risk=adaptive_risk, final_mc=final_mc, final_holdout=final_holdout,
             payout_ev=_payout_ev, lookahead_check_crashed=lookahead_check_crashed, n_trials=_n_trials, log=log,
             parameters_tuned=bool(refinement_ran), final_trades=list(final_bt.trades),
-            oos_fold_r=_oos_fold_r_for_audit(oos_validation),
+            oos_fold_r=_oos_fold_r_for_audit(oos_validation), dsr_gate_result=dsr_gate_result,
+            null_ev=_null_ev, cost_ev=_cost_ev, transfer_ev=_transfer_ev,
         )
+        # 2026-11-04 (P0-2): fold the unseen-data DSR into the scorecard as a (low-weight) input
+        try:
+            _du = (_audit_ev or {}).get("dsr_unseen") if isinstance(_audit_ev, dict) else None
+            if _du and _du.get("score") is not None and getattr(scorecard, "components", None):
+                from app.scoring.t58_scorecard import T58ScorecardInputs as _TI, compute_t58_score as _cts
+                _inp = _TI(**{k: v["value"] for k, v in scorecard.components.items()})
+                _inp.dsr_unseen = float(_du["score"])
+                _gv = getattr(scorecard, "gate_vector", None)
+                scorecard = _cts(_inp)
+                if _gv is not None:
+                    scorecard.gate_vector = _gv
+        except Exception as exc:  # noqa: BLE001
+            log(f"  Unseen-DSR score input skipped: {exc}")
         if isinstance(_audit_ev, dict):
             _audit_ev["gate_vector"] = getattr(scorecard, "gate_vector", None)
             _audit_ev["pooled_status"] = getattr(oos_validation, "pooled_status", None) if oos_validation is not None else None
             _audit_ev["edge_decay"] = edge_decay
             from app.orchestration.verdict_ladder import ladder_stage as _ls
             _audit_ev["ladder"] = _ls(verdict, _ev.label, pooled_status=_audit_ev["pooled_status"],
-                                      hard_failed=(verdict == "NOT READY" and _ev.label == "NOT WORTH A FEE")).to_dict()
+                                      hard_failed=(verdict == "NOT READY" and _ev.label == "NOT WORTH A FEE"),
+                                      edge_evidence=_audit_ev.get("edge_evidence"),
+                                      caps=[r for r in verdict_reasons if isinstance(r, str) and ("CAPPED" in r or "NOT PROVEN" in r.upper())][:4]).to_dict()
             verdict_reasons = list(verdict_reasons) + ["LADDER: " + _audit_ev["ladder"]["stage"] + " | EV: " + str(_ev.label)]
         verdict_reasons = list(verdict_reasons) + [_ev.render().replace("\n", " | ")]
         log("  " + _ev.render().replace("\n", "\n  "))
@@ -3724,6 +3885,7 @@ def _finish(
                     "verdict": verdict,
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
                     "t58_tier": t58_tier,
+                    "ladder_stage": (((audit_evidence or {}).get("ladder") or {}).get("stage") if isinstance(audit_evidence, dict) else None),
                     "reasons": [str(_r)[:600] for _r in (verdict_reasons or [])[:40]],
                 })
                 saved_library_note = f"Replaced '{filename}' in the Strategy Library (previous version archived, status: {status_to_set})." + _library_save_note_suffix(verdict, verdict_reasons)
@@ -3787,6 +3949,7 @@ def _finish(
                     "verdict": verdict,
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
                     "t58_tier": t58_tier,
+                    "ladder_stage": (((audit_evidence or {}).get("ladder") or {}).get("stage") if isinstance(audit_evidence, dict) else None),
                     "reasons": [str(_r)[:600] for _r in (verdict_reasons or [])[:40]],
                 })
                 saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {status_to_set})." + (" Updated the existing Full Pipeline output for this instrument/timeframe -- previous version archived." if _fp_updated_existing else "") + _library_save_note_suffix(verdict, verdict_reasons)
@@ -3850,6 +4013,7 @@ def _finish(
                     "verdict": verdict,
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
                     "t58_tier": t58_tier,
+                    "ladder_stage": (((audit_evidence or {}).get("ladder") or {}).get("stage") if isinstance(audit_evidence, dict) else None),
                     "reasons": [str(_r)[:600] for _r in (verdict_reasons or [])[:40]],
                 })
                 saved_library_note = f"Replaced '{filename}' in the Strategy Library (previous version archived, status: {status_to_set})." + _library_save_note_suffix(verdict, verdict_reasons)
@@ -3912,6 +4076,7 @@ def _finish(
                     "verdict": verdict,
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
                     "t58_tier": t58_tier,
+                    "ladder_stage": (((audit_evidence or {}).get("ladder") or {}).get("stage") if isinstance(audit_evidence, dict) else None),
                     "reasons": [str(_r)[:600] for _r in (verdict_reasons or [])[:40]],
                 })
                 saved_library_note = f"Saved to the Strategy Library as '{filename}' (status: {status_to_set})." + (" Updated the existing Full Pipeline output for this instrument/timeframe -- previous version archived." if _fp_updated_existing else "") + _library_save_note_suffix(verdict, verdict_reasons)
@@ -4163,6 +4328,8 @@ def _sweep_rank(result: "FullPipelineResult") -> tuple:
     return (
         _VERDICT_RANK.get(result.verdict, 0),
         score if score is not None else -1.0,
+        # 2026-11-04: faster beats slower at equal verdict/score -- speed-adjusted pass probability (calendar days), then raw pass odds
+        float(getattr(result.final_mc, "speed_adjusted_pass_pct", 0.0) or 0.0),
         result.final_mc.evaluation_pass_probability,
     )
 

@@ -35,8 +35,15 @@ class LadderResult:
 
 def ladder_stage(verdict: str, ev_label: str | None, *, pooled_status: str | None = None, hard_failed: bool = False,
                  forward_state: str | None = None, per_attempt_pass_lb_pct: float | None = None,
-                 high_confidence_pct: float = 70.0) -> LadderResult:
-    """Map the legacy verdict + EV label (+ pooled OOS status, + recorded forward-test state) onto the ladder."""
+                 high_confidence_pct: float = 70.0, edge_evidence: dict | None = None, caps: list | None = None) -> LadderResult:
+    """Map the legacy verdict + EV label (+ pooled OOS status, + recorded forward-test state) onto the ladder.
+
+    2026-11-04 audit (P2-1): FORWARD-TEST CANDIDATE is earned on EDGE EVIDENCE alone. ``edge_evidence`` is a dict of booleans/values:
+    ``holdout_confirmed``, ``null_ok``, ``cost_ok`` (unseen expectancy lower bound > 0 at 2x costs) and ``ev_mean`` (EV per attempt).
+    When all four hold, and nothing is a hard failure, the strategy is a forward-test candidate even though the legacy verdict is capped at
+    MARGINAL by the pass-odds bar, pooled-OOS-unproven, DSR, stale rules or data length: paper trading costs nothing, so the bar for permission
+    to paper-trade is 'evidence the edge exists', not 'proof it will pass 70% of evaluations'. ``caps`` lists what still stands between the
+    strategy and the higher stages; it is shown, never hidden. EVALUATE / FUNDED stay gated by the forward-test SPRT."""
     v = str(verdict or "").upper()
     ev = str(ev_label or "").upper()
     res = LadderResult(stage="LEAD", legacy_verdict=v, ev_label=ev)
@@ -57,6 +64,15 @@ def ladder_stage(verdict: str, ev_label: str | None, *, pooled_status: str | Non
     if v in ("READY", "MARGINAL") and ev in ("HIGH CONFIDENCE", "FORWARD-TEST CANDIDATE") and (pooled_status or "PASS").upper() in ("PASS", "UNPROVEN", ""):
         res.stage = "FORWARD-TEST CANDIDATE"
         res.reasons.append("Backtest gates and EV test cleared: paper-trade it under the SPRT monitor before buying anything.")
+        return res
+    ee = edge_evidence or {}
+    if ee and all(bool(ee.get(k)) for k in ("holdout_confirmed", "null_ok", "cost_ok")) and (ee.get("ev_mean") is not None and float(ee["ev_mean"]) > 0) \
+            and (pooled_status or "PASS").upper() != "FAIL":
+        res.stage = "FORWARD-TEST CANDIDATE"
+        res.reasons.append("Edge evidence is positive on untouched data (holdout confirmed, random-entry null passed, positive expectancy lower bound at 2x costs, "
+                           "EV per attempt > 0): paper-trade it under the SPRT monitor.")
+        for c in (caps or []):
+            res.reasons.append(f"Still open before EVALUATE: {c}")
         return res
     if v == "NOT READY":
         res.reasons.append("Not rejected outright, but not ready: treat as a lead to refine or to collect more trades for.")
