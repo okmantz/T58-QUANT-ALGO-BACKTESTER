@@ -109,21 +109,23 @@ def test_promote_strategy_succeeds_once_requirements_met():
         library.record_validation_result(stype, fname, {"method": method, "efficiency": 0.6})
     ok, message, new_stage = cb.promote_strategy(stype, fname)
     assert ok is True
-    assert new_stage == "validated"
+    # 2026-11-04: every gate this strategy has already earned is crossed in ONE press (Validated AND Champion Candidate here),
+    # so a strategy that passed everything is promoted to Champion Candidate, not parked at Validated.
+    assert new_stage == "champion_candidate"
+    assert "Validated" in message and "Champion Candidate" in message
 
     # Never automatic: re-reading metadata directly must show the same
     # stage this call just wrote -- nothing else could have set it.
     meta = library.load_strategy_metadata(stype, fname)
-    assert meta["promotion"]["stage"] == "validated"
-    assert "validated" in meta["promotion"]["history"]
+    assert meta["promotion"]["stage"] == "champion_candidate"
+    assert "validated" in meta["promotion"]["history"] and "champion_candidate" in meta["promotion"]["history"]
 
 
 def test_cannot_skip_a_stage():
     stype, fname = _seed()
     library.save_strategy_metadata(stype, fname, {"promotion": {"stage": "candidate", "history": {}}}, merge=True)
-    # Even with strong metrics, jumping straight to champion_candidate
-    # without first passing through validated is not offered -- promote
-    # only ever advances one stage at a time.
+    # Even with strong metrics, promotion never enters Forward Testing by cascade: it stops at champion_candidate
+    # (starting a forward test is deliberate) and every crossed stage is recorded in the history.
     library.save_strategy_metadata(stype, fname, {
         "last_run": {"eval_pass_probability": 95, "first_payout_probability": 90, "verdict": "READY"},
         "last_champion_check": {"verdict": "READY", "t58_score": 95},
@@ -132,7 +134,8 @@ def test_cannot_skip_a_stage():
         library.record_validation_result(stype, fname, {"method": method, "efficiency": 0.9})
     ok, _msg, new_stage = cb.promote_strategy(stype, fname)
     assert ok is True
-    assert new_stage == "validated"  # one stage, not champion_candidate
+    assert new_stage == "champion_candidate"  # earned both gates; never forward_testing
+    assert "forward_testing" not in library.load_strategy_metadata(stype, fname)["promotion"]["history"]
 
 
 def test_validated_to_champion_candidate_requires_thresholds():
