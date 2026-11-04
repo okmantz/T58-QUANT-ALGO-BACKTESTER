@@ -1,0 +1,153 @@
+diff --git a/app/web/server.py b/app/web/server.py
+index c2c6983..2adee35 100644
+--- a/app/web/server.py
++++ b/app/web/server.py
+@@ -10840,6 +10840,10 @@ _FORWARD_TEST_SESSION: dict = {"session": None, "log": [], "id": None}
+ _FORWARD_TEST_LOCK = threading.Lock()
+ _LIVE_DEPLOY_SESSION: dict = {"session": None, "log": [], "id": None}
+ _LIVE_DEPLOY_LOCK = threading.Lock()
++# "Start forward test" runs in a background job (connecting can take minutes the first time) so the page can show a
++# live checklist and, on failure, a plain-language problem card. See app/forward_test/start_job.py.
++from app.forward_test.start_job import StartJob as _FtStartJob  # noqa: E402
++_FT_START_JOB = _FtStartJob()
+ 
+ 
+ @app.route("/forward-test")
+@@ -10855,11 +10859,38 @@ def forward_test_info():
+     except Exception:
+         deploy_champion = None
+     return render_template("forward_test.html", mt5_accounts=mt5_accounts, running=running,
++                           starting=_FT_START_JOB.is_running,
+                            deploy_champion=deploy_champion, strategies=_simple_strategy_options(),
+                            prefill_strategy=(request.args.get("strategy") or "").strip(),
+                            **_alpaca_template_context())
+ 
+ 
++@app.route("/forward-test/preflight.json")
++def forward_test_preflight():
++    """Looks (changes nothing) at everything a forward test needs and says what is ready, what T58 will do by itself
++    on Start, and what needs the user. Drives the 'Ready check' card on the Forward Test page."""
++    from app.forward_test import mt5_diagnostics as ft_diag
++    from app.live_deploy.live_settings import load_accounts
++    accounts = [a for a in load_accounts() if a.platform == "MT4/MT5"]
++    account = next((a for a in accounts if a.id == request.args.get("account_id")), accounts[0] if accounts else None)
++    out = ft_diag.preflight(account.terminal_path if account else "", deep=request.args.get("deep") == "1")
++    if account is None or not account.is_usable:
++        p = ft_diag.account_missing()
++        out["checks"].insert(0, {"id": "account", "label": "MT5 account saved", "status": "action",
++                                 "detail": p.summary, "fix": p.steps, "commands": []})
++        out["ready"] = False
++        out["headline"] = "Save your MT5 account first, then you can start."
++    else:
++        out["checks"].insert(0, {"id": "account", "label": "MT5 account saved", "status": "ok",
++                                 "detail": f"{account.nickname or account.login} ({account.server})", "fix": [], "commands": []})
++    return jsonify(out)
++
++
++@app.route("/forward-test/start-status.json")
++def forward_test_start_status():
++    return jsonify(_FT_START_JOB.snapshot())
++
++
+ def _deploy_requires_saved_strategy(form):
+     """Deploy pages no longer have a manual SMA builder: the person must pick a saved strategy. Returns an error response or None."""
+     mode = (form.get("strategy_mode") or "").strip()
+@@ -10875,29 +10906,38 @@ def forward_test_start():
+     from app.forward_test.mt5_connector import MT5Connector
+     from app.live_deploy.live_settings import load_accounts
+ 
++    from app.forward_test import mt5_diagnostics as ft_diag
++
++    def _problem(p, status=400):
++        return jsonify({"ok": False, "error": p.plain_text(), "problem": p.to_dict()}), status
++
+     with _FORWARD_TEST_LOCK:
+         if _FORWARD_TEST_SESSION["session"] is not None and _FORWARD_TEST_SESSION["session"].status.running:
+             return jsonify({"ok": False, "error": "A forward test is already running. Stop it first."}), 409
++        if _FT_START_JOB.is_running:
++            return jsonify({"ok": False, "error": "A forward test is already starting. Watch the checklist below."}), 409
+ 
+         form = request.form
+         account_id = form.get("account_id", "")
+         accounts = {a.id: a for a in load_accounts() if a.platform == "MT4/MT5"}
+         account = accounts.get(account_id)
+         if account is None:
+-            return jsonify({"ok": False, "error": "Select a saved MT5 account first (add one under Settings -> API Keys)."}), 400
++            return _problem(ft_diag.account_missing())
+ 
+-        _no_pick = _deploy_requires_saved_strategy(form)
+-        if _no_pick:
+-            return _no_pick
++        mode = (form.get("strategy_mode") or "").strip()
++        strategy_name = (form.get(f"existing_strategy_{mode}") or "").strip() if mode else ""
++        if not strategy_name:
++            return _problem(ft_diag.strategy_missing())
+         try:
+             strategy, library_ref = _build_strategy(form.get("strategy_mode", "manual"), form, request.files)
+         except (StrategyError, RefinementError) as exc:
+-            return jsonify({"ok": False, "error": str(exc)}), 400
++            return _problem(ft_diag.strategy_error(str(exc)))
+ 
+         connector = MT5Connector(
+             login=account.login, password=account.password, server=account.server,
+             terminal_path=account.terminal_path,
+         )
++        symbol = form.get("symbol", "").strip() or "EURUSD"
+         risk = RiskConfig(
+             initial_balance=float(form.get("initial_balance", 100000) or 100000),
+             risk_mode=form.get("risk_mode", "percent"),
+@@ -10905,30 +10945,44 @@ def forward_test_start():
+             pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
+             commission_per_trade=_commission_from_form(form),
+         )
++        log = []
++        if not form.get("pip_size"):
++            # The page has no pip-size box. Take pip size / contract size from the built-in instrument table (the same one the
++            # backtests use) so a pips-based stop means the same distance live as it did in the backtest (gold is not EURUSD).
++            try:
++                from app.data.instrument_specs import apply_any_instrument_spec, guess_any_instrument_symbol
++                risk = apply_any_instrument_spec(risk, guess_any_instrument_symbol(symbol) or symbol)
++            except Exception:  # noqa: BLE001 -- unknown symbol: keep the defaults, but say so in the run log
++                log.append(f"[warn] No built-in instrument spec for {symbol}: pip size left at {risk.pip_size}. "
++                           "Strategies that use dynamic stop distances are unaffected.")
+         cfg = ForwardTestConfig(
+-            symbol=form.get("symbol", "").strip() or "EURUSD",
++            symbol=symbol,
+             timeframe_minutes=int(form.get("timeframe_minutes", 5) or 5),
+             risk=risk,
+             poll_seconds=int(form.get("poll_seconds", 20) or 20),
+         )
+-        log = []
+         session = ForwardTestSession(
+             strategy=strategy, strategy_type=form.get("strategy_mode", "manual"),
+-            strategy_filename=form.get("strategy_mode", "manual"),
++            strategy_filename=strategy_name,
+             connector=connector, journal=ForwardTestJournal(), config=cfg,
+             on_log=lambda level, msg: log.append(f"[{level}] {msg}"),
+         )
+-        ok, message = session.start()
+-        if not ok:
+-            return jsonify({"ok": False, "error": message}), 400
+-        _FORWARD_TEST_SESSION["session"] = session
+-        _FORWARD_TEST_SESSION["log"] = log
+-        _FORWARD_TEST_SESSION["library_ref"] = library_ref
+-        return jsonify({"ok": True, "message": message})
++
++        def _on_started(sess):
++            with _FORWARD_TEST_LOCK:
++                _FORWARD_TEST_SESSION["session"] = sess
++                _FORWARD_TEST_SESSION["log"] = log
++                _FORWARD_TEST_SESSION["library_ref"] = library_ref
++
++        # Return at once; the connection (first time: Wine Python + packages, opening MT5, login) runs in the background
++        # and the page polls /forward-test/start-status.json for a live checklist or a plain-language problem card.
++        _FT_START_JOB.begin(session, _on_started)
++        return jsonify({"ok": True, "starting": True})
+ 
+ 
+ @app.route("/forward-test/stop", methods=["POST"])
+ def forward_test_stop():
++    _FT_START_JOB.clear()
+     with _FORWARD_TEST_LOCK:
+         session = _FORWARD_TEST_SESSION["session"]
+         if session is None:
