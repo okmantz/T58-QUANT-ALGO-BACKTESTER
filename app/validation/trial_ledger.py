@@ -24,7 +24,7 @@ used to load as an empty ledger (trial count 0, so the deflated-Sharpe bar silen
   repairs or restores it -- it never reads as empty. A file that does not exist is a genuinely empty ledger.
 * ``_write`` raises ``TrialLedgerError`` when the atomic write fails, so ``record`` / ``book_run`` / ``mark_clock_epoch`` abort the
   run instead of reporting a total that was never saved.
-* Same-data trials never decay: callers pass ``current_fp`` (``data_fingerprint(df)``) and ``data_fp``; ``decay_report`` says which
+* Same-data trials decay only on the long SAME_DATA_HALF_LIFE_DAYS clock (2026-11-04; they never decayed before): callers pass ``current_fp`` (``data_fingerprint(df)``) and ``data_fp``; ``decay_report`` says which
   rule fired for a label so a report can state it.
 """
 from __future__ import annotations
@@ -45,6 +45,10 @@ class TrialLedgerError(RuntimeError):
 _LOCK = threading.RLock()
 _PATH = Path(__file__).resolve().parents[2] / "reports" / "trial_ledger.json"
 DEFAULT_HALF_LIFE_DAYS = 730.0
+# 2026-11-04 audit (P0-2): trials recorded on the SAME data window used to NEVER decay, so a long-lived idea was undeployable forever -- the
+# trial count only ever grew. They now fade on a much longer clock (5 years): the selection bias they created is still mostly present, but
+# not eternal. ``SAME_DATA_HALF_LIFE_DAYS=None`` restores the never-decay rule.
+SAME_DATA_HALF_LIFE_DAYS: float | None = 1825.0
 
 
 def _key(label) -> str:
@@ -148,7 +152,12 @@ def total(label, half_life_days: float | None = DEFAULT_HALF_LIFE_DAYS, now: flo
         n = int(e.get("n", 0))
         t = e.get("t")
         same_window = bool(current_fp) and e.get("fp") == current_fp
-        w = 1.0 if (t is None or same_window) else 0.5 ** (max(0.0, now - float(t)) / 86400.0 / float(half_life_days))
+        if t is None:
+            w = 1.0
+        elif same_window:
+            w = 1.0 if SAME_DATA_HALF_LIFE_DAYS is None else 0.5 ** (max(0.0, now - float(t)) / 86400.0 / float(SAME_DATA_HALF_LIFE_DAYS))
+        else:
+            w = 0.5 ** (max(0.0, now - float(t)) / 86400.0 / float(half_life_days))
         acc += n * w
     return int(-(-acc // 1)) if acc > 0 else 0
 
@@ -166,7 +175,7 @@ def decay_report(label, half_life_days: float | None = DEFAULT_HALF_LIFE_DAYS, n
     if half_life_days is None:
         rule = "no aging (half-life disabled): every trial counts in full"
     elif current_fp and same:
-        rule = f"data fingerprint {current_fp} matched {same} trial(s): they do not decay; the other {raw - same} age with a {half_life_days:g}-day half-life"
+        rule = f"data fingerprint {current_fp} matched {same} trial(s): they decay only on a long {SAME_DATA_HALF_LIFE_DAYS or float('inf'):g}-day half-life; the other {raw - same} age with a {half_life_days:g}-day half-life"
     else:
         rule = f"no trial shares the current data fingerprint: all age with a {half_life_days:g}-day half-life"
     return {"raw": raw, "aged": aged, "same_data": same, "aged_by_half_life": raw - same, "rule": rule}

@@ -79,3 +79,25 @@ def scale_trial_count(raw_trials: int, sample_streams: list[pd.Series], corr_thr
     eff = max(k, min(raw, eff))
     info.update({"raw_trials": raw, "effective_trials": eff})
     return info
+
+
+def representatives(streams: list[pd.Series], corr_threshold: float = 0.90) -> list[int]:
+    """One representative index per correlation cluster -- the FIRST member in input order (a ranked list keeps its best-ranked stream).
+    2026-11-04 audit (P0-3): PBO on a leaderboard of near-duplicates (same entry rule, nudged parameters) measures nothing, because the
+    'in-sample winner' and its out-of-sample rank are decided by ties between clones. Run it on one stream per cluster instead."""
+    info = effective_trial_count(streams, corr_threshold)
+    seen: dict[int, int] = {}
+    for i, lab in enumerate(info["labels"]):
+        seen.setdefault(int(lab), i)
+    return sorted(seen.values())
+
+
+def cluster_leaderboard(trade_lists: list, corr_threshold: float = 0.90) -> list[dict]:
+    """Group a ranked leaderboard (best first) by return-stream correlation (2026-11-04 audit, P2-3). Returns one row per entry:
+    {"rank", "cluster", "representative"} where ``representative`` marks the best-ranked member of its cluster. A leaderboard of ten
+    near-clones is one idea, not ten; showing and promoting clusters keeps the search from crowning (and PBO/DSR from counting) the same
+    edge repeatedly."""
+    streams = [daily_pnl_series(t) for t in trade_lists]
+    info = effective_trial_count(streams, corr_threshold)
+    reps = set(representatives(streams, corr_threshold)) if streams else set()
+    return [{"rank": i + 1, "cluster": int(info["labels"][i]), "representative": i in reps} for i in range(len(streams))]

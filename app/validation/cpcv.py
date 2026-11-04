@@ -495,7 +495,11 @@ def _pbo_from_path_results(path_results, n_candidates, n_groups, n_test_groups, 
         # OOS relative rank of that same candidate: fraction of candidates
         # it beats out-of-sample, in (0, 1). 0.5 boundary => coin-flip.
         oos_arr = np.array(oos_vals)
-        rank = float((oos_arr < oos_arr[is_best]).sum()) / max(n_candidates - 1, 1) if n_candidates > 1 else 1.0
+        # 2026-11-04 (P0-3): MIDRANK ties. The strict ``<`` counted every tie as a loss, so a pool of candidates with identical
+        # out-of-sample values (clones, or paths where nothing traded) read as overfit. A tie now counts half a win.
+        _below = float((oos_arr < oos_arr[is_best]).sum())
+        _ties = float((oos_arr == oos_arr[is_best]).sum()) - 1.0
+        rank = (_below + 0.5 * _ties) / max(n_candidates - 1, 1) if n_candidates > 1 else 1.0
         # avoid exact 0/1 for a well-defined logit
         rank_clamped = min(max(rank, 1e-3), 1 - 1e-3)
         logit = math.log(rank_clamped / (1 - rank_clamped))
@@ -507,7 +511,7 @@ def _pbo_from_path_results(path_results, n_candidates, n_groups, n_test_groups, 
     if valid_path_count == 0:
         raise CPCVError("No CPCV path produced enough train/test bars to evaluate any candidate.")
 
-    pbo = float(np.mean([r <= 0.5 for r in oos_rank_per_path])) if n_candidates > 1 else (0.0 if oos_rank_per_path and oos_rank_per_path[0] >= 0.5 else 1.0)
+    pbo = float(np.mean([1.0 if r < 0.5 else (0.5 if r == 0.5 else 0.0) for r in oos_rank_per_path])) if n_candidates > 1 else (0.0 if oos_rank_per_path and oos_rank_per_path[0] >= 0.5 else 1.0)
 
     mean_is_by_candidate = is_matrix[:valid_path_count].mean(axis=0).tolist() if valid_path_count else [0.0] * n_candidates
     mean_oos_by_candidate = oos_matrix[:valid_path_count].mean(axis=0).tolist() if valid_path_count else [0.0] * n_candidates
@@ -723,9 +727,11 @@ class PBOGateResult:
     max_pbo: float        # the bar it had to stay under
     reason: str           # one human-readable line, pass or fail
     pbo_result: PBOResult | None = None
+    informational: bool = False   # 2026-11-04 (P0-3): measured and reported, but not a reject gate
+    n_pool: int | None = None     # candidates actually in the (deduplicated) pool
 
 
-def pbo_gate(pbo_result: PBOResult | None, max_pbo: float = 0.5) -> PBOGateResult:
+def pbo_gate(pbo_result: PBOResult | None, max_pbo: float = 0.5, informational: bool = False, n_pool: int | None = None) -> PBOGateResult:
     """The Probability of Backtest Overfitting as a REJECT gate, not a
     diagnostic note.
 
@@ -777,7 +783,9 @@ def pbo_gate(pbo_result: PBOResult | None, max_pbo: float = 0.5) -> PBOGateResul
             f"candidates) -- the in-sample winner lands in the bottom half out-of-sample more "
             f"often than a coin flip, so crowning this candidate would be selecting noise."
         )
+    if informational and not passed:
+        reason = reason.replace("REJECTED by the PBO gate", "PBO (informational, not rejecting)")
     return PBOGateResult(
         passed=passed, pbo=pbo_result.pbo, max_pbo=max_pbo, reason=reason,
-        pbo_result=pbo_result,
+        pbo_result=pbo_result, informational=bool(informational), n_pool=n_pool,
     )
