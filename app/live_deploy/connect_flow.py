@@ -327,7 +327,20 @@ def preflight_checklist(
     if chosen is None and presets:
         chosen = presets[0]
     if chosen is not None:
-        if chosen.verified_on and chosen.source_url:
+        _stamp_state, _stamp_why = "unverified", ""
+        try:
+            from app.prop.presets import rules_stamp_state
+            _stamp_state, _stamp_why = rules_stamp_state(chosen)
+        except Exception:  # noqa: BLE001
+            _stamp_state = "ok" if (chosen.verified_on and chosen.source_url) else "unverified"
+        if _stamp_state == "stale":
+            # 2026-11-04 (audit P1-3): an old stamp no longer changes the backtest verdict; it is a deployment blocker instead, so the
+            # person must look at the firm's page today and say so before going live.
+            needs_ack = True
+            items.append({"key": "rules", "level": "ack", "title": f"{chosen.label}: rules were last verified {chosen.verified_on} -- re-check them today",
+                          "detail": (_stamp_why or "The stamp is older than the age limit.") + " Open the firm's rules page, compare the drawdown / daily-loss / "
+                                    "target numbers with the preset, and only then tick the acknowledgement. Firms change rules often."})
+        elif chosen.verified_on and chosen.source_url:
             items.append({"key": "rules", "level": "ok", "title": f"{chosen.label}: rules verified ({chosen.verified_on})",
                           "detail": f"Verification tier: {chosen.verification_tier or 'n/a'}."})
         else:
@@ -345,6 +358,23 @@ def preflight_checklist(
                               "detail": "Still missing: " + ", ".join(missing) + ". Run them on the Validate page before risking real money."})
             else:
                 items.append({"key": "validated", "level": "ok", "title": "All core validation checks are on record", "detail": ""})
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Where this strategy is on the journey (Candidate -> Validated -> Champion Candidate -> Forward Testing -> Production Ready)
+    if strategy_meta is not None:
+        try:
+            from app.scoring.champion_board import PROMOTION_STAGE_TITLES, PROMOTION_STAGES, evaluate_promotion
+            st = evaluate_promotion(strategy_meta)
+            if st.stage == "production_ready":
+                items.append({"key": "stage", "level": "ok", "title": "Production Ready: forward test completed", "detail": ""})
+            elif st.stage == "forward_testing":
+                items.append({"key": "stage", "level": "warn", "title": "Still in Forward Testing",
+                              "detail": "Let the forward test run its minimum days on a demo account, then promote it to Production Ready on the Champion Board before deploying with real capital."})
+            else:
+                items.append({"key": "stage", "level": "warn", "title": f"Not forward tested yet (stage: {PROMOTION_STAGE_TITLES[st.stage]})",
+                              "detail": ("Go to Forward Test (MT5) and run it on a demo account first -- it is the step that proves the strategy with real fills. "
+                                         "Then promote it on the Champion Board.")})
         except Exception:  # noqa: BLE001
             pass
 
