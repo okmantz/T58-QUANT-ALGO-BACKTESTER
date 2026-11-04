@@ -25,6 +25,7 @@ from pathlib import Path
 import pandas as pd
 
 MIN_YEARS_FOR_READY = 5.0
+MIN_YEARS_WITH_TRANSFER = 3.0   # 2026-11-04 (P1-4): READY from >= 3 years when the pooled cross-market test passed
 MIN_ROLL_EVENTS_TO_FLAG = 2     # one stray jump can be a real gap; two or more is a roll pattern
 MANIFEST_RELATIVE = Path("data") / "data_manifest.json"
 _SYNTH = re.compile(r"synthetic|\bfake\b|\bsim(ulated)?\b|\bdemo\b", re.I)
@@ -65,6 +66,8 @@ class DataGateResult:
     synthetic: bool
     reasons: list = field(default_factory=list)
     manifest_row: dict | None = None
+    short_history: bool = False       # 3 <= years < 5 and no passing cross-market test: ladder capped at FORWARD-TEST CANDIDATE
+    cleared_by_transfer: bool = False
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -111,9 +114,17 @@ def frame_years(df: pd.DataFrame) -> float | None:
 
 
 def check_dataset(df: pd.DataFrame | None, label: str | None = None, *, manifest: dict | None = None,
-                  min_years: float = MIN_YEARS_FOR_READY) -> DataGateResult:
-    """Can this data support a READY verdict? See module docstring."""
+                  min_years: float = MIN_YEARS_FOR_READY, transfer_passed: bool | None = None,
+                  min_years_with_transfer: float = MIN_YEARS_WITH_TRANSFER) -> DataGateResult:
+    """Can this data support a READY verdict? See module docstring.
+
+    2026-11-04 audit (P1-4): length alone is a blunt proxy for "covers several regimes". With ``transfer_passed=True`` (the edge also shows up
+    on a sibling market, i.e. the cross-market test passed) 3-5 years is enough for READY. Without it, 3-5 years still blocks READY (cap at
+    MARGINAL -> FORWARD-TEST CANDIDATE on the ladder; ``short_history`` is set). Under 3 years, synthetic, unreadable and unadjusted-roll data
+    remain hard blockers whatever the transfer result."""
     reasons: list[str] = []
+    cleared = False
+    short_hist = False
     row = _find_row(manifest if manifest is not None else load_manifest(), label)
     years = frame_years(df) if df is not None else (row or {}).get("years")
     synthetic = bool(label and _SYNTH.search(str(label))) or bool(row and row.get("synthetic"))
@@ -124,13 +135,20 @@ def check_dataset(df: pd.DataFrame | None, label: str | None = None, *, manifest
     if years is None:
         reasons.append("DATA GATE: could not measure the history length of this dataset; READY is not allowed on unmeasured data.")
     elif years < min_years:
-        reasons.append(f"DATA GATE: only {years:.1f} years of history (< {min_years:g}); too short to cover more than one volatility regime, so READY is not allowed.")
+        if transfer_passed and years >= min_years_with_transfer:
+            cleared = True
+        else:
+            if years >= min_years_with_transfer:
+                short_hist = True
+            reasons.append(f"DATA GATE: only {years:.1f} years of history (< {min_years:g}); too short to cover more than one volatility regime, so READY is not allowed"
+                           + (f" unless the cross-market transfer test passes (>= {min_years_with_transfer:g} years needed)." if years >= min_years_with_transfer else "."))
     if df is not None and looks_like_futures(label):
         counts = roll_gap_counts(df)
         if counts is not None and counts[0] + counts[1] >= MIN_ROLL_EVENTS_TO_FLAG:
             reasons.append(f"DATA GATE: '{label}' carries unadjusted contract-roll gaps ({counts[0]} splice(s), {counts[1]} interleaved flip(s)); "
                            "every roll is a fake price jump the strategy can 'trade', so READY is not allowed. Re-import it back-adjusted.")
-    return DataGateResult(ok_for_ready=not reasons, years=years, synthetic=synthetic, reasons=reasons, manifest_row=row)
+    return DataGateResult(ok_for_ready=not reasons, years=years, synthetic=synthetic, reasons=reasons, manifest_row=row,
+                          short_history=bool(short_hist and len(reasons) == 1), cleared_by_transfer=cleared)
 
 
 def assert_manifest_fresh(root: Path | None = None) -> list:
