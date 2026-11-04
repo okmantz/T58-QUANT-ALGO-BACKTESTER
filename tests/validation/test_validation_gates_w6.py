@@ -299,10 +299,21 @@ def test_dsr_gate_failure_rejects_in_verdict():
     assert not gate.passed
     verdict, reasons, _scorecard, _ruin_fail, _lh_fail = _make_verdict(
         _mc(), _wf(is_stable=True), _icir(ok=True),
-        dsr_gate_result=gate,
+        dsr_gate_result=gate, dsr_hard_gate=True,
     )
     assert verdict == "NOT READY"
     assert any("deflated sharpe" in r.lower() for r in _hard_gate_reasons(reasons))
+
+
+def test_dsr_gate_failure_caps_not_rejects_by_default():
+    """2026-11-04 audit (P0-2): the in-sample DSR is a score input + cap, no longer a NOT READY by itself."""
+    import numpy as np
+    rng = np.random.default_rng(7)
+    gate = deflated_sharpe_gate(observed_sharpe=0.2, trial_sharpes=list(rng.normal(0.0, 0.6, 500)), n_trials=500, n_trade_returns=200)
+    assert not gate.passed
+    verdict, reasons, _sc, _r, _l = _make_verdict(_mc(), _wf(is_stable=True), _icir(ok=True), dsr_gate_result=gate)
+    assert verdict != "NOT READY"
+    assert any("deflated sharpe" in r.lower() for r in reasons)
 
 
 # ---------------------------------------------------------------------------

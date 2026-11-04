@@ -43,7 +43,7 @@ def test_missing_components_are_renormalized_not_penalized():
     result = compute_t58_score(inputs)
     assert result.score == 100.0
     assert result.n_components_used == 2
-    assert result.n_components_total == 12   # 2026-10-17: funded survival, replay and expectancy LB joined the scorecard
+    assert result.n_components_total == 14   # 2026-10-17: funded survival, replay and expectancy LB joined; 2026-11-04: speed efficiency and unseen-data DSR joined
     assert result.notes
 
 

@@ -85,13 +85,15 @@ def test_failed_write_aborts_instead_of_reporting_a_total(ledger, monkeypatch):
 
 # --- same-data trials never decay ------------------------------------------------------------------------------------------
 
-def test_two_same_data_runs_800_days_apart_give_equal_counts(ledger):
+def test_same_data_trials_fade_only_on_the_long_clock(ledger):
+    """2026-11-04 audit: same-window trials used to NEVER decay; they now age on a 5-year half-life (much slower than other-window trials)."""
     now = 1_800_000_000.0
     ledger.record("S", 100, now=now - 800 * DAY, data_fp="FP1")
     ledger.record("S", 50, now=now, data_fp="FP1")
-    assert ledger.total("S", now=now, current_fp="FP1") == 150
-    assert ledger.total("S", now=now - 800 * DAY, current_fp="FP1") == 150    # same count whichever day it is asked
-    assert ledger.total("S", now=now) < 150                                  # without the fingerprint the old trials still fade
+    same = ledger.total("S", now=now, current_fp="FP1")
+    assert 120 <= same < 150                                                 # 100 x 0.5^(800/1825) ~ 74, plus the fresh 50
+    assert ledger.total("S", now=now - 800 * DAY, current_fp="FP1") == 150    # asked before the second run: nothing has faded yet
+    assert ledger.total("S", now=now) < same                                 # other-window / no-fingerprint trials fade faster (730-day half-life)
 
 
 def test_a_different_data_window_still_ages(ledger):
@@ -106,11 +108,13 @@ def test_full_pipeline_helpers_pass_the_data_fingerprint(ledger):
     ledger.record("S", 100, now=old, data_fp="FP1")
     ledger.book_run("search:1", {"famx": 200}, now=old, data_fp="FP1")
     cfg = SimpleNamespace(ledger_family="famx", library_ref=None)
-    assert fp._ledger_prior_trials(strat, data_fp="FP1") == 100
-    assert fp._ledger_family_prior(cfg, strat, data_fp="FP1") == 200
-    assert fp._ledger_prior_trials(strat) < 100 and fp._ledger_family_prior(cfg, strat) < 200   # old behaviour without a fingerprint
+    assert 70 <= fp._ledger_prior_trials(strat, data_fp="FP1") < 100          # long same-data half-life: ~74 after 800 days
+    assert 140 <= fp._ledger_family_prior(cfg, strat, data_fp="FP1") < 200
+    assert fp._ledger_prior_trials(strat, data_fp="FP1") > fp._ledger_prior_trials(strat)   # without a fingerprint the old trials fade faster
+    assert fp._ledger_family_prior(cfg, strat, data_fp="FP1") > fp._ledger_family_prior(cfg, strat)
+    before = fp._ledger_prior_trials(strat, data_fp="FP1")
     fp._ledger_record_trials(strat, 7, data_fp="FP1")
-    assert fp._ledger_prior_trials(strat, data_fp="FP1") == 107
+    assert fp._ledger_prior_trials(strat, data_fp="FP1") == before + 7
     entries = json.loads(ledger._PATH.read_text())["s"]
     assert all(e.get("fp") == "FP1" for e in entries)                        # every Full Pipeline booking carries the fingerprint
 
@@ -133,7 +137,7 @@ def test_decay_report_states_which_rule_fired(ledger):
     ledger.record("S", 40, now=now - 800 * DAY, data_fp="OTHER")
     r = ledger.decay_report("S", now=now, current_fp="FP1")
     assert r["raw"] == 140 and r["same_data"] == 100 and r["aged_by_half_life"] == 40
-    assert "FP1" in r["rule"] and "do not decay" in r["rule"]
+    assert "FP1" in r["rule"] and "long" in r["rule"]
     assert "half-life" in ledger.decay_report("S", now=now, current_fp="ZZZ")["rule"]
     assert "no aging" in ledger.decay_report("S", half_life_days=None)["rule"]
 
