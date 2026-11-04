@@ -73,3 +73,43 @@ def test_gate_vector_never_raises_and_reports_unmeasured():
 def test_restamp_overrides_load(tmp_path):
     from app.prop import presets
     assert presets._VERIFIED_STAMPS  # table still present with override merge
+
+
+# -- 2026-11-04 audit: full gate-stack planted-drift checks ------------------------------------------------------------
+def test_gate_stack_sees_planted_edge_and_rejects_zero_edge():
+    """One seed each (the 20-seed sweep with the roadmap targets is scripts/planted_drift_sweep.py --check, the nightly regression)."""
+    from app.validation.planted_edge import run_gate_stack
+    good = run_gate_stack(0.20, seed=3, mc_sims=800, outer_reps=10, outer_sims=200)
+    assert good.holdout_confirmed and good.unseen_expectancy_ok
+    bad = run_gate_stack(0.0, seed=3, mc_sims=800, outer_reps=10, outer_sims=200)
+    assert not bad.detected and not bad.forward_candidate
+
+
+def test_speed_prefers_a_fast_70_over_a_slow_80():
+    from app.scoring.speed import prefer_faster, speed_adjusted_pass_pct
+    assert prefer_faster(70.0, 30.0, 80.0, 150.0) == -1
+    assert speed_adjusted_pass_pct(70.0, 30.0) == 70.0 and speed_adjusted_pass_pct(80.0, 150.0) < 40.0
+
+
+def test_calendar_days_not_trading_days_drive_the_pass_window():
+    from app.scoring.speed import trading_to_calendar_days
+    assert trading_to_calendar_days(100) == 140.0 and trading_to_calendar_days(None) is None
+
+
+def test_unseen_dsr_passes_real_edge_and_fails_noise():
+    from app.orchestration.audit_layers import unseen_dsr
+    good = unseen_dsr(list(_r(500, 0.56, 1.2, 11)), 300)
+    noise = unseen_dsr(list(_r(500, 0.5, 1.0, 12)), 300)
+    assert good is not None and good["passed"] and noise is not None and not noise["passed"]
+
+
+def test_rule_based_sizing_uses_no_dev_result():
+    from types import SimpleNamespace
+    from app.orchestration.full_pipeline import FullPipelineConfig, _size_by_rule
+    # a losing / absent baseline still gets the same size: the rule reads only the firm's limit and the config
+    cfg = FullPipelineConfig()
+    assert cfg.size_rule == "rule" and cfg.size_rule_loss_streak == 8
+    rules = SimpleNamespace(max_drawdown_pct=10.0, account_size=100000.0)
+    risk = SimpleNamespace(sizing_mode="skip", planned_target_dollars=300.0)
+    out_risk, out_bt, adj = _size_by_rule(None, None, risk, "BASELINE", rules, None, cfg, lambda m: None)
+    assert out_risk is risk and out_bt == "BASELINE" and adj is None   # only rr_planned is resized
