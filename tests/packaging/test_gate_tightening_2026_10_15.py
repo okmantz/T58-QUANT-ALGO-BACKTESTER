@@ -135,7 +135,40 @@ def test_monthly_subscription_charges_every_expected_month():
     flat = evaluate_ev(challenge_months=3, monthly_subscription=False, **kw)
     assert one.c == 49 and three.c == 147 and flat.c == 49
     assert one.ev - three.ev == pytest.approx(98.0)
+    # trading-day input is still converted (x7/5); calendar-day input is not converted again
     assert evaluation_months(None) == 1 and evaluation_months(30) == 2 and evaluation_months(61) == 3
+    assert evaluation_months(30, calendar_days=True) == 1 and evaluation_months(31, calendar_days=True) == 2 and evaluation_months(61, calendar_days=True) == 3
     from app.prop.presets import get_fee_info
     assert get_fee_info("topstep_50k").monthly_subscription is True
     assert not get_fee_info("lucid_50k").monthly_subscription
+
+
+def test_per_attempt_billing_charges_each_attempt_for_its_own_calendar_days():
+    from app.orchestration.ev_verdict import (billing_periods, billing_profile, attempt_cost, compute_ev_attempts,
+                                              break_even_pass_rate_attempts)
+    # 29 days -> 1 period, 30 -> 1, 31 -> 2, 61 -> 3 (the audit's 29/29/61 example: 1 + 1 + 3 = 5 periods, not 3 x median)
+    assert [billing_periods(d) for d in (29, 30, 31, 61)] == [1, 1, 2, 3]
+    prof = billing_profile([1, 1, 1], [29, 29, 61])
+    assert prof["periods_pass"] == pytest.approx(5 / 3) and prof["periods_nonpass"] is None
+    assert attempt_cost(prof, 1.0, 49.0) == pytest.approx(49.0 * 5 / 3)
+    # fast-fail / slow-pass: failures bust inside a month, passes take 3 periods
+    prof = billing_profile([2, 2, 2, 1], [5, 9, 12, 85])
+    assert prof["periods_nonpass"] == 1.0 and prof["periods_pass"] == 3.0
+    assert attempt_cost(prof, 0.25, 50.0) == pytest.approx(50.0 * (0.25 * 3 + 0.75 * 1))
+    ev = compute_ev_attempts(0.25, 0.5, 3000.0, prof, 50.0, activation_fee=100.0)
+    assert ev == pytest.approx(0.25 * (0.5 * 3000 - 100) - 50.0 * (0.25 * 3 + 0.75 * 1))
+    # the numeric break-even is the exact root of EV(p)
+    pstar = break_even_pass_rate_attempts(0.5, 3000.0, prof, 50.0, activation_fee=100.0)
+    assert compute_ev_attempts(pstar, 0.5, 3000.0, prof, 50.0, 100.0) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_evaluate_ev_uses_per_attempt_billing_and_lower_bound():
+    from app.orchestration.ev_verdict import billing_profile, evaluate_ev
+    prof = billing_profile([2, 2, 2, 1], [5, 9, 12, 85])
+    kw = dict(legacy_verdict="MARGINAL", holdout_pass_rate=0.7, window_payout_rate=0.4, payout_value=3000, challenge_price=49,
+              profit_split_pct=90, activation_fee=149, bankroll_ruin_pct=5, monthly_subscription=True, billing_profile=prof)
+    flat = evaluate_ev(challenge_months=3, **{k: v for k, v in kw.items() if k != "billing_profile"})
+    per = evaluate_ev(**kw)
+    assert per.billing and per.ev > flat.ev          # fast failures are cheaper than three months on every attempt
+    lb = evaluate_ev(holdout_pass_rate_lb=0.01, **kw)  # a tiny lower bound cannot clear break-even even when the point estimate does
+    assert lb.p_lb == pytest.approx(0.01) and lb.ev_lb < 0 and lb.label != per.label or lb.ev_lb < 0

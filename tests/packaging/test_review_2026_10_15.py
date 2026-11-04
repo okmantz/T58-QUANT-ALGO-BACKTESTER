@@ -211,7 +211,9 @@ def test_ceiling_is_no_longer_stuck_below_the_strong_cut():
         expectancy=sc._expectancy_score(0.3), drawdown=sc._drawdown_score(5.0, 10.0),
     )
     res = sc.compute_t58_score(inputs)
-    assert res.score == pytest.approx(93.75)   # conformance is informational now (weights sum 120)
+    # 2026-11-04: monte_carlo_robustness dropped to weight 1 and speed_efficiency / dsr_unseen were added (both absent here, so renormalised away)
+    assert res.score == pytest.approx(93.1034, abs=1e-3)
+    assert res.score > 85.0
     assert res.t58_conformance == 100.0
     assert res.tier == "Elite"
     old = (8 * 0 + 100 * 100 + 0 + 5 * 15 + 10 * 50) / 125.0
