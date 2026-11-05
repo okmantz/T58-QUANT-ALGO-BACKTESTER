@@ -321,11 +321,12 @@ class FullPipelineConfig:
     # walk-forward-aware GA's own search, and the final validated run --
     # uses a graduated risk-throttle preset derived from THIS run's own
     # PropRules (cut size as the account nears its daily-loss/drawdown
-    # floor; optionally lock in a good day's profit). Off by default so
-    # existing behavior/reports are unchanged unless explicitly turned on.
+    # floor; optionally lock in a good day's profit). ON by default
+    # (2026-11-05): the Test (Full Pipeline) page, CLI and Speed Run all
+    # validate with limit-aware sizing unless it is explicitly unchecked.
     # This directly targets the eval_pass_probability objective itself,
     # independent of whatever edge the strategy has.
-    adaptive_risk_enabled: bool = False
+    adaptive_risk_enabled: bool = True
     adaptive_risk_daily_profit_lock_pct: float | None = 80.0
     save_to_library: bool = True           # code strategies only -- manual configs aren't files
     library_status: str | None = None      # None = auto-pick from the READY/MARGINAL/NOT READY
