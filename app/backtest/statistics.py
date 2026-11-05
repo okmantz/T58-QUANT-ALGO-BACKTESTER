@@ -862,3 +862,50 @@ def compute_cost_ladder(trades: list, rungs_pct: list[float] | None = None) -> l
             "win_rate": float((pnls > 0).sum() / len(pnls) * 100) if len(pnls) else 0.0,
         })
     return ladder
+
+
+#: Rungs of the futures cost ladder, in TICKS of extra round-turn friction per contract (2026-11 audit; Edition 1.1 Ch. 35.7). On NQ
+#: (tick 0.25) these are exactly the report's 0.5 / 1 / 2 / 3 points. Futures costs are fixed ticks and dollars per contract, so a
+#: percent-of-notional ladder (``compute_cost_ladder``) says nothing about them.
+POINT_LADDER_TICKS = (0.0, 2.0, 4.0, 8.0, 12.0)
+
+
+def compute_point_cost_ladder(trades: list, tick_size: float, rungs_ticks=POINT_LADDER_TICKS) -> list[dict]:
+    """Re-costs the SAME trades at extra round-turn friction measured in price POINTS (ticks x tick size), per contract.
+
+    Extra cost per trade = points x size (the engine's "1 unit = $1 per price-unit move"), so it is the same dollars on a 1-lot or a
+    5-lot scaled to its size. Each rung reports net profit, profit factor and MEAN R after the added cost (R = pnl over planned
+    risk), which is what the rulebook's gates read ("still positive at 2 points / 3 points"). Trades with no planned risk are skipped
+    for the R figure but still count in profit."""
+    tick = float(tick_size) if tick_size and float(tick_size) > 0 else 0.0
+    rows = [(float(t.pnl), float(t.size), getattr(t, "initial_risk", None)) for t in (trades or [])
+            if t is not None and getattr(t, "pnl", None) is not None and np.isfinite(t.pnl) and getattr(t, "size", None)]
+    out: list[dict] = []
+    for ticks in rungs_ticks:
+        pts = ticks * tick
+        pnls, rs = [], []
+        for pnl, size, ir in rows:
+            net = pnl - pts * size
+            pnls.append(net)
+            if ir and ir > 0:
+                rs.append(net / (float(ir) * size))
+        arr = np.asarray(pnls, dtype=float)
+        gp = float(arr[arr > 0].sum()) if arr.size else 0.0
+        gl = float(arr[arr <= 0].sum()) if arr.size else 0.0
+        out.append({"extra_ticks": float(ticks), "extra_points": float(pts), "net_profit": float(arr.sum()) if arr.size else 0.0,
+                    "profit_factor": (gp / abs(gl)) if gl != 0 else (float("inf") if gp > 0 else 0.0),
+                    "win_rate": float((arr > 0).sum() / arr.size * 100.0) if arr.size else 0.0,
+                    "mean_r": float(np.mean(rs)) if rs else None, "n_trades": int(arr.size)})
+    return out
+
+
+def point_ladder_summary(ladder: list[dict]) -> str:
+    """One plain line: where the edge dies on the ladder, in points and R."""
+    if not ladder:
+        return "no cost ladder (no trades)"
+    base = ladder[0]
+    dead = next((r for r in ladder[1:] if (r["mean_r"] is not None and r["mean_r"] <= 0) or r["net_profit"] <= 0), None)
+    parts = ", ".join(f"+{r['extra_points']:g} pt: {('%+.3fR' % r['mean_r']) if r['mean_r'] is not None else 'n/a'}" for r in ladder[1:])
+    where = (f"the edge is gone by +{dead['extra_points']:g} points per round turn" if dead is not None
+             else f"the edge survives every rung up to +{ladder[-1]['extra_points']:g} points per round turn")
+    return f"mean R by added friction -- base {('%+.3fR' % base['mean_r']) if base['mean_r'] is not None else 'n/a'}; {parts}. {where}."
