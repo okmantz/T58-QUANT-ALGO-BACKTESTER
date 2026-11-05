@@ -1,0 +1,79 @@
+{
+ "schema": 1,
+ "pack_version": 1,
+ "sealed_from": "2025-09-01",
+ "symbols": {
+  "ES": {
+   "available": true,
+   "file": "ES1!/futures_ES.F_1m.parquet",
+   "base": "ES",
+   "dollars_per_point": 50.0,
+   "dev": {
+    "bars": 1999583,
+    "start": "2020-01-01T23:00:00+00:00",
+    "end": "2025-08-31T23:59:00+00:00",
+    "sha256": "a4f1bf3c615c244ef16f192422fa834b721daccaf8a70597757a3c4feee29d64"
+   },
+   "sealed": {
+    "bars": 353626,
+    "start": "2025-09-01T00:00:00+00:00",
+    "end": "2026-09-01T23:59:00+00:00",
+    "sha256": "da104477781997aa1955e62ca9201c84641983e946906327a18479142be6d67d"
+   }
+  },
+  "NQ": {
+   "available": true,
+   "file": "NQ1!/futures_NQ.F_1m.parquet",
+   "base": "NQ",
+   "dollars_per_point": 20.0,
+   "dev": {
+    "bars": 1991510,
+    "start": "2020-01-01T23:00:00+00:00",
+    "end": "2025-08-31T23:59:00+00:00",
+    "sha256": "56b82803ac382a27efafe7961c0e16126242f19222d2e1fa7193eae70f65f8cf"
+   },
+   "sealed": {
+    "bars": 173309,
+    "start": "2025-09-01T00:00:00+00:00",
+    "end": "2026-03-01T23:59:00+00:00",
+    "sha256": "61ee8d72b565e1344f65af2900246d579be510b9e88a56f332a14ac477da5577"
+   }
+  },
+  "MES": {
+   "available": true,
+   "file": "ES1!/futures_ES.F_1m.parquet",
+   "base": "ES",
+   "dollars_per_point": 5.0,
+   "dev": {
+    "bars": 1999583,
+    "start": "2020-01-01T23:00:00+00:00",
+    "end": "2025-08-31T23:59:00+00:00",
+    "sha256": "a4f1bf3c615c244ef16f192422fa834b721daccaf8a70597757a3c4feee29d64"
+   },
+   "sealed": {
+    "bars": 353626,
+    "start": "2025-09-01T00:00:00+00:00",
+    "end": "2026-09-01T23:59:00+00:00",
+    "sha256": "da104477781997aa1955e62ca9201c84641983e946906327a18479142be6d67d"
+   }
+  },
+  "MNQ": {
+   "available": true,
+   "file": "NQ1!/futures_NQ.F_1m.parquet",
+   "base": "NQ",
+   "dollars_per_point": 2.0,
+   "dev": {
+    "bars": 1991510,
+    "start": "2020-01-01T23:00:00+00:00",
+    "end": "2025-08-31T23:59:00+00:00",
+    "sha256": "56b82803ac382a27efafe7961c0e16126242f19222d2e1fa7193eae70f65f8cf"
+   },
+   "sealed": {
+    "bars": 173309,
+    "start": "2025-09-01T00:00:00+00:00",
+    "end": "2026-03-01T23:59:00+00:00",
+    "sha256": "61ee8d72b565e1344f65af2900246d579be510b9e88a56f332a14ac477da5577"
+   }
+  }
+ }
+}
