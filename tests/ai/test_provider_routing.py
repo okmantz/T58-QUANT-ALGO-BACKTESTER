@@ -1,4 +1,4 @@
-"""AI provider routing: Ollama default; Claude/OpenAI used only when selected AND keyed."""
+"""AI provider routing: "auto" default (saved hosted key first, Ollama fallback); Ollama-only and explicit choices honored."""
 import dataclasses
 
 import pytest
@@ -17,9 +17,46 @@ def _isolated(tmp_path, monkeypatch):
     os_._invalidate_cache()
 
 
-def test_default_is_ollama():
-    assert os_.saved_provider() == "ollama"
+def test_default_is_auto_and_uses_ollama_without_keys():
+    assert os_.saved_provider() == "auto"
     assert os_.effective_provider(os_.OllamaSettings()) == "ollama"
+
+
+def test_auto_prefers_saved_key_then_falls_back_to_ollama(_isolated, monkeypatch):
+    s = os_.OllamaSettings(enabled=True)
+    _isolated["openai_api_key"] = "sk-x"
+    assert os_.effective_provider(s) == "openai"
+    assert os_.provider_chain(s) == ["openai", "ollama"]
+    _isolated["claude_api_key"] = "sk-ant-x"
+    assert os_.provider_chain(s) == ["claude", "openai", "ollama"]
+
+
+def test_explicit_ollama_ignores_saved_keys(_isolated):
+    _isolated["claude_api_key"] = "sk-ant-x"
+    assert os_.effective_provider(os_.OllamaSettings(provider="ollama")) == "ollama"
+    assert os_.provider_chain(os_.OllamaSettings(provider="ollama")) == ["ollama"]
+
+
+def test_remote_failure_falls_back_to_ollama(_isolated, monkeypatch):
+    _isolated["claude_api_key"] = "sk-ant-x"
+    s = os_.OllamaSettings(enabled=True)
+
+    def boom(*a, **k):
+        raise tr.OllamaError("Claude returned HTTP 401")
+
+    monkeypatch.setattr(tr, "_remote_complete", boom)
+    monkeypatch.setattr(tr, "ensure_ready", lambda settings, model=None, **k: "m")
+    monkeypatch.setattr(tr, "_stream_pieces", lambda *a, **k: iter(["from ", "ollama"]))
+    assert tr.generate(s, "hi") == "from ollama"
+    assert tr.chat(s, [{"role": "user", "content": "x"}]) == "from ollama"
+
+
+def test_remote_failure_with_ollama_disabled_reports_remote_error(_isolated, monkeypatch):
+    _isolated["claude_api_key"] = "sk-ant-x"
+    s = os_.OllamaSettings(enabled=False)
+    monkeypatch.setattr(tr, "_remote_complete", lambda *a, **k: (_ for _ in ()).throw(tr.OllamaError("Claude returned HTTP 401")))
+    with pytest.raises(tr.OllamaError, match="HTTP 401"):
+        tr.generate(s, "hi")
 
 
 def test_selected_provider_without_key_falls_back_to_ollama(_isolated):
