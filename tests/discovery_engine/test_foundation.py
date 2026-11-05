@@ -174,10 +174,14 @@ def test_counter_books_once_with_kinds(ledger):
     assert ledger.family_prior("orb") == 150 and ledger.run_kinds("run1")["prefilter_kills"] == 100
 
 
-def test_same_window_trials_do_not_decay(ledger):
-    ledger.record("family:orb", 1000, now=1.0, data_fp="fpA")      # booked a very long time ago
-    assert ta.lifetime_trials("family:orb", data_fp="fpA") == 1000
-    assert ta.lifetime_trials("family:orb", data_fp="fpB") < 1000   # window changed -> decays
+def test_same_window_trials_decay_only_on_the_long_clock(ledger):
+    # 2026-11 audit (P0-2): same-window trials fade on a 5-year half-life instead of never; other windows use the 2-year one.
+    import time
+    ledger.record("family:orb", 1000, now=time.time() - 400 * 86400, data_fp="fpA")      # booked ~13 months ago
+    same = ta.lifetime_trials("family:orb", data_fp="fpA")
+    other = ta.lifetime_trials("family:orb", data_fp="fpB")
+    assert 850 <= same < 1000                    # barely faded: 0.5 ** (400 / 1825)
+    assert other < same                          # a different data window ages faster
 
 
 def test_trial_inputs_add_ledger_and_never_loosen(ledger):
