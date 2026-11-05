@@ -655,7 +655,7 @@ def row_next_step(row: dict[str, Any]) -> dict[str, str]:
     ]
     if first["key"] == "backtested":
         q = urlencode({"load_strategy_type": row["strategy_type"], "load_strategy_name": row["filename"]})
-        return {"kind": "work", "text": "Needs a first test run", "href": f"/full-pipeline?{q}", "label": "Run Full Pipeline"}
+        return {"kind": "work", "text": "Needs a first test run", "href": f"/full-pipeline?{q}", "label": "Test a Strategy"}
     if missing_checks:
         n = len(missing_checks)
         q = urlencode({"strategy_pick": pick, "run": ",".join(missing_checks)})
@@ -669,11 +669,33 @@ def row_next_step(row: dict[str, Any]) -> dict[str, str]:
         q = urlencode({"strategy_pick": pick})
     else:
         q = ""
-    label = {"/optimize-simple": "Open Optimize", "/full-pipeline": "Run Full Pipeline",
+    label = {"/optimize-simple": "Open Optimize", "/full-pipeline": "Test a Strategy",
              "/validate-simple": "Open Validate", "/forward-test": "Open Forward Test",
              "/library": "Open Library"}.get(base, "Open")
     return {"kind": "work", "text": first["label"] + (f" — {first['detail']}" if first.get("detail") else ""),
             "href": base + (f"?{q}" if q else ""), "label": label}
+
+
+def _row_extras(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Extra per-row facts the Champion page needs: market, trade count, drawdown, podium place, lookahead/staleness flags."""
+    lr = metadata.get("last_run") or {}
+    lc = metadata.get("last_champion_check") or {}
+    pod = metadata.get("podium") or {}
+    place = pod.get("place")
+    return {
+        "instrument": str(lr.get("instrument") or metadata.get("instrument") or "").upper(),
+        "prop_preset": str(lr.get("prop_preset") or ""),
+        "trades": _num(lr, "trades"),
+        "net_profit": _num(lr, "net_profit"),
+        "win_rate": _num(lr, "win_rate"),
+        "max_dd": _num(lr, "max_dd"),
+        "ladder_stage": str(lc.get("ladder_stage") or ""),
+        "lookahead_clean": (metadata.get("lookahead") or {}).get("clean") is not False,
+        "hard_fail": bool(lr.get("risk_of_ruin_hard_fail") or lr.get("lookahead_hard_fail")),
+        "stale_methods": list((metadata.get("stale_validation") or {}).get("methods") or []),
+        "podium_place": int(place) if isinstance(place, (int, float)) and int(place) in (1, 2, 3) else None,
+        "podium_at": pod.get("awarded_at"),
+    }
 
 
 def list_board(strategy_type: Optional[str] = None) -> list[dict[str, Any]]:
@@ -704,6 +726,7 @@ def list_board(strategy_type: Optional[str] = None) -> list[dict[str, Any]]:
                 "promotion": promo.to_dict(),
                 "funnel_rank": funnel_rank(item.metadata, promo),
                 "modified": item.modified,
+                **_row_extras(item.metadata),
             })
     for r in rows:
         r["next"] = row_next_step(r)
@@ -924,3 +947,190 @@ def five_question_snapshot(current: Optional[dict], rows: list[dict[str, Any]]) 
         "verdict_explain": row.get("verdict_explain"),
         "row": row,
     }
+
+
+# ---------------------------------------------------------------------------
+# Promotion assessment, podium (1st / 2nd / 3rd) and same-market replacement (2026-11 Champion page redesign)
+# ---------------------------------------------------------------------------
+PODIUM_PLACES = (1, 2, 3)
+PODIUM_LABELS = {1: "1st place", 2: "2nd place", 3: "3rd place"}
+# A strategy can take a podium place once it has cleared the Champion Candidate gate.
+PODIUM_MIN_STAGE = "champion_candidate"
+_FORWARD_OK_LADDER = ("FORWARD-TEST CANDIDATE", "EVALUATE", "FUNDED")
+
+
+def _is_row_champion_grade(row: dict[str, Any]) -> bool:
+    return PROMOTION_STAGES.index(row["promotion"]["stage"]) >= PROMOTION_STAGES.index(PODIUM_MIN_STAGE)
+
+
+def assessment_for_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Concise promotion assessment for ONE board row: eligibility, T58 score, four plain-language checks, the single next action.
+
+    The four checks are what a reader needs to trust a promotion at a glance; the per-stage numeric gates stay in ``requirements``.
+    """
+    promo = row["promotion"]
+    val = row.get("validation") or {}
+    verdict = (row.get("verdict") or "").upper()
+    ladder = (row.get("ladder_stage") or "").upper()
+    ready_ok = verdict == "READY" or ladder in _FORWARD_OK_LADDER
+    issues: list[str] = []
+    if not row.get("lookahead_clean", True):
+        issues.append("a confirmed look-ahead leak")
+    if row.get("hard_fail"):
+        issues.append("a hard-fail flag (ruin or look-ahead) on the last run")
+    if val.get("has_stale"):
+        issues.append("validation results that are out of date (the strategy changed since)")
+    checks = [
+        {"key": "validation", "ok": bool(val.get("complete")), "label": "Validation completed",
+         "detail": f"{val.get('ran', 0)} of {val.get('total', 5)} checks on record" + ("" if val.get("complete") else " -- run the missing ones on Validate")},
+        {"key": "ready", "ok": ready_ok, "label": "READY requirements satisfied",
+         "detail": (f"Last verdict: {verdict or 'not checked'}" + (f" / {ladder.title()}" if ladder else ""))},
+        {"key": "version", "ok": bool(row.get("trades")) or row.get("eval_pct") is not None, "label": "Strategy version recorded",
+         "detail": "Results are saved against this exact strategy file" if (row.get("trades") or row.get("eval_pct") is not None) else "No backtest on record for this file yet -- run it through Test"},
+        {"key": "issues", "ok": not issues, "label": "No unresolved critical issues",
+         "detail": ("None open" if not issues else "Open: " + "; ".join(issues))},
+    ]
+    all_ok = all(c["ok"] for c in checks)
+    can_stage = bool(promo.get("can_promote"))
+    eligible = can_stage and not issues
+    unmet = [r for r in promo["requirements"] if not r["met"]]
+    if promo.get("next_stage") is None:
+        headline, tone = "Final stage reached", "ok"
+    elif eligible:
+        headline, tone = "Eligible", "ok"
+    elif can_stage and issues:
+        headline, tone = "Blocked by an open issue", "bad"
+    else:
+        headline, tone = "Not eligible yet", "warn"
+    return {
+        "name": row["display_name"], "pick": f"{row['strategy_type']}::{row['filename']}",
+        "headline": headline, "tone": tone, "eligible": eligible, "all_checks_ok": all_ok,
+        "score": row.get("t58_score"), "tier": None, "checks": checks,
+        "stage": promo["stage_title"], "next_stage": promo.get("next_stage_title"),
+        "path_titles": promo.get("path_titles") or [],
+        "unmet": [{"label": r["label"], "detail": r.get("detail", "")} for r in unmet][:6],
+        "next": row.get("next") or {},
+        "can_award": _is_row_champion_grade(row) and not issues and not row.get("hard_fail") and verdict != "NOT READY",
+        "podium_place": row.get("podium_place"),
+        "instrument": row.get("instrument") or "",
+    }
+
+
+def podium_holders(rows: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+    out: dict[int, dict[str, Any]] = {}
+    for r in rows:
+        pl = r.get("podium_place")
+        if pl in PODIUM_PLACES and pl not in out:
+            out[pl] = r
+    return out
+
+
+def overlapping_holders(row: dict[str, Any], rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Other board strategies that already hold a podium place (or sit at Forward Testing and beyond) on the SAME market as ``row``.
+    Two strategies on one market are not diversification -- they win and lose on the same days -- so promoting a second one is a
+    replacement decision, and the page shows the two side by side first."""
+    inst = (row.get("instrument") or "").upper()
+    if not inst:
+        return []
+    me = (row["strategy_type"], row["filename"])
+    out = []
+    for r in rows:
+        if (r["strategy_type"], r["filename"]) == me or (r.get("instrument") or "").upper() != inst:
+            continue
+        deep = PROMOTION_STAGES.index(r["promotion"]["stage"]) >= PROMOTION_STAGES.index("forward_testing")
+        if r.get("podium_place") in PODIUM_PLACES or deep:
+            out.append(r)
+    return out
+
+
+_CMP_METRICS = (
+    ("t58_score", "T58 score", "{:.0f}", True), ("eval_pct", "Eval pass", "{:.0f}%", True), ("payout_pct", "Payout", "{:.0f}%", True),
+    ("oos_pct", "Out-of-sample", "{:.0f}%", True), ("trades", "Trades", "{:.0f}", True), ("max_dd", "Max drawdown", "{:.1f}%", False),
+    ("win_rate", "Win rate", "{:.1f}%", None),
+)
+
+
+def compare_rows(new: dict[str, Any], old: dict[str, Any]) -> dict[str, Any]:
+    """Side-by-side of a promotion candidate (``new``) against the strategy it would sit beside / replace, with a plain verdict."""
+    lines = []
+    new_wins = old_wins = 0
+    for key, label, fmt, higher_better in _CMP_METRICS:
+        a, b = new.get(key), old.get(key)
+        win = None
+        if higher_better is not None and a is not None and b is not None and a != b:
+            win = "new" if ((a > b) == higher_better) else "old"
+            new_wins += win == "new"
+            old_wins += win == "old"
+        lines.append({"label": label, "new": fmt.format(a) if a is not None else "--", "old": fmt.format(b) if b is not None else "--", "winner": win})
+    # Core decision on the headline: T58 score first, then eval pass probability.
+    lead = None
+    for key in ("t58_score", "eval_pct"):
+        a, b = new.get(key), old.get(key)
+        if a is not None and b is not None and abs(a - b) >= 1.0:
+            lead = "new" if a > b else "old"
+            break
+    if lead == "new":
+        advice = f"'{new['display_name']}' scores higher than '{old['display_name']}' on the same market -- replacing it is reasonable."
+    elif lead == "old":
+        advice = f"'{old['display_name']}' still scores higher on the same market -- keep it unless the new one adds something the numbers don't show."
+    else:
+        advice = "They are within a point of each other on the headline scores -- the choice is a judgement call; running both just doubles exposure to one market."
+    return {"new_name": new["display_name"], "old_name": old["display_name"], "market": new.get("instrument") or old.get("instrument") or "",
+            "lines": lines, "new_wins": new_wins, "old_wins": old_wins, "lead": lead, "advice": advice,
+            "old_pick": f"{old['strategy_type']}::{old['filename']}", "old_place": old.get("podium_place"), "old_stage": old["promotion"]["stage_title"]}
+
+
+def award_place(strategy_type: str, filename: str, place: int, *, replace_same_market: bool = False,
+                rows: Optional[list[dict[str, Any]]] = None) -> tuple[bool, str]:
+    """Give a strategy 1st / 2nd / 3rd place on the podium. Anyone already holding that place moves down one (3rd drops off). With
+    ``replace_same_market`` any other podium holder on the same market is removed first. Refuses unless the strategy is champion-grade."""
+    if place not in PODIUM_PLACES:
+        return False, "Pick 1st, 2nd or 3rd place."
+    rows = rows if rows is not None else list_board()
+    me = next((r for r in rows if r["strategy_type"] == strategy_type and r["filename"] == filename), None)
+    if me is None:
+        return False, "That strategy was not found."
+    a = assessment_for_row(me)
+    if not a["can_award"]:
+        return False, (f"'{me['display_name']}' can't take a podium place yet: it must reach Champion Candidate with no open critical issue "
+                       "(see its assessment).")
+    clash = overlapping_holders(me, rows)
+    clash_podium = [r for r in clash if r.get("podium_place") in PODIUM_PLACES]
+    if clash_podium and not replace_same_market:
+        names = ", ".join(r["display_name"] for r in clash_podium)
+        return False, f"{names} already holds a place on {me.get('instrument')}. Compare them and choose to replace it first."
+    order: list[tuple[str, str]] = []
+    holders = podium_holders(rows)
+    removed = {(r["strategy_type"], r["filename"]) for r in clash_podium} if replace_same_market else set()
+    me_key = (strategy_type, filename)
+    # Rebuild the 3-slot podium: remove me and any replaced rival, insert me at `place`, shift the rest down.
+    seq = [(holders[p]["strategy_type"], holders[p]["filename"]) for p in PODIUM_PLACES if p in holders]
+    seq = [k for k in seq if k != me_key and k not in removed]
+    seq.insert(min(place - 1, len(seq)), me_key)
+    seq = seq[:3]
+    now = time.time()
+    for k in {(r["strategy_type"], r["filename"]) for r in holders.values()} | removed | {me_key}:
+        if k not in seq:
+            save_strategy_metadata(k[0], k[1], {"podium": {}}, merge=True)
+    for i, k in enumerate(seq, start=1):
+        r = next((x for x in rows if (x["strategy_type"], x["filename"]) == k), None)
+        save_strategy_metadata(k[0], k[1], {"podium": {"place": i, "awarded_at": now, "instrument": (r or {}).get("instrument", "")}}, merge=True)
+    placed = seq.index(me_key) + 1
+    extra = f" It replaced {', '.join(r['display_name'] for r in clash_podium)}." if (clash_podium and replace_same_market) else ""
+    return True, f"'{me['display_name']}' now holds {PODIUM_LABELS[placed]}.{extra}"
+
+
+def clear_place(strategy_type: str, filename: str) -> tuple[bool, str]:
+    """Take a strategy off the podium; the places below it move up."""
+    rows = list_board()
+    holders = podium_holders(rows)
+    seq = [(holders[p]["strategy_type"], holders[p]["filename"]) for p in PODIUM_PLACES if p in holders]
+    k = (strategy_type, filename)
+    if k not in seq:
+        return False, "That strategy is not on the podium."
+    save_strategy_metadata(strategy_type, filename, {"podium": {}}, merge=True)
+    seq.remove(k)
+    for i, kk in enumerate(seq, start=1):
+        r = next((x for x in rows if (x["strategy_type"], x["filename"]) == kk), None)
+        save_strategy_metadata(kk[0], kk[1], {"podium": {"place": i, "awarded_at": time.time(), "instrument": (r or {}).get("instrument", "")}}, merge=True)
+    return True, "Removed from the podium."

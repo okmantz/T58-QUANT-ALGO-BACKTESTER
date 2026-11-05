@@ -761,9 +761,8 @@ def _eval_ruin_pct(mc_result) -> float | None:
     (effective_independent_attempts == 0) fall back to the combined risk_of_ruin_pct."""
     if mc_result is None:
         return None
-    if (getattr(mc_result, "effective_independent_attempts", 0.0) or 0.0) > 0:
-        return float(getattr(mc_result, "eval_breach_pct", 0.0))
-    return getattr(mc_result, "risk_of_ruin_pct", None)
+    from app.monte_carlo.engine import eval_ruin_gate_pct
+    return eval_ruin_gate_pct(mc_result)
 
 
 def score_from_results(
