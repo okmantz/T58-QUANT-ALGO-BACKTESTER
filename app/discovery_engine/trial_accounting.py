@@ -103,6 +103,25 @@ def effective_trials(raw_trials: int, streams=None, corr_threshold: float = DEFA
             "n_streams": int(info["n_streams"]), "clustered": True}
 
 
+SENSITIVITY_THRESHOLDS = (0.80, 0.90, 0.95)
+
+
+def effective_trials_sensitivity(raw_trials: int, streams=None, thresholds=SENSITIVITY_THRESHOLDS) -> list:
+    """How much the "independent tries" count depends on the clustering cut-off: one row per |corr| threshold,
+    ``{"corr_threshold", "effective_trials", "n_clusters"}``. A looser cut-off (0.80) merges more look-alikes, so fewer effective
+    trials and a smaller luck discount; a stricter one (0.95) counts more. The verdict uses 0.90 -- if the verdict flips across these
+    rows, it is not robust to this choice. Empty when there are fewer than 3 streams to cluster."""
+    raw = max(1, int(raw_trials))
+    streams = [x for x in (streams or []) if x is not None and len(x)]
+    if len(streams) < 3:
+        return []
+    out = []
+    for t in thresholds:
+        e = effective_trials(raw, streams, float(t))
+        out.append({"corr_threshold": float(t), "effective_trials": int(e["effective_trials"]), "n_clusters": int(e["n_clusters"])})
+    return out
+
+
 @dataclass
 class TrialVerdictInputs:
     """Everything a caller needs to hand a deflation or Bonferroni test the same N."""
@@ -113,6 +132,7 @@ class TrialVerdictInputs:
     effective_trials: int
     clustered: bool
     notes: list = field(default_factory=list)
+    sensitivity: list = field(default_factory=list)
 
     @property
     def n_tests(self) -> int:
@@ -136,7 +156,8 @@ def trial_inputs(run_evaluations: int, *, names=(), data_fp: str | None = None, 
         notes.append(f"{prior:,} earlier evaluation(s) from the lifetime ledger added")
     if eff["clustered"] and eff["effective_trials"] != raw:
         notes.append(f"clustered {raw:,} raw -> {eff['effective_trials']:,} effective (|corr| >= {corr_threshold:g}, {eff['n_clusters']} stream(s))")
-    return TrialVerdictInputs(int(run_evaluations), int(prior), raw, int(eff["effective_trials"]), bool(eff["clustered"]), notes)
+    return TrialVerdictInputs(int(run_evaluations), int(prior), raw, int(eff["effective_trials"]), bool(eff["clustered"]), notes,
+                              effective_trials_sensitivity(raw, streams))
 
 
 def quick_optimize_n_tests(ga_total_evaluations: int, mutated_by_ga: bool, strategy_names=(), *, data_fp: str | None = None,
