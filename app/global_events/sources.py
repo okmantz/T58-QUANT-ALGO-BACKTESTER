@@ -308,3 +308,25 @@ def fetch_quotes() -> tuple[list[dict], str | None]:
         return [], err or "empty response"
     rows = parse_stooq(body.decode("utf-8", "replace"))
     return rows, (None if rows else "no parseable quotes (N/D)")
+
+
+# --------------------------------------------------------------------------- daily history (Stooq CSV) for regime / correlation
+def parse_stooq_daily(text: str) -> list[dict]:
+    out = []
+    for row in csv.DictReader(io.StringIO(text)):
+        try:
+            out.append({"d": row["Date"], "o": float(row["Open"]), "h": float(row["High"]), "l": float(row["Low"]), "c": float(row["Close"])})
+        except (KeyError, TypeError, ValueError):
+            continue   # "N/D" or header noise: skipped, never zero
+    return out
+
+
+def fetch_daily(display: str) -> tuple[list[dict], str | None]:
+    sym = next((s[1] for s in QUOTE_SYMBOLS if s[0] == display), None)
+    if not sym:
+        return [], f"unknown symbol {display}"
+    body, err, _ = _get(f"https://stooq.com/q/d/l/?s={sym}&i=d")
+    if err or body is None:
+        return [], err or "empty response"
+    rows = parse_stooq_daily(body.decode("utf-8", "replace"))
+    return rows[-400:], (None if rows else "no parseable daily bars")

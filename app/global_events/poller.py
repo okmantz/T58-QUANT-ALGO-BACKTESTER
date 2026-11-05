@@ -61,6 +61,7 @@ class Poller:
             Job("gdacs", 1800, lambda: self._job_geo("gdacs", "GDACS alerts")),
             Job("quotes", 120, self._job_quotes),
             Job("scores", 300, self._job_scores),
+            Job("daily", 6 * 3600, self._job_daily),
             Job("prune", 86400, store.prune),
         ]
 
@@ -108,6 +109,18 @@ class Poller:
             return
         store.insert_quotes(rows)
         store.record_health("quotes:stooq", "quotes", "Quotes (Stooq)", 600, ok=True, count=len(rows))
+
+    @staticmethod
+    def _job_daily() -> None:
+        n_ok, last_err = 0, None
+        for display in [q[0] for q in sources.QUOTE_SYMBOLS]:
+            rows, err = sources.fetch_daily(display)
+            if err:
+                last_err = f"{display}: {err}"
+                continue
+            store.upsert_daily(display, rows)
+            n_ok += 1
+        store.record_health("daily:stooq", "quotes", "Daily history (Stooq)", 8 * 3600, ok=n_ok > 0, count=n_ok, error=None if n_ok else last_err)
 
     @staticmethod
     def _job_scores() -> None:

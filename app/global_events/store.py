@@ -54,6 +54,9 @@ CREATE INDEX IF NOT EXISTS ix_ge_geo_time ON ge_geo_events(occurred_utc DESC);
 CREATE TABLE IF NOT EXISTS ge_theater_scores (
   theater TEXT NOT NULL, ts_utc TEXT NOT NULL, score REAL NOT NULL, components TEXT NOT NULL, PRIMARY KEY(theater, ts_utc)
 );
+CREATE TABLE IF NOT EXISTS ge_daily (
+  symbol TEXT NOT NULL, d TEXT NOT NULL, o REAL, h REAL, l REAL, c REAL NOT NULL, PRIMARY KEY(symbol, d)
+);
 CREATE TABLE IF NOT EXISTS ge_alerts (
   id INTEGER PRIMARY KEY, ts_utc TEXT NOT NULL, type TEXT NOT NULL, ref_id INTEGER, title TEXT NOT NULL,
   severity INTEGER NOT NULL, dedupe_key TEXT NOT NULL, ack INTEGER NOT NULL DEFAULT 0
@@ -342,6 +345,24 @@ def quotes_latest(symbols: list[str], spark_points: int = 24) -> list[dict]:
     return out
 
 
+# --------------------------------------------------------------------------- daily bars (regime / correlation inputs)
+def upsert_daily(symbol: str, rows: list[dict]) -> int:
+    with _WRITE_LOCK, connect() as c:
+        c.executemany("INSERT OR REPLACE INTO ge_daily(symbol, d, o, h, l, c) VALUES(?,?,?,?,?,?)",
+                      [(symbol, r["d"], r.get("o"), r.get("h"), r.get("l"), r["c"]) for r in rows])
+        c.commit()
+    return len(rows)
+
+
+def daily_bars(symbols: list[str], days: int = 300) -> dict[str, list[dict]]:
+    out: dict[str, list[dict]] = {}
+    with connect() as c:
+        for s in symbols:
+            rows = c.execute("SELECT d, o, h, l, c FROM ge_daily WHERE symbol=? ORDER BY d DESC LIMIT ?", (s, days)).fetchall()
+            out[s] = [dict(r) for r in reversed(rows)]
+    return out
+
+
 # --------------------------------------------------------------------------- theater heat
 def _day_bucket(dt: datetime, now: datetime) -> int:
     return int((now - dt).total_seconds() // 86400)
@@ -430,6 +451,7 @@ def prune(now: datetime | None = None) -> None:
         c.execute("DELETE FROM ge_headlines WHERE COALESCE(published_utc, fetched_utc) < ?", (iso(now - timedelta(days=30)),))
         c.execute("DELETE FROM ge_geo_events WHERE occurred_utc < ?", (iso(now - timedelta(days=30)),))
         c.execute("DELETE FROM ge_quotes WHERE ts_utc < ?", (iso(now - timedelta(days=7)),))
+        c.execute("DELETE FROM ge_daily WHERE d < ?", ((now - timedelta(days=500)).strftime("%Y-%m-%d"),))
         c.execute("DELETE FROM ge_theater_scores WHERE ts_utc < ?", (iso(now - timedelta(days=30)),))
         c.execute("DELETE FROM ge_events WHERE scheduled_utc < ?", (iso(now - timedelta(days=60)),))
         c.commit()

@@ -132,6 +132,18 @@ def api_x_remove():
     return jsonify({"ok": True, "accounts": x_feed.remove_account(str(body.get("username", "")))})
 
 
+@global_events_bp.route("/api/intel")
+def api_intel():
+    """Sessions, central banks, macro releases, futures stats, vol regime, correlations, cross-asset, regimes, geopolitics.
+    Computed from the local store only (see intel.py); every label ships with the rule that produced it."""
+    from . import intel
+    POLLER.ensure_started()
+    now = store.utcnow()
+    daily = store.daily_bars(intel.ALL_SYMBOLS)
+    events = store.events(now - timedelta(days=2), now + timedelta(days=14), min_impact=1, limit=200)
+    return _json_etag(intel.build(daily, events, store.theater_scores(), store.headlines(range_h=72, min_impact=2, limit=40, now=now), now))
+
+
 @global_events_bp.route("/api/snapshot")
 def api_snapshot():
     return jsonify(store.context_snapshot())

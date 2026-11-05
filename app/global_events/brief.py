@@ -105,7 +105,7 @@ def make_brief() -> dict:
             out["error"] = "Ollama is off -- showing the deterministic summary only."
             return out
         out["ai"] = ollama_transport.generate(settings, build_prompt(facts), system=BRIEF_SYSTEM,
-                                              total_timeout=90, first_token_timeout=45, stall_timeout=30).strip()
+                                              total_timeout=300, first_token_timeout=180, stall_timeout=90).strip()
     except Exception as exc:  # noqa: BLE001 -- the brief must always reach a terminal state
         out["error"] = f"Ollama narrative unavailable: {str(exc)[:160]}"
     return out
