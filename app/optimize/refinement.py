@@ -189,6 +189,11 @@ class RefinementConfig:
     plateau_robust_selection: bool = True
     plateau_neighbor_step_frac: float = 0.08
     plateau_finalist_pool: int = 5
+    # Fitness-noise re-evaluation of elites (app.optimize.elite_reeval): the top `elite_reeval_count` candidates are re-scored on
+    # `elite_reeval_repeats` fresh Monte-Carlo seeds and the winner is the best AVERAGE, so a lucky draw cannot crown a candidate.
+    # 0 disables. Costs count * repeats extra search-fidelity evaluations.
+    elite_reeval_count: int = 3
+    elite_reeval_repeats: int = 2
 
     # Explicit optimizer mode -- see OPTIMIZER_MODES above. "genetic" is
     # the exact pre-existing algorithm (default, zero behavior change).
@@ -328,6 +333,7 @@ class RefinementResult:
     # plateau-robust pick's own fitness), swapped (whether the robust pick
     # differs from the raw optimum), and neighbor_step_frac (for the report).
     plateau_robustness: dict | None = None
+    elite_reeval: dict | None = None
     # Evaluation-count transparency: exactly how many candidates this run
     # actually backtested (baseline + every genome tried across the whole
     # search, before plateau-robustness's cheap neighbor probes, which are
@@ -1657,6 +1663,33 @@ def run_iterative_refinement(
                     "plateau_robust_selection=False to restore the old raw-best behavior."
                 )
 
+        elite_reeval_info: dict | None = None
+        if cfg.elite_reeval_count and cfg.elite_reeval_count > 1 and cfg.elite_reeval_repeats > 0:
+            try:
+                from app.optimize.elite_reeval import reevaluate_elites
+                _seen, _pool = set(), []
+                for _c in [best_ever] + sorted((c for c in all_evaluated if math.isfinite(c.fitness)), key=lambda c: c.fitness, reverse=True):
+                    _k = tuple(round(v, 6) for v in _c.genome)
+                    if _k not in _seen and math.isfinite(_c.fitness):
+                        _seen.add(_k)
+                        _pool.append(_c)
+                    if len(_pool) >= cfg.elite_reeval_count:
+                        break
+
+                def _score_seed(genome, seed):
+                    return _evaluate(df, build(genome), risk, prop_rules, replace(search_mc_cfg, random_seed=seed), cfg.fitness_metric,
+                                     cost_stress_multiplier=cfg.cost_stress_multiplier if cfg.cost_stress_enabled else None,
+                                     cost_stress_penalty_weight=cfg.cost_stress_penalty_weight if cfg.cost_stress_enabled else 0.0,
+                                     adaptive_risk=adaptive_risk)[0]
+
+                if len(_pool) > 1:
+                    _best, elite_reeval_info = reevaluate_elites(_pool, _score_seed, repeats=cfg.elite_reeval_repeats)
+                    if _best is not None and elite_reeval_info["swapped"]:
+                        log("Re-scoring the top candidates on fresh Monte-Carlo seeds changed the pick: the first one's lead was partly luck.")
+                        best_ever = _best
+            except Exception as exc:  # noqa: BLE001 -- keep the original pick; selection noise control is a refinement, not a gate
+                elite_reeval_info = {"error": f"{type(exc).__name__}: {exc}"}
+
         never_worse_info: dict | None = None
         if cfg.never_worse_enabled and best_ever is not baseline and list(best_ever.genome) != list(baseline.genome):
             from app.optimize.never_worse import run_never_worse
@@ -1723,7 +1756,7 @@ def run_iterative_refinement(
             holdout_comparison=holdout_comparison,
             elapsed_seconds=elapsed,
             warnings=warnings,
-            plateau_robustness=plateau_report,
+            plateau_robustness=plateau_report, elite_reeval=elite_reeval_info,
             # v6 (2026-10-04): D4(a) -- the plateau-robustness neighborhood
             # probes above can swap the crowned genome, so they count as
             # real evaluations in DSR/trial-count accounting, not free
