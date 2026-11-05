@@ -396,13 +396,30 @@ def stream_generate(settings, prompt: str, *, model: str | None = None, system: 
     """Streaming POST /api/generate. Yields response text pieces. When a hosted
     provider (Claude/OpenAI) is selected and keyed, the completion goes there
     instead and is yielded as one piece."""
-    prov = _provider(settings)
-    if prov != "ollama":
-        yield _remote_complete(prov, [{"role": "user", "content": prompt}], system=system,
-                               format_json=format_json, images=images,
-                               total_timeout=resolve_total_timeout(settings, total_timeout))
+    from app.ai.ollama_settings import provider_chain
+    chain = provider_chain(settings)
+    errors: list[str] = []
+    for prov in chain:
+        if prov == "ollama":
+            break
+        try:
+            text = _remote_complete(prov, [{"role": "user", "content": prompt}], system=system,
+                                    format_json=format_json, images=images,
+                                    total_timeout=resolve_total_timeout(settings, total_timeout))
+        except OllamaError as exc:
+            errors.append(str(exc))
+            logger.warning("ai: %s failed (%s); trying next provider", prov, exc)
+            continue
+        yield text
         return
-    resolved = ensure_ready(settings, model)
+    if "ollama" not in chain:
+        raise OllamaError(" / ".join(errors) or "No AI provider available.")
+    try:
+        resolved = ensure_ready(settings, model)
+    except OllamaError as exc:
+        if errors:
+            raise OllamaError(f"{' / '.join(errors)} -- and the Ollama fallback failed: {exc}") from None
+        raise
     total = resolve_total_timeout(settings, total_timeout)
     payload: dict = {"model": resolved, "prompt": prompt, "stream": True}
     if system:
@@ -435,12 +452,29 @@ def stream_chat(settings, messages: list[dict], *, model: str | None = None,
                 first_token_timeout: float = DEFAULT_FIRST_TOKEN_TIMEOUT_S):
     """Streaming POST /api/chat. Yields message-content pieces (one piece when a
     hosted provider answers)."""
-    prov = _provider(settings)
-    if prov != "ollama":
-        yield _remote_complete(prov, messages, system=None, format_json=False, images=None,
-                               total_timeout=resolve_total_timeout(settings, total_timeout))
+    from app.ai.ollama_settings import provider_chain
+    chain = provider_chain(settings)
+    errors: list[str] = []
+    for prov in chain:
+        if prov == "ollama":
+            break
+        try:
+            text = _remote_complete(prov, messages, system=None, format_json=False, images=None,
+                                    total_timeout=resolve_total_timeout(settings, total_timeout))
+        except OllamaError as exc:
+            errors.append(str(exc))
+            logger.warning("ai: %s failed (%s); trying next provider", prov, exc)
+            continue
+        yield text
         return
-    resolved = ensure_ready(settings, model)
+    if "ollama" not in chain:
+        raise OllamaError(" / ".join(errors) or "No AI provider available.")
+    try:
+        resolved = ensure_ready(settings, model)
+    except OllamaError as exc:
+        if errors:
+            raise OllamaError(f"{' / '.join(errors)} -- and the Ollama fallback failed: {exc}") from None
+        raise
     total = resolve_total_timeout(settings, total_timeout)
     payload: dict = {"model": resolved, "messages": messages, "stream": True}
     if options:

@@ -49,11 +49,14 @@ DEFAULT_VISION_MODEL = "llava"
 # exception, a single one-shot code-generation call).
 INTERACTIVE_KEEP_ALIVE = "30m"
 
-# Which engine answers every AI feature in the app. Ollama is the default;
-# "claude"/"openai" are used only when that provider is selected AND its key
-# is saved on the API Keys page -- otherwise routing silently stays on Ollama.
-PROVIDERS = ("ollama", "claude", "openai")
-DEFAULT_PROVIDER = "ollama"
+# Which engine answers every AI feature in the app.
+#   "auto"   (default) -- a saved Claude key first, then a saved OpenAI key, then Ollama.
+#   "ollama" -- Ollama only, never a hosted model.
+#   "claude" / "openai" -- that hosted provider when its key is saved.
+# Whenever a hosted provider is the first choice and fails before returning any text,
+# the request falls back to Ollama (see provider_chain / ollama_transport).
+PROVIDERS = ("auto", "ollama", "claude", "openai")
+DEFAULT_PROVIDER = "auto"
 DEFAULT_REMOTE_MODELS = {"claude": "claude-sonnet-5-5", "openai": "gpt-4o-mini"}
 
 
@@ -128,9 +131,31 @@ def effective_provider(settings=None) -> str:
     """The engine that will actually answer: the chosen provider if it's a
     hosted one with a saved key, else Ollama (the default / fallback)."""
     chosen = (getattr(settings, "provider", "") or "").lower() or saved_provider()
+    if chosen == "auto":
+        for p in ("claude", "openai"):
+            if remote_api_key(p):
+                return p
+        return "ollama"
     if chosen in ("claude", "openai") and remote_api_key(chosen):
         return chosen
     return "ollama"
+
+
+def provider_chain(settings=None) -> list[str]:
+    """Ordered engines to try for one request. First = effective_provider(); a hosted
+    first choice is followed by the other keyed hosted provider (auto mode only) and then
+    Ollama as the last resort (when a host is configured)."""
+    first = effective_provider(settings)
+    chosen = (getattr(settings, "provider", "") or "").lower() or saved_provider()
+    chain = [first]
+    if first != "ollama":
+        if chosen == "auto":
+            for p in ("claude", "openai"):
+                if p not in chain and remote_api_key(p):
+                    chain.append(p)
+        if getattr(settings, "enabled", True) and (getattr(settings, "host", "") or DEFAULT_HOST).strip():
+            chain.append("ollama")
+    return chain
 
 
 def _config_dir() -> Path:

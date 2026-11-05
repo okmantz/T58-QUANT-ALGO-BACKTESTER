@@ -132,7 +132,9 @@ def remote_client():
 
 
 def preferred_client(ollama_settings=None):
-    """Local Ollama when enabled (private, free), else a hosted model with the stored key, else NullClient."""
+    """Routing client: a saved hosted-model key first (provider "auto"/"claude"/"openai"), with Ollama as the
+    automatic fallback inside the transport; Ollama alone when it is chosen explicitly or no key is saved;
+    NullClient when nothing is usable."""
     try:
         if ollama_settings is None:
             from app.ai import ollama_settings as _os
