@@ -229,6 +229,16 @@ def simulate_paths(
             base = max_close_prior
         return base * dl_frac
 
+    def _first_bust(fa_state, fa_days, failed, was_failed, valid, passed, n_attempts, last_slot):
+        """Record that the FIRST attempt's evaluation ended in a breach this step. Called at the end of a step AND before every early
+        ``continue`` -- a step where every live path breached (e.g. all hit the inactivity rule) used to skip the bookkeeping, so the
+        path stayed "open" here while the per-path loop correctly reported a bust (parity failure fixed 2026-11-05)."""
+        nb = failed & ~was_failed & valid & ~passed & (fa_state == 0) & (n_attempts == 1)
+        if nb.any():
+            fa_state = np.where(nb, 2, fa_state).astype(np.int8)
+            fa_days = np.where(nb, cal0[np.clip(last_slot, 0, _cal_top)] + 1, fa_days)
+        return fa_state, fa_days
+
     for t in range(n_steps):
         valid = path_len > t
         # S1: snapshot failed flags to detect newly-breached paths at the end of this step
@@ -297,6 +307,7 @@ def simulate_paths(
                         failed |= hit
                     go &= ~hit
         if not go.any():
+            fa_state, fa_days = _first_bust(fa_state, fa_days, failed, was_failed, valid, passed, n_attempts, last_slot)
             continue
         # ---- realized accounting ----------------------------------------------------------
         was_funded = funded.copy()
@@ -314,6 +325,7 @@ def simulate_paths(
         else:
             cn = go
         if not cn.any():
+            fa_state, fa_days = _first_bust(fa_state, fa_days, failed, was_failed, valid, passed, n_attempts, last_slot)
             continue
         day_peak_cur = np.where(cn, np.maximum(day_peak_cur, bal), day_peak_cur)
         day_peak_set = day_peak_set | cn
@@ -348,6 +360,7 @@ def simulate_paths(
             failed |= f
             cn = cn & ~f
         if not cn.any():
+            fa_state, fa_days = _first_bust(fa_state, fa_days, failed, was_failed, valid, passed, n_attempts, last_slot)
             continue
         # ---- evaluation pass ---------------------------------------------------------------
         ev = cn & ~was_funded
@@ -414,10 +427,7 @@ def simulate_paths(
                     best_since = np.where(pay, 0.0, best_since)
                     peak = np.where(pay, np.maximum(peak - w, bal), peak)
         # 2026-11-04: the first attempt's evaluation ended in a breach this step (before it ever passed)
-        _nb = failed & ~was_failed & valid & ~passed & (fa_state == 0) & (n_attempts == 1)
-        if _nb.any():
-            fa_state = np.where(_nb, 2, fa_state).astype(np.int8)
-            fa_days = np.where(_nb, cal0[np.clip(last_slot, 0, _cal_top)] + 1, fa_days)
+        fa_state, fa_days = _first_bust(fa_state, fa_days, failed, was_failed, valid, passed, n_attempts, last_slot)
         # S1 (2026-10-19): reset-on-breach -- paths that breached this step start a fresh
         # attempt on the next trade (same semantics as simulate_account's reset loop).
         if reset_on_breach:

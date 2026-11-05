@@ -757,6 +757,78 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
             "https://intercom.help/lucid-trading/en/articles/11321405-prohibited-trading-strategies"
         ),
     ),
+    PropFirmPreset(
+        key="lucid_flex_25k", firm="Lucid Trading", label="Lucid Trading - $25k LucidFlex Evaluation",
+        account_size=25000, evaluation_profit_target_pct=5.0,
+        daily_loss_limit_pct=2.4, max_drawdown_pct=4.0,
+        drawdown_type="trailing", drawdown_check_mode="eod",
+        dd_basis="eod", daily_loss_basis="floating", daily_loss_action="lock_day",
+        trailing_lock=True, trailing_lock_offset_pct=0.4, max_contracts=2, rules_checked_on="2026-11-05",
+        trailing_distance_basis="account", flatten_time_ct="15:45",
+        consistency_rule_pct=50.0, min_trading_days=1,
+        payout_frequency_days=3,
+        funded_consistency_rule_pct=None,
+        as_of=_AS_OF_V11,
+        source_note=(
+            "Added 2026-11-05 from a secondary source (https://proptradingvibes.com/blog/lucid-pro-vs-lucid-flex-vs-lucid-direct) -- UNVERIFIED (NOT re-verified against the firm): it can never support a READY verdict until you re-read Lucid's own page and re-acknowledge it. "
+            "LucidFlex $25k: $1,250 target, $1,000 loss allowance, 50% evaluation consistency, funded phase has no consistency rule. "
+            "The daily loss limit is optional at purchase (modelled ON as a soft day-lock, the conservative choice). The eval drawdown type is not stated by the source; "
+            "EOD trailing (the funded type) is assumed. Contract limit is an assumption. Price not stated."
+        ),
+        algo_trading_allowed=True,
+        algo_policy_note=(
+            "Lucid permits automated systems that do not exploit the platform; HFT, latency arbitrage and reverse/hedge arbitrage are prohibited -- "
+            "https://intercom.help/lucid-trading/en/articles/11321405-prohibited-trading-strategies"
+        ),
+    ),
+    PropFirmPreset(
+        key="lucid_flex_50k", firm="Lucid Trading", label="Lucid Trading - $50k LucidFlex Evaluation",
+        account_size=50000, evaluation_profit_target_pct=6.0,
+        daily_loss_limit_pct=2.4, max_drawdown_pct=4.0,
+        drawdown_type="trailing", drawdown_check_mode="eod",
+        dd_basis="eod", daily_loss_basis="floating", daily_loss_action="lock_day",
+        trailing_lock=True, trailing_lock_offset_pct=0.4, max_contracts=4, rules_checked_on="2026-11-05",
+        trailing_distance_basis="account", flatten_time_ct="15:45",
+        consistency_rule_pct=50.0, min_trading_days=1,
+        payout_frequency_days=3,
+        funded_consistency_rule_pct=None,
+        as_of=_AS_OF_V11,
+        source_note=(
+            "Added 2026-11-05 from a secondary source (https://proptradingvibes.com/blog/lucid-pro-vs-lucid-flex-vs-lucid-direct) -- UNVERIFIED (NOT re-verified against the firm): it can never support a READY verdict until you re-read Lucid's own page and re-acknowledge it. "
+            "LucidFlex $50k: $3,000 target, $2,000 loss allowance, 50% evaluation consistency, funded phase has no consistency rule. "
+            "The daily loss limit is optional at purchase (modelled ON as a soft day-lock, the conservative choice). The eval drawdown type is not stated by the source; "
+            "EOD trailing (the funded type) is assumed. Contract limit is an assumption. Price not stated."
+        ),
+        algo_trading_allowed=True,
+        algo_policy_note=(
+            "Lucid permits automated systems that do not exploit the platform; HFT, latency arbitrage and reverse/hedge arbitrage are prohibited -- "
+            "https://intercom.help/lucid-trading/en/articles/11321405-prohibited-trading-strategies"
+        ),
+    ),
+    PropFirmPreset(
+        key="lucid_flex_100k", firm="Lucid Trading", label="Lucid Trading - $100k LucidFlex Evaluation",
+        account_size=100000, evaluation_profit_target_pct=6.0,
+        daily_loss_limit_pct=2.4, max_drawdown_pct=3.0,
+        drawdown_type="trailing", drawdown_check_mode="eod",
+        dd_basis="eod", daily_loss_basis="floating", daily_loss_action="lock_day",
+        trailing_lock=True, trailing_lock_offset_pct=0.4, max_contracts=6, rules_checked_on="2026-11-05",
+        trailing_distance_basis="account", flatten_time_ct="15:45",
+        consistency_rule_pct=50.0, min_trading_days=1,
+        payout_frequency_days=3,
+        funded_consistency_rule_pct=None,
+        as_of=_AS_OF_V11,
+        source_note=(
+            "Added 2026-11-05 from a secondary source (https://proptradingvibes.com/blog/lucid-pro-vs-lucid-flex-vs-lucid-direct) -- UNVERIFIED (NOT re-verified against the firm): it can never support a READY verdict until you re-read Lucid's own page and re-acknowledge it. "
+            "LucidFlex $100k: $6,000 target, $3,000 loss allowance, 50% evaluation consistency, funded phase has no consistency rule. "
+            "The daily loss limit is optional at purchase (modelled ON as a soft day-lock, the conservative choice). The eval drawdown type is not stated by the source; "
+            "EOD trailing (the funded type) is assumed. Contract limit is an assumption. Price not stated."
+        ),
+        algo_trading_allowed=True,
+        algo_policy_note=(
+            "Lucid permits automated systems that do not exploit the platform; HFT, latency arbitrage and reverse/hedge arbitrage are prohibited -- "
+            "https://intercom.help/lucid-trading/en/articles/11321405-prohibited-trading-strategies"
+        ),
+    ),
     # --- E8 Markets -----------------------------------------------------
     # v7 (Oct 2026): E8 explicitly permits algo trading on the E8 One
     # 1-Step program -- their official help center lists "Algo, EA, Bots
@@ -786,6 +858,26 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
             "E8 explicitly allows algo trading on E8 One: official help center (checked 2026-10-05) "
             "lists 'Algo, EA, Bots and Indicators' among the tools traders may use. -- "
             "https://help.e8markets.com/en/articles/5515409"
+        ),
+    ),
+    PropFirmPreset(
+        key="e8_one_25k", firm="E8 Markets", label="E8 Markets - $25k E8 One (1-Step)",
+        account_size=25_000, evaluation_profit_target_pct=9.0,
+        daily_loss_limit_pct=4.0, max_drawdown_pct=6.0,
+        drawdown_type="trailing", drawdown_check_mode="intrabar",
+        dd_basis="realized", trailing_lock=True, trailing_lock_offset_pct=0.0,
+        trailing_distance_basis="account",
+        consistency_rule_pct=None, min_trading_days=0, max_inactive_days=60,
+        payout_frequency_days=14,
+        as_of=_AS_OF_V11,
+        source_note=(
+            "Added 2026-11-05 -- UNVERIFIED (NOT re-verified against the firm). E8 One is configurable and no source gave the $25k configuration, so this SCALES the verified $100k configuration "
+            "(9% target, 4% daily, 6% trailing drawdown, no minimum days) to $25k. Open the $25k configuration at e8markets.com/e8-one and re-acknowledge it. "
+            "It can never support a READY verdict until you do."
+        ),
+        algo_trading_allowed=True,
+        algo_policy_note=(
+            "E8 explicitly allows algo trading on E8 One (help.e8markets.com/en/articles/5515409)."
         ),
     ),
     # --- FunderPro ------------------------------------------------------
@@ -1344,6 +1436,10 @@ _FIRM_FEE_ROWS = [
     _secondary_fee("apex_25k_intraday", None, None, 90.0, _APEX_URL, notes="25k price not verified; check Apex checkout. " + _APEX_NOTE),
     _secondary_fee("lucid_25k", None, None, 90.0, "https://support.lucidtrading.com/en/articles/12890029-lucidpro-evaluation-account",
                    notes="25k price not verified; check Lucid checkout."),
+    _secondary_fee("lucid_flex_25k", None, None, 90.0, "https://proptradingvibes.com/blog/lucid-pro-vs-lucid-flex-vs-lucid-direct", notes="Flex price depends on the DLL on/off choice at checkout; not stated by the source -> None.", policy_from_preset=True),
+    _secondary_fee("lucid_flex_50k", None, None, 90.0, "https://proptradingvibes.com/blog/lucid-pro-vs-lucid-flex-vs-lucid-direct", notes="Flex price depends on the DLL on/off choice at checkout; not stated by the source -> None.", policy_from_preset=True),
+    _secondary_fee("lucid_flex_100k", None, None, 90.0, "https://proptradingvibes.com/blog/lucid-pro-vs-lucid-flex-vs-lucid-direct", notes="Flex price depends on the DLL on/off choice at checkout; not stated by the source -> None.", policy_from_preset=True),
+    _secondary_fee("e8_one_25k", None, None, 80.0, "https://e8markets.com/e8-one", notes="25k price not verified; check E8 checkout (one-time fee, no activation)."),
 ]
 for _row in _FIRM_FEE_ROWS:
     FIRM_FEES.setdefault(_row.preset_key, _row)
