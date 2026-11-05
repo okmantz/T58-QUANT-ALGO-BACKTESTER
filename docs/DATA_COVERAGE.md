@@ -9,6 +9,22 @@ The two SYNTHETIC_*_1M.csv files were deleted in the 2026-10 audit; real ES/NQ/G
 (2020-01 to 2026-09) is in the `futures_*.F_1m.parquet` files. Large data files should live in Git LFS or a
 release asset, not in normal git history.
 
+## T58 market data pack (canonical NQ / ES / MNQ / MES)
+
+`data/data_pack.json` (written by `python scripts/freeze_data_pack.py`, checked by `--verify` or `/api/data-pack`) freezes one canonical history with a
+**sealed window fixed on a calendar date: 2025-09-01**. Bars before it are development data; bars from it onward are sealed and each read of them is a booked look
+(`SealedLedger`). The manifest stores a sha256 of every bar in both windows, so a changed hash means the data moved under earlier results.
+
+| Symbol | Source file | Development window | Sealed window | $ per point |
+|---|---|---|---|---|
+| ES | `ES1!/futures_ES.F_1m.parquet` | 2020-01-01 to 2025-08-31 | 2025-09-01 to 2026-09-01 | 50 |
+| NQ | `NQ1!/futures_NQ.F_1m.parquet` | 2020-01-01 to 2025-08-31 | 2025-09-01 to 2026-03-01 | 20 |
+| MES | same bars as ES | same | same | 5 |
+| MNQ | same bars as NQ | same | same | 2 |
+
+The NQ file ends in March 2026, so its sealed window is about 6 months against ES's 12; extend the NQ history, then re-freeze on purpose (a re-freeze voids earlier sealed-slice evidence).
+The dedicated MES / MNQ files cover only 2026-01-20 to 2026-04-15, which is too short to use as history: micros reuse the ES / NQ prices.
+
 | file | symbol | bars | start | end | years | bar | flags |
 |---|---|---|---|---|---|---|---|
 | AUDUSD/AUD_USD_1m.parquet | - | 2147045 | 2021-01-03 | 2026-09-22 | 5.72 | 0 days 00:01:00 | no instrument spec |

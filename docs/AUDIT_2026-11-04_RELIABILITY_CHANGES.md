@@ -60,3 +60,20 @@ whether to relax that bar or size/trade more often.
 ## Not verified here
 The genetic-search stage of the full pipeline was not run end to end on real market data (none in the sandbox); the planted-drift sweep exercises the
 statistical gates on synthetic trade streams. Run `python scripts/planted_drift_sweep.py --check` and a real pipeline run before relying on the new defaults.
+
+## Follow-up pass (same audit, app + docs consistency)
+| Area | Change | Files |
+|---|---|---|
+| Prop presets | 25k accounts for FTMO, Apex (EOD and intraday) and Lucid; every preset carries a rules source link; a 30-day in-app *rules re-verified* acknowledgement (`/api/prop-presets/<key>/acknowledge`, stored in `data/preset_stamps.json`). 25k prices are unknown (None), never guessed | `prop/presets.py`, `_lifecycle_rules_js.html` |
+| Edition 1.1 / Rulebook | Edge Rulebook page and calculators (z-bar, trades needed, required lift, alpha ledger, binary screen), LLR kill line in the forward-test monitor, `rulebook_screen` on every Full Pipeline result | `validation/rulebook.py`, `forward_test/sprt_monitor.py`, `templates/rulebook.html` |
+| Champion | T58 score per row, 1st/2nd/3rd podium, per-row promotion assessment and *Promote to Champion*, replacement comparison against an overlapping champion; the rerun-checks block was removed | `scoring/champion_board.py`, `templates/champion_simple.html` |
+| Consistency | One source for the READY bar (`orchestration/ready_bar.py`) feeds the Test side panel and popups; Full Pipeline fitness default is `edge_lb_r` on the page as in the config; stale "100 trades", "last 20%" and "Lucid only verified" text removed | `templates/full_pipeline.html`, `scoring/metric_defs.py` |
+| UX | Test / Validate Advanced options split into labelled sections with one-line explanations; Run Batch / Schedule Batch moved into Test → Advanced → Batch & scheduling; Create page examples and flow strip | `templates/full_pipeline.html`, `validate_simple.html`, `section_start_here.html` |
+| Deploy / Dashboard | `/api/portfolio` (per-account firm, P&L, open and past trades, health); Deploy overview with next-step line; Dashboard cards default OFF, enabled under Personalize only when an account has trading activity | `live_deploy/portfolio.py`, `static/t58-portfolio.js` |
+| Global Events | Regime intelligence with printed rules, macro releases, central banks, sessions, futures stats, vol regime, cross-asset, correlations, geopolitics | `global_events/intel.py`, `static/global-events/intel.js` |
+| Replay / prop sim | Next / previous trade jump, keyboard shortcuts, max speed; equity-floor-target chart, risk-per-trade sweep with a recommended level, Wilson ranges | `replay_view.html`, `static/t58-propsim.js` |
+| Data | Frozen NQ / ES / MNQ / MES pack with a calendar-fixed sealed window and content hashes | `data/data_pack.py`, `scripts/freeze_data_pack.py`, `data/data_pack.json` |
+| AI | Auto provider chain (saved cloud key first, Ollama fallback), longer Ollama timeouts, fake-Ollama-server tests | `ai/ollama_settings.py`, `ai/ollama_transport.py`, `tests/ai/` |
+| Speed | Promotion steps reuse one built strategy per candidate instead of re-importing it for every slice | `discovery_engine/engine_steps.py` |
+
+Not done in this pass: E8 25k and LucidFlex presets; the desktop (tkinter) Champion rerun button; the surrogate false-discovery study rerun at +0.10/+0.20/+0.30R, the GA-vs-random proof harness, fitness-noise re-evaluation of elites and the n_eff 0.80/0.90/0.95 sensitivity display.
