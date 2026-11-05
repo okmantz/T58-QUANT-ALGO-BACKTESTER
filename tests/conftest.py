@@ -257,7 +257,7 @@ def _stub_ollama_readiness(request, monkeypatch):
     completion itself) and have no server, so the readiness probe would fail
     them for a reason unrelated to what they test. Stub it everywhere except
     the transport's own tests, which cover it directly."""
-    if request.module.__name__.endswith("test_v914_ollama_transport"):
+    if request.module.__name__.endswith(("test_v914_ollama_transport", "test_ollama_fake_server")):
         return
     try:
         from app.ai import ollama_transport as _t
