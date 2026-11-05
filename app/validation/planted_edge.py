@@ -80,12 +80,50 @@ class GateStackResult:
     unseen_expectancy_lb: float | None = None
     unseen_expectancy_ok: bool = False
     dsr_unseen_ok: bool = False
+    ev_label: str = ""                 # label from the production ``evaluate_ev`` (firm fee + payout), not a fixed pass-rate number
+    ev_break_even_p: float | None = None
     legacy_pass_lb: float = 0.0
     legacy_would_pass: bool = False
     detected: bool = False
     forward_candidate: bool = False   # edge evidence alone (P2-1): holdout confirmed + unseen expectancy LB>0 at 2x costs + EV>0 + pooled OOS not FAIL
     first_killer: str | None = None
     detail: dict = field(default_factory=dict)
+    detail_dsr: dict | None = None
+    _dev_trades: object = None
+
+
+def _production_ev(res, mc, rules) -> bool:
+    """EV test through ``evaluate_ev`` exactly as the pipeline feeds it: the firm's fee row, the simulated first-payout size and the
+    outer-bootstrap pass lower bound. A rules object without a fee row has no economic verdict, which is NOT a pass."""
+    try:
+        from app.orchestration.ev_verdict import evaluate_ev
+        from app.prop.presets import get_fee_info
+        fee = get_fee_info(getattr(rules, "preset_key", None) or "")
+        if fee is None:
+            return False
+        fp = float(mc.first_payout_probability or 0.0) / 100.0
+        target = float(rules.account_size) * float(rules.evaluation_profit_target_pct) / 100.0
+        gross = (float(mc.expected_payout) / fp) if fp > 0 else None
+        # bankroll ruin before first payout and per-attempt subscription billing, computed the way audit_layers._compute_ev computes them
+        from app.monte_carlo.bankroll import BankrollConfig, simulate_bankroll_survival
+        from app.orchestration.ev_verdict import billing_profile as _bp
+        from app.prop.survival_engine import ResetEconomics
+        eco = ResetEconomics(evaluation_fee=fee.challenge_price or 0.0, reset_fee=fee.reset_price, profit_split_pct=fee.profit_split_pct, max_attempts=5)
+        br = simulate_bankroll_survival(getattr(res, "_dev_trades", None) or [], rules, BankrollConfig(
+            starting_bankroll=1000.0, reset_economics=eco, n_simulations=300, method="block_bootstrap", stop_after_first_payout=True))
+        prof = (_bp(list(getattr(mc, "attempt_outcomes", None) or []), list(getattr(mc, "attempt_calendar_days", None) or []),
+                    int(getattr(fee, "billing_period_days", 30))) if fee.monthly_subscription else None)
+        ev = evaluate_ev(
+            bankroll_ruin_pct=float(br.probability_ruin_before_first_payout), billing_profile=prof,
+            legacy_verdict="MARGINAL", holdout_pass_rate=res.pass_pct / 100.0, window_payout_rate=fp,
+            payout_value=min(gross, target) if gross else target, challenge_price=fee.challenge_price, reset_price=fee.reset_price,
+            profit_split_pct=fee.profit_split_pct, activation_fee=fee.activation_fee, monthly_subscription=bool(fee.monthly_subscription),
+            holdout_pass_rate_lb=(res.pass_lb / 100.0 if getattr(mc, "pass_interval_method", "") == "outer_bootstrap" else None),
+            selection_handled_by_holdout=True, parameters_tuned=False)
+        res.ev_label, res.ev_break_even_p = ev.label, ev.break_even_p
+        return ev.label in ("HIGH CONFIDENCE", "FORWARD-TEST CANDIDATE")
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _pooled_oos(r_oos: list[float], days_oos: list) -> str:
@@ -138,19 +176,15 @@ def run_gate_stack(edge_r: float, seed: int, *, n_years: float = 5.0, rules=None
     eb = expectancy_bound(unseen)
     res.unseen_expectancy_lb = eb.get("lb")
     res.unseen_expectancy_ok = eb.get("lb") is not None and eb["lb"] > 0.0
-    # EV bar (Topstep-like economics): break-even pass rate is small; the test is the LB against a margin
-    res.ev_positive = res.pass_lb >= 15.0
-    # DSR on unseen data at the stack's trial count
-    try:
-        from app.search.robustness import deflated_sharpe_gate
-        arr = np.asarray(unseen, dtype=float)
-        sr = float(arr.mean() / arr.std(ddof=1)) if arr.std(ddof=1) > 0 else 0.0
-        sk = float(((arr - arr.mean()) ** 3).mean() / (arr.std(ddof=0) ** 3)) if arr.std(ddof=0) > 0 else 0.0
-        ku = float(((arr - arr.mean()) ** 4).mean() / (arr.std(ddof=0) ** 4)) if arr.std(ddof=0) > 0 else 3.0
-        g = deflated_sharpe_gate(sr, list(sr + TRIAL_SHARPE_SPREAD), max(2, int(n_trials // 10)), len(arr), returns_skew=sk, returns_kurtosis=ku)
-        res.dsr_unseen_ok = bool(g.passed)
-    except Exception:  # noqa: BLE001
-        res.dsr_unseen_ok = True
+    # EV bar: the PRODUCTION evaluate_ev with this firm's fee, split and payout (2026-11 audit -- it used to be a fixed ``pass_lb >= 15``).
+    res._dev_trades = dev
+    res.ev_positive = _production_ev(res, mc, rules)
+    res._dev_trades = None
+    # DSR on unseen data: the PRODUCTION function the pipeline calls (audit_layers.unseen_dsr), at the stack's effective trial count.
+    from app.orchestration.audit_layers import unseen_dsr
+    _du = unseen_dsr(unseen, max(2, int(n_trials // 10)))
+    res.dsr_unseen_ok = bool(_du["passed"]) if _du is not None else False
+    res.detail_dsr = None if _du is None else {"psr": _du["psr"], "basis": _du.get("spread_basis")}
     kills = []
     if res.pooled_oos_status == "FAIL":
         kills.append("oos")
@@ -158,6 +192,10 @@ def run_gate_stack(edge_r: float, seed: int, *, n_years: float = 5.0, rules=None
         kills.append("holdout")
     if not res.unseen_expectancy_ok:
         kills.append("expectancy_unseen")
+    if not res.dsr_unseen_ok:
+        kills.append("dsr_unseen")
+    if not res.ev_positive:
+        kills.append("ev")
     if res.pass_lb < pass_lb_bar:
         kills.append("pass_lb")
     res.first_killer = kills[0] if kills else None
