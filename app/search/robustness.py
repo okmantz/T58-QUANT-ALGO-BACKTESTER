@@ -825,6 +825,10 @@ class DeflatedSharpeGateResult:
     raw_trials: int | None = None
     effective_trials: int | None = None
     trial_clustering: str = ""
+    # 2026-11 audit: dispersion of the run's OWN clustered trial Sharpes (one per correlation cluster), so the unseen-data DSR does not
+    # have to borrow the synthetic-study constant. None / 0 when the run had too few distinct trials to measure it.
+    trial_sharpe_std: float | None = None
+    trial_sharpe_n: int = 0
 
 
 def deflated_sharpe_gate(
