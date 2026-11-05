@@ -115,8 +115,10 @@ def test_validate_page_grouped_optgroups_and_timeframe(client, raw_dir):
     assert "Dataset's native timeframe (default)" in body
 
 
-def test_optimize_and_champion_pages_carry_timeframe(client, raw_dir):
-    for url in ("/optimize-simple", "/champion-simple"):
+def test_optimize_page_carries_timeframe_and_champion_has_no_rerun_picker(client, raw_dir):
+    # 2026-11: the Champion page's "rerun selected checks" block (and its dataset / timeframe pickers) was removed on purpose.
+    assert 'name="timeframe"' not in client.get("/champion-simple").get_data(as_text=True)
+    for url in ("/optimize-simple",):
         body = client.get(url).get_data(as_text=True)
         assert 'name="timeframe"' in body, url
         assert '<optgroup label="ES1!">' in body, url
@@ -238,43 +240,6 @@ def test_validate_manual_library_pick_actually_loads(client, monkeypatch):
     assert captured["bars"] == 300
 
 
-def test_champion_rerun_manual_candidate_actually_loads(client, monkeypatch):
-    """Same audit fix on the Champion page: the re-run handler used to
-    call build_strategy_from_code directly, so a 'manual::' candidate
-    could never load there either."""
-    import json as _json
-
-    df = _ohlcv(300, "2024-01-01 09:00", "1min")
-    captured = {}
-    monkeypatch.setattr(server, "_resolve_dataset",
-                        lambda form, files: (df, "tiny.csv", "", None))
-    _fake_strategy_patches(monkeypatch, captured)
-    monkeypatch.setattr(server, "load_strategy_text", lambda t, f: _json.dumps({
-        "name": "Stub Manual",
-        "indicators": [
-            {"type": "sma", "period": 20, "column": "close", "as": "sma_fast"},
-            {"type": "sma", "period": 50, "column": "close", "as": "sma_slow"},
-        ],
-        "long_entry": "sma_fast > sma_slow", "long_exit": "sma_fast < sma_slow",
-        "short_entry": "sma_fast < sma_slow", "short_exit": "sma_fast > sma_slow",
-        "stop_loss_pips": 20, "take_profit_pips": 40,
-    }))
-    monkeypatch.setattr(server, "build_strategy_from_code",
-                        lambda *a, **k: (_ for _ in ()).throw(
-                            AssertionError("manual candidate bypassed _build_strategy")))
-
-    r = client.post("/champion-simple/rerun", data={
-        "candidate": "manual::stub.json",
-        "existing_dataset": "tiny.csv",
-        "check_cpcv": "on",
-        "initial_balance": "100000", "account_size": "100000",
-    })
-    job = wait_for_validate_job(client, r)
-    assert not job["error"], job["error"]
-    assert job["source"] == "champion"
-    assert captured["bars"] == 300
-
-
 def test_handoff_prefill_marks_options_selected(client, monkeypatch, raw_dir):
     """Guided flow: the previous step's Next button puts the picks in
     the URL; the receiving page renders them selected."""
@@ -289,12 +254,6 @@ def test_handoff_prefill_marks_options_selected(client, monkeypatch, raw_dir):
     assert '<option value="ES1!_5m.csv" selected>' in body
     assert '<option value="lucid_50k" selected>' in body
     assert '<option value="5m" selected>' in body
-
-    body = client.get(
-        "/champion-simple?existing_dataset=ES1!_5m.csv&timeframe=15m"
-    ).get_data(as_text=True)
-    assert '<option value="ES1!_5m.csv" selected>' in body
-    assert '<option value="15m" selected>' in body
 
 
 def test_full_pipeline_and_deploy_prefill(client, monkeypatch, raw_dir):
