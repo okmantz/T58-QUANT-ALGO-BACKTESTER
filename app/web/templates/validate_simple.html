@@ -139,40 +139,64 @@
   <details class="lc-adv">
     <summary>Advanced options <span class="lc-hint">account, risk, and the knobs behind each check</span></summary>
     <div class="adv-body">
-      <div class="lc-adv-grid">
-        <div class="lc-adv-field"><label class="flabel">Initial balance ($)</label><input type="number" step="any" name="initial_balance" value="100000"><div class="why">Only used when no prop firm is picked above &mdash; a prop firm sets its own account size.</div></div>
-        <div class="lc-adv-field"><label class="flabel">Account size ($)</label><input type="number" step="any" name="account_size" value="100000"><div class="why">Only used when no prop firm is picked above.</div></div>
-        <div class="lc-adv-field"><label class="flabel">Profit target (%)</label><input type="number" step="any" name="profit_target" value="8"></div>
-        <div class="lc-adv-field"><label class="flabel">Daily loss (%)</label><input type="number" step="any" name="daily_loss" value="5"></div>
-        <div class="lc-adv-field"><label class="flabel">Max drawdown (%)</label><input type="number" step="any" name="max_dd" value="10"></div>
-        <div class="lc-adv-field"><label class="flabel">Risk mode</label>
-          <select name="risk_mode"><option value="percent">% of balance</option><option value="fixed">Fixed $</option></select></div>
-        <div class="lc-adv-field"><label class="flabel">Risk value</label><input type="number" step="any" name="risk_value" value="1.0"></div>
-        <div class="lc-adv-field"><label class="flabel">Max trades / day</label><input type="number" name="max_trades_day" value="10"></div>
-        <div class="lc-adv-field"><label class="flabel">Pip size</label><input type="number" step="any" name="pip_size" value="0.0001"></div>
-        <div class="lc-adv-field"><label class="flabel">Contract size</label><input type="number" step="any" name="contract_size" placeholder="auto"></div>
-        <div class="lc-adv-field"><label class="flabel">Spread (pips)</label><input type="number" step="any" name="spread_pips" value="" placeholder="auto (instrument default)"></div>
-        <div class="lc-adv-field"><label class="flabel">Slippage (pips)</label><input type="number" step="any" name="slippage_pips" value="" placeholder="auto (instrument default)"></div>
-        <div class="lc-adv-field"><label class="flabel">Commission / trade</label><input type="number" step="any" name="commission" value="3"></div>
-        <div class="lc-adv-field"><label class="flabel">Monte-Carlo sims</label><input type="number" name="mc_sims" value="1000"></div>
-        <div class="lc-adv-field"><label class="flabel">CPCV/PBO groups</label><input type="number" name="cpcv_groups" value="4"></div>
-        <div class="lc-adv-field"><label class="flabel">CPCV/PBO test groups</label><input type="number" name="cpcv_test_groups" value="2"></div>
-        <div class="lc-adv-field"><label class="flabel">Max paths</label><input type="number" name="cpcv_max_paths" value="15"></div>
-        <div class="lc-adv-field"><label class="flabel">PBO variants</label><input type="number" name="pbo_variants" value="4"></div>
-        <div class="lc-adv-field"><label class="flabel">Walk-forward folds</label><input type="number" name="wf_folds" value="3"></div>
-        <div class="lc-adv-field"><label class="flabel">Walk-Forward GA population</label><input type="number" name="wfga_population" value="8"></div>
-        <div class="lc-adv-field"><label class="flabel">Walk-Forward GA generations</label><input type="number" name="wfga_generations" value="4"></div>
-        <div class="lc-adv-field"><label class="flabel">WF window</label>
-          <select name="wf_window_mode"><option value="rolling">rolling</option><option value="anchored">anchored</option></select></div>
-        <div class="lc-adv-field"><label class="flabel">Validation metric</label><input type="text" name="validation_metric" value="profit_factor"></div>
-        <div class="lc-adv-field"><label class="flabel">Sensitivity range (± fraction)</label><input type="number" step="any" name="pct_range" value="0.5"></div>
-        <div class="lc-adv-field"><label class="flabel">Steps</label><input type="number" name="n_steps" value="5"></div>
-        <div class="lc-adv-field"><label class="flabel">Max parameters</label><input type="number" name="max_params" value="4"></div>
-        <div class="lc-adv-field"><label class="flabel">Robustness metric</label><input type="text" name="robustness_metric" value="eval_pass_probability"></div>
-        <div class="lc-adv-field"><label class="flabel">Regime dimension A</label><input type="text" name="regime_dim_a" value="volatility"></div>
-        <div class="lc-adv-field"><label class="flabel">Regime dimension B</label><input type="text" name="regime_dim_b" value="environment"></div>
-      </div>
-      {% include '_accuracy_fields.html' %}
+      <nav class="adv-nav" aria-label="Advanced sections">
+        <a href="#vadv-account">&#128176; Account &amp; prop rules</a>
+        <a href="#vadv-costs">&#127919; Instrument &amp; costs</a>
+        <a href="#vadv-mc">&#127922; Monte Carlo</a>
+        <a href="#vadv-cpcv">&#129513; CPCV &amp; PBO</a>
+        <a href="#vadv-wf">&#128260; Walk-forward</a>
+        <a href="#vadv-sens">&#128208; Sensitivity</a>
+        <a href="#vadv-regime">&#127786; Regime matrix</a>
+        <a href="#vadv-real">&#128737; Realism</a>
+      </nav>
+      <section class="adv-sec" id="vadv-account">
+        <div class="adv-h"><div class="adv-ic">&#128176;</div><div><div class="adv-t">Account &amp; prop rules</div><div class="adv-d">Picking a prop firm above sets these (and the firm&rsquo;s full rule set) for you. Edit only when no firm is picked, or to test a rule the firm does not publish.</div></div></div>
+        <div class="adv-b"><div class="lc-adv-grid">
+          <div class="lc-adv-field"><label class="flabel">Initial balance ($)</label><input type="number" step="any" name="initial_balance" value="100000"><div class="why">Starting equity; a prop firm sets its own.</div></div><div class="lc-adv-field"><label class="flabel">Account size ($)</label><input type="number" step="any" name="account_size" value="100000"><div class="why">The size the rule percentages are taken from.</div></div><div class="lc-adv-field"><label class="flabel">Profit target (%)</label><input type="number" step="any" name="profit_target" value="8"><div class="why">Gain needed to pass an evaluation.</div></div><div class="lc-adv-field"><label class="flabel">Daily loss (%)</label><input type="number" step="any" name="daily_loss" value="5"><div class="why">Worst one-day loss before the account fails.</div></div><div class="lc-adv-field"><label class="flabel">Max drawdown (%)</label><input type="number" step="any" name="max_dd" value="10"><div class="why">Largest fall allowed from the high-water mark or start.</div></div><div class="lc-adv-field"><label class="flabel">Risk mode</label><select name="risk_mode"><option value="percent">% of balance</option><option value="fixed">Fixed $</option></select><div class="why">How each trade is sized.</div></div><div class="lc-adv-field"><label class="flabel">Risk value</label><input type="number" step="any" name="risk_value" value="1.0"><div class="why">% of balance (or dollars when fixed) risked per trade.</div></div><div class="lc-adv-field"><label class="flabel">Max trades / day</label><input type="number"  name="max_trades_day" value="10"><div class="why">Cap on entries per day, as many firms impose.</div></div>
+        </div></div>
+      </section>
+      <section class="adv-sec" id="vadv-costs">
+        <div class="adv-h"><div class="adv-ic">&#127919;</div><div><div class="adv-t">Instrument &amp; costs</div><div class="adv-d">What one trade costs. Blank spread/slippage use the instrument&rsquo;s realistic default.</div></div></div>
+        <div class="adv-b"><div class="lc-adv-grid">
+          <div class="lc-adv-field"><label class="flabel">Pip size</label><input type="number" step="any" name="pip_size" value="0.0001"><div class="why">Price move of one pip (0.01 gold/JPY, 1 index points).</div></div><div class="lc-adv-field"><label class="flabel">Contract $ per point</label><input type="number" step="any" name="contract_size" placeholder="auto"><div class="why">Dollars per full point; blank = auto.</div></div><div class="lc-adv-field"><label class="flabel">Spread (pips)</label><input type="number" step="any" name="spread_pips" value="" placeholder="auto (instrument default)"><div class="why">Blank = instrument default.</div></div><div class="lc-adv-field"><label class="flabel">Slippage (pips)</label><input type="number" step="any" name="slippage_pips" value="" placeholder="auto (instrument default)"><div class="why">Blank = instrument default.</div></div><div class="lc-adv-field"><label class="flabel">Commission / trade ($)</label><input type="number" step="any" name="commission" value="3"><div class="why">Round-turn cost on every trade.</div></div>
+        </div></div>
+      </section>
+      <section class="adv-sec" id="vadv-mc">
+        <div class="adv-h"><div class="adv-ic">&#127922;</div><div><div class="adv-t">Monte Carlo</div><div class="adv-d">Reshuffles your trades into thousands of alternative orderings to see how lucky the original path was.</div></div></div>
+        <div class="adv-b"><div class="lc-adv-grid">
+          <div class="lc-adv-field"><label class="flabel">Simulations</label><input type="number"  name="mc_sims" value="1000"><div class="why">More = steadier odds, slower run.</div></div>
+        </div></div>
+      </section>
+      <section class="adv-sec" id="vadv-cpcv">
+        <div class="adv-h"><div class="adv-ic">&#129513;</div><div><div class="adv-t">CPCV &amp; PBO</div><div class="adv-d">Combinatorial cross-validation: tests the strategy on many different train/test splits and estimates the chance the &ldquo;best&rdquo; setting is just overfit (PBO).</div></div></div>
+        <div class="adv-b"><div class="lc-adv-grid">
+          <div class="lc-adv-field"><label class="flabel">Groups</label><input type="number"  name="cpcv_groups" value="4"><div class="why">Number of time blocks the history is cut into.</div></div><div class="lc-adv-field"><label class="flabel">Test groups</label><input type="number"  name="cpcv_test_groups" value="2"><div class="why">Blocks held out as the test set in each split.</div></div><div class="lc-adv-field"><label class="flabel">Max paths</label><input type="number"  name="cpcv_max_paths" value="15"><div class="why">Upper limit on splits evaluated.</div></div><div class="lc-adv-field"><label class="flabel">PBO variants</label><input type="number"  name="pbo_variants" value="4"><div class="why">Neighbouring settings compared when estimating overfit.</div></div>
+        </div></div>
+      </section>
+      <section class="adv-sec" id="vadv-wf">
+        <div class="adv-h"><div class="adv-ic">&#128260;</div><div><div class="adv-t">Walk-forward &amp; Walk-forward GA</div><div class="adv-d">Re-fits on past data, then trades the next unseen slice, over and over &mdash; the closest thing to live trading history.</div></div></div>
+        <div class="adv-b"><div class="lc-adv-grid">
+          <div class="lc-adv-field"><label class="flabel">Walk-forward folds</label><input type="number"  name="wf_folds" value="3"><div class="why">Train/test slices.</div></div><div class="lc-adv-field"><label class="flabel">Window</label><select name="wf_window_mode"><option value="rolling">rolling</option><option value="anchored">anchored</option></select><div class="why">Rolling forgets old data; anchored always trains from the start.</div></div><div class="lc-adv-field"><label class="flabel">Validation metric</label><input type="text"  name="validation_metric" value="profit_factor"><div class="why">Score used to judge each fold.</div></div><div class="lc-adv-field"><label class="flabel">GA population</label><input type="number"  name="wfga_population" value="8"><div class="why">Candidates per generation in each fold&rsquo;s re-fit.</div></div><div class="lc-adv-field"><label class="flabel">GA generations</label><input type="number"  name="wfga_generations" value="4"><div class="why">Breeding rounds per fold.</div></div>
+        </div></div>
+      </section>
+      <section class="adv-sec" id="vadv-sens">
+        <div class="adv-h"><div class="adv-ic">&#128208;</div><div><div class="adv-t">Sensitivity</div><div class="adv-d">Nudges each parameter up and down to see whether results hold in the neighbourhood or collapse (a sign of a lucky spike).</div></div></div>
+        <div class="adv-b"><div class="lc-adv-grid">
+          <div class="lc-adv-field"><label class="flabel">Range (± fraction)</label><input type="number" step="any" name="pct_range" value="0.5"><div class="why">0.5 = test from half to one-and-a-half times the value.</div></div><div class="lc-adv-field"><label class="flabel">Steps</label><input type="number"  name="n_steps" value="5"><div class="why">Points tested across the range.</div></div><div class="lc-adv-field"><label class="flabel">Max parameters</label><input type="number"  name="max_params" value="4"><div class="why">How many parameters are swept.</div></div><div class="lc-adv-field"><label class="flabel">Robustness metric</label><input type="text"  name="robustness_metric" value="eval_pass_probability"><div class="why">What is measured at each point.</div></div>
+        </div></div>
+      </section>
+      <section class="adv-sec" id="vadv-regime">
+        <div class="adv-h"><div class="adv-ic">&#127786;</div><div><div class="adv-t">Regime matrix</div><div class="adv-d">Splits the history by market conditions to show where the edge lives and where it does not.</div></div></div>
+        <div class="adv-b"><div class="lc-adv-grid">
+          <div class="lc-adv-field"><label class="flabel">Dimension A</label><input type="text"  name="regime_dim_a" value="volatility"><div class="why">First way to split the market.</div></div><div class="lc-adv-field"><label class="flabel">Dimension B</label><input type="text"  name="regime_dim_b" value="environment"><div class="why">Second way to split the market.</div></div>
+        </div></div>
+      </section>
+      <section class="adv-sec" id="vadv-real">
+        <div class="adv-h"><div class="adv-ic">&#128737;</div><div><div class="adv-t">Realism &amp; execution</div><div class="adv-d">How closely the simulation follows the broker. Stricter settings give lower, more honest numbers.</div></div></div>
+        <div class="adv-b">
+          {% include '_accuracy_fields.html' %}
+        </div>
+      </section>
     </div>
   </details>
 
@@ -217,7 +241,7 @@
 
   <div class="lc-side-card">
     <h4>&#9888; Watch-outs</h4>
-    <p class="lc-hint" style="font-size:12.5px;">Lucid is the only preset re-verified against the firm&rsquo;s own page (Oct 7). Other presets carry a “not re-verified” flag in the rules panel above. A check that fails stays failed — one red check is information, not a sunk run.</p>
+    <p class="lc-hint" style="font-size:12.5px;">Every prop-firm rule set carries a check date. If a firm&rsquo;s rules were last verified more than {{ READY_BAR.rules_max_age_days }} days ago (or never), a small tick-box appears under the rules panel: read the firm&rsquo;s page, tick it, and it is good for another {{ READY_BAR.rules_max_age_days }} days. Variations with too few trades are discounted, not crowned.</p>
   </div>
 </div>
 </div>

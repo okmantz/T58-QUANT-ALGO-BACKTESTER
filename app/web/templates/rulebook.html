@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Edge Rulebook — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+{% include '_lifecycle_css.html' %}
+<style>
+  .rb-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:16px;}
+  table.rb{width:100%; border-collapse:collapse; font-size:13px;} table.rb th{font-size:11px; color:var(--lc-muted); text-align:left; text-transform:uppercase; letter-spacing:.6px; padding:6px 8px; border-bottom:1px solid var(--lc-border2);}
+  table.rb td{padding:8px; border-bottom:1px solid var(--lc-border); vertical-align:top; overflow-wrap:anywhere;}
+  .rb-num{font-variant-numeric:tabular-nums; text-align:right;}
+  .rb-stage{display:flex; gap:12px; padding:10px 0; border-bottom:1px solid var(--lc-border);} .rb-stage:last-child{border-bottom:0;}
+  .rb-stage .n{flex:0 0 30px; height:30px; border-radius:50%; background:var(--lc-acc-dim); color:var(--lc-acc); display:flex; align-items:center; justify-content:center; font-weight:800;}
+  .rb-stage .t{font-weight:700;} .rb-stage .r{color:var(--lc-text); font-size:13px; margin-top:2px;} .rb-stage .w{color:var(--lc-muted); font-size:12px; margin-top:3px;}
+  .rb-meter{height:8px; border-radius:5px; background:var(--lc-panel3); overflow:hidden; margin:6px 0;} .rb-meter div{height:100%; background:linear-gradient(90deg,#00b57e,var(--lc-acc));}
+  .rb-calc input{width:90px;}
+</style>
+</head>
+<body>
+{% set active_page = 'rulebook' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="lc-scope"><div class="lc-wrap">
+<div class="lc-crumb">Quant Lab · <b>Edge Rulebook</b></div>
+<h1 class="lc-title">Edge Rulebook</h1>
+<p class="lc-sub">The standing bar every idea is held to: a net edge of about <b>+0.15R per trade</b> after costs, proven on data nobody has used, then forward-tested. Below: the six stages and where the app proves each one, the deflation lookup for the number of ideas you have tried, and your alpha ledger.</p>
+{% if notice %}<div class="lc-notice{{ '' if notice_ok == '1' else ' bad' }}">{{ notice }}</div>{% endif %}
+
+<div class="lc-card">
+  <h3>The six stages — stop at the first failure</h3>
+  <p class="lc-hint" style="margin-bottom:8px;">A fix after a failure is a new look: log it and it adds to N. A strategy is READY only after Stage 6; passing Stage 4 or 5 makes it a candidate, not a strategy.</p>
+  {% for s in snap.stages %}
+  <div class="rb-stage"><div class="n">{{ s.stage }}</div><div style="min-width:0;"><div class="t">{{ s.name }}</div><div class="r">{{ s.rule }}</div><div class="w">Where: {{ s.where }}</div></div></div>
+  {% endfor %}
+</div>
+
+<div class="rb-grid">
+  <div class="lc-card">
+    <h3><span data-metric="n_eff">Looks (N)</span> → bar → trades needed</h3>
+    <p class="lc-hint">At a per-trade Sharpe of 0.10 (= +0.15R at 2:1). More looks = a higher bar and more trades.</p>
+    <table class="rb"><tr><th>Looks N</th><th class="rb-num">z bar</th><th class="rb-num">Trades needed</th></tr>
+      {% for r in snap.lookup %}<tr><td>{{ r.looks }}</td><td class="rb-num">{{ r.z_bar }}</td><td class="rb-num">{{ '{:,}'.format(r.trades_needed) }}</td></tr>{% endfor %}
+    </table>
+    <div class="rb-calc" style="margin-top:12px; font-size:13px;">
+      Try your own: Sharpe/trade <input class="inp" id="c-sr" type="number" step="0.01" value="0.10" style="display:inline-block;"> looks <input class="inp" id="c-looks" type="number" value="10" style="display:inline-block;">
+      <div id="c-out" class="lc-hint" style="margin-top:6px;"></div>
+    </div>
+  </div>
+  <div class="lc-card">
+    <h3>Lift needed over no skill</h3>
+    <p class="lc-hint">How much a signal must raise the win rate to reach +0.15R net with a 0.05R cost.</p>
+    <table class="rb"><tr><th>Payoff</th><th class="rb-num">Lift needed</th></tr>
+      {% for r in snap.lift %}<tr><td>{{ r.payoff }}</td><td class="rb-num">+{{ r.lift_pts }} pts</td></tr>{% endfor %}
+    </table>
+    <p class="lc-hint" style="margin-top:8px;">Stage 0 allows at most 7 points: that is why 1:1 payoffs are only worth testing when the signal predicts direction by 10+ points.</p>
+  </div>
+</div>
+
+<div class="lc-card">
+  <h3>Alpha budget — {{ snap.budget.quarter }}</h3>
+  <p class="lc-hint">At most {{ snap.budget.max }} hypotheses a quarter. Failed ones spend budget too; it resets only when a new block of unseen data arrives.</p>
+  <div class="rb-meter"><div style="width:{{ (100 * snap.budget.hypotheses / snap.budget.max)|round|int }}%"></div></div>
+  <div style="font-size:13px;"><b>{{ snap.budget.hypotheses }}</b> of {{ snap.budget.max }} used · {{ snap.budget.left }} left · bar now z = <b>{{ snap.budget.z_bar_now }}</b>, next hypothesis z = {{ snap.budget.z_bar_next }}</div>
+  <form method="post" action="/rulebook/hypothesis" style="margin-top:14px;">
+    <div class="lc-row">
+      <div class="lc-col"><label class="flabel">Mechanism — who pays you, and why</label><input class="inp" name="mechanism" placeholder="e.g. yields lead equity futures, same sign" required></div>
+      <div class="lc-col"><label class="flabel">Segment traded</label><input class="inp" name="segment" placeholder="e.g. next 30 min after the open"></div>
+    </div>
+    <div class="lc-row" style="margin-top:10px;">
+      <div class="lc-col"><label class="flabel">Predicted sign</label><select class="inp" name="sign"><option value="+">Long (up)</option><option value="-">Short (down)</option></select></div>
+      <div class="lc-col"><label class="flabel">Payoff (reward : risk)</label><input class="inp" name="payoff" type="number" step="0.5" value="2" min="0.5"></div>
+      <div class="lc-col"><label class="flabel">Round-turn cost (R)</label><input class="inp" name="cost_r" type="number" step="0.01" value="0.05" min="0"></div>
+    </div>
+    <div style="margin-top:12px;"><button class="lc-btn" type="submit"{% if snap.budget.exhausted %} disabled{% endif %}>Log hypothesis before testing</button></div>
+  </form>
+  {% if snap.ledger %}
+  <table class="rb" style="margin-top:16px;"><tr><th>Id</th><th>Mechanism</th><th>Segment</th><th class="rb-num">b</th><th class="rb-num">N after</th><th class="rb-num">z bar</th><th>Date</th><th>Stage</th><th>Verdict</th></tr>
+    {% for r in snap.ledger|reverse %}<tr><td>{{ r.id }}</td><td>{{ r.mechanism }}</td><td>{{ r.segment }}</td><td class="rb-num">{{ r.b }}</td><td class="rb-num">{{ r.n_after }}</td><td class="rb-num">{{ r.z_bar }}</td><td>{{ r.date }}</td><td>{{ r.stage }}</td><td>{{ r.verdict }}</td></tr>{% endfor %}
+  </table>
+  {% endif %}
+</div>
+
+<div class="lc-card">
+  <h3>How the pipeline's gates map to the Rulebook</h3>
+  <table class="rb"><tr><th>Gate in a Test report</th><th>Rulebook stage</th></tr>
+    {% for k, v in gate_map.items() %}<tr><td>{{ k }}</td><td>{{ v }}</td></tr>{% endfor %}
+  </table>
+  <p class="lc-hint" style="margin-top:8px;">The live kill line used in Deploy: <b>LLR += 0.15/σ² × (R − 0.075)</b>, cut the strategy at <b>LLR ≤ {{ snap.constants.kill_llr }}</b> (σ = 1.46R at 2:1).</p>
+</div>
+
+</div></div>
+</div>
+</div>
+<script>
+(function () {
+  var sr = document.getElementById('c-sr'), lk = document.getElementById('c-looks'), out = document.getElementById('c-out');
+  function go() {
+    fetch('/api/rulebook/calc?sr=' + encodeURIComponent(sr.value) + '&looks=' + encodeURIComponent(lk.value))
+      .then(function (r) { return r.json(); })
+      .then(function (j) { out.textContent = j.ok ? ('z bar ' + j.z_bar + ' · ' + (j.trades_needed ? j.trades_needed.toLocaleString() + ' trades needed' : '—')) : 'Enter numbers.'; });
+  }
+  sr.addEventListener('input', go); lk.addEventListener('input', go); go();
+})();
+</script>
+</body>
+</html>

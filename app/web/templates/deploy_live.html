@@ -75,6 +75,28 @@
   </p>
 </div>
 
+<div class="card" style="max-width:none;" id="pf-overview">
+  <h2>Portfolio overview</h2>
+  <p class="help">Every connected account at a glance: firm, live P&amp;L, open and recent trades, and whether the algo is healthy. Refreshes every 15 seconds.</p>
+  <div id="pf-body"></div>
+  <div class="pf-next" id="pf-next"></div>
+</div>
+<script src="/static/t58-portfolio.js"></script>
+<script>
+  (function () {
+    var PF = window.T58Portfolio; if (!PF) return;
+    PF.mount(document.getElementById('pf-body'), {emptyText: 'No account connected yet. Open "Connect / manage prop-firm accounts" below, pick your firm, enter the login details from its email, and press Test connection.',
+      onData: function (d) {
+        var n = document.getElementById('pf-next'), a = d.accounts || [], t;
+        if (!a.length) t = '<b>Next:</b> connect your first account below (about two minutes).';
+        else if (!a.some(function (x) { return x.usable; })) t = '<b>Next:</b> an account is saved but incomplete. Re-open it below and finish the missing fields.';
+        else if (!a.some(function (x) { return x.running; })) t = '<b>Next:</b> pick a Champion strategy in step 2 and press Deploy. Start on a demo/evaluation account first.';
+        else t = '<b>Running.</b> Watch the health badge; if it turns amber or red, open the log under Live status.';
+        n.innerHTML = t;
+      }});
+  })();
+</script>
+
 <details class="card" style="max-width:720px;" {% if not broker_accounts %}open{% endif %}>
   <summary style="cursor:pointer;font-weight:700;">Connect / manage prop-firm accounts</summary>
   <div style="margin-top:12px;">{% include '_deploy_connect_panel.html' %}</div>

@@ -94,10 +94,36 @@
     </section>
   </div>
 
+  <!-- ===== Market intelligence (computed locally from stored daily bars + the calendar; every label shows its rule) ===== -->
+  <nav class="gx-tabs" id="gxi-tabs" aria-label="Market intelligence sections">
+    <a href="#gxi-regime">Regime intelligence</a><a href="#gxi-macro">Calendar &amp; releases</a><a href="#gxi-cb">Central banks</a>
+    <a href="#gxi-sessions">Sessions</a><a href="#gxi-futures">Futures stats</a><a href="#gxi-vol">Volatility</a>
+    <a href="#gxi-cross">Cross-asset</a><a href="#gxi-corr">Correlations</a><a href="#gxi-geo">Geopolitics</a>
+  </nav>
+  <section class="gx-card" id="gxi-regime"><h2>Market Regime Intelligence <span class="gx-tag" title="Rules are measurable and printed below; context, not a signal">transparent rules</span></h2>
+    <div class="gxi-regimes" id="gxi-regimes"></div>
+    <details class="gxi-rules"><summary>How each label is decided</summary><ul id="gxi-rule-list"></ul></details></section>
+  <div class="gx-two">
+    <section class="gx-card" id="gxi-macro"><h2>Economic calendar &amp; key releases <span class="gx-sub">CPI &middot; PPI &middot; NFP &middot; GDP &middot; PCE &middot; rates</span></h2><div id="gxi-macro-body"></div></section>
+    <section class="gx-card" id="gxi-cb"><h2>Central banks <span class="gx-sub">next decision</span></h2><div id="gxi-cb-body"></div></section>
+  </div>
+  <div class="gx-two">
+    <section class="gx-card" id="gxi-sessions"><h2>Market sessions</h2><div id="gxi-sessions-body"></div></section>
+    <section class="gx-card" id="gxi-vol"><h2>Volatility regime</h2><div id="gxi-vol-body"></div></section>
+  </div>
+  <section class="gx-card" id="gxi-futures"><h2>Futures stats <span class="gx-sub">daily bars</span></h2><div class="gxi-scroll" id="gxi-futures-body"></div></section>
+  <div class="gx-two">
+    <section class="gx-card" id="gxi-cross"><h2>Cross-asset monitor</h2><div id="gxi-cross-body"></div></section>
+    <section class="gx-card" id="gxi-corr"><h2>Correlation matrix</h2><div class="gxi-scroll" id="gxi-corr-body"></div></section>
+  </div>
+  <section class="gx-card" id="gxi-geo"><h2>Geopolitics <span class="gx-sub">hottest theaters and what they touch</span></h2><div id="gxi-geo-body"></div></section>
+  <p class="gx-foot" id="gxi-note"></p>
+
   <p class="gx-foot">Informational context only &mdash; not trading advice, not tick-level, data may be delayed. Sources: publisher RSS feeds (headline, source and link only), USGS, NASA EONET, GDACS, Stooq, ForexFactory calendar.</p>
 </div>
 </main>
 </div>
 <script src="/static/global-events/global-events.js" defer></script>
+<script src="/static/global-events/intel.js" defer></script>
 </body>
 </html>

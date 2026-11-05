@@ -132,7 +132,7 @@
     <div class="lc-kv"><span class="k">Search</span><span class="v">walk-forward-aware</span></div>
     <div class="lc-kv"><span class="k">Monte Carlo</span><span class="v">re-validated</span></div>
     <div class="lc-kv"><span class="k">OOS + holdout</span><span class="v">never tuned on</span></div>
-    <div class="lc-kv"><span class="k">Verdict</span><span class="v">READY bar &ge;70% · &ge;100 trades</span></div>
+    <div class="lc-kv"><span class="k">Verdict</span><span class="v">{{ READY_BAR.ready_short }}, &le;{{ '%.0f'|format(READY_BAR.breach_cap_pct) }}% breach</span></div>
   </div>
 
   {% include '_lifecycle_how.html' %}

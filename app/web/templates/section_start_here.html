@@ -68,7 +68,19 @@
     <em>Open the Discovery Engine &rarr;</em>
   </a>
 </div>
+<div class="cr-flow" aria-label="What happens next">
+  <span><b>1</b> Create or find a strategy</span><i>&rarr;</i><span><b>2</b> Test it properly</span><i>&rarr;</i><span><b>3</b> Optimize &amp; Validate</span><i>&rarr;</i><span><b>4</b> Champion &amp; Deploy</span>
+</div>
 <style>
+  .cr-flow { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:0 0 14px; font-size:12.5px; color:var(--text-muted); }
+  .cr-flow span { padding:5px 11px; border-radius:999px; border:1px solid var(--border-light); background:var(--panel-2); }
+  .cr-flow b { color:var(--teal); margin-right:4px; }
+  .cr-flow i { font-style:normal; opacity:.6; }
+  .cr-chips { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:6px 0 4px; }
+  .cr-chip { font:inherit; font-size:12.5px; padding:5px 12px; border-radius:999px; cursor:pointer; color:var(--text); background:var(--panel-2); border:1px solid var(--border-light); }
+  .cr-chip:hover, .cr-chip:focus-visible { border-color:var(--teal); color:var(--teal); outline:none; }
+  .cr-adv { margin-top:12px; border:1px solid var(--border-light); border-radius:10px; padding:8px 14px; background:var(--panel-2); }
+  .cr-adv summary { cursor:pointer; font-weight:600; font-size:13px; }
   .cr-paths { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0 0 16px; }
   .cr-path { display: flex; flex-direction: column; gap: 6px; padding: 16px 18px; border-radius: 14px; text-decoration: none; color: var(--text);
     background: var(--panel-2); border: 1px solid var(--border-light); transition: border-color .15s, transform .15s; }
@@ -95,7 +107,14 @@
   <form method="post" action="/discover/run" data-panel="manual">
     <input type="hidden" name="_csrf_token" value="{{ create_csrf or '' }}">
     <label class="flabel">Describe the strategy in plain English</label>
-    <textarea name="idea" placeholder="Strategies that go long after price sweeps below the Asian low and reclaims it on ES 15m…"></textarea>
+    <textarea name="idea" id="cr-idea" placeholder="Strategies that go long after price sweeps below the Asian low and reclaims it on ES 15m…"></textarea>
+    <div class="cr-chips" aria-label="Example ideas">
+      <span class="lc-hint">Not sure what to write? Click an example:</span>
+      <button type="button" class="cr-chip" data-idea="Opening-range breakout: trade the first 30-minute high or low break on NQ, stop at the opposite side of the range.">Opening-range breakout</button>
+      <button type="button" class="cr-chip" data-idea="Mean reversion: fade moves more than 2 standard deviations from the 20-bar average on ES 15m, exit at the average.">Mean reversion</button>
+      <button type="button" class="cr-chip" data-idea="Trend pullback: in an uptrend (price above the 200-bar average) buy pullbacks to the 20-bar average on gold 1h.">Trend pullback</button>
+      <button type="button" class="cr-chip" data-idea="Liquidity sweep: go long after price sweeps below the Asian low and closes back above it, target the prior session high.">Liquidity sweep</button>
+    </div>
     <label class="flabel" style="margin-top:10px;">Market data to test it on</label>
     {% if create_dataset_groups %}
     <select id="create_datasets_pick" name="datasets" multiple size="8">
@@ -122,9 +141,14 @@
         <div class="lc-hint" style="margin:2px 0 4px;">The idea is tested at each of these bar sizes instead of running one silently at 1m. 5m / 15m / 30m / 1h start selected — Ctrl/Cmd-click to change.</div>
         <input type="hidden" name="timeframes" id="create_timeframes_hidden" value="5m, 15m, 30m, 1h">
       </div>
-      <div class="lc-col"><label class="flabel">Max bars</label><input type="number" name="max_bars" value="60000"></div>
-      <div class="lc-col"><label class="flabel">Null comparisons</label><input type="number" name="n_null" value="200"></div>
     </div>
+    <details class="cr-adv">
+      <summary>Advanced (defaults are fine) <span class="lc-hint">search size and strictness</span></summary>
+      <div class="lc-row" style="margin-top:8px;">
+        <div class="lc-col"><label class="flabel">Max bars per dataset</label><input type="number" name="max_bars" value="60000"><div class="lc-hint">Newest bars used per file. More = slower, steadier.</div></div>
+        <div class="lc-col"><label class="flabel">Shuffled-data comparisons</label><input type="number" name="n_null" value="200"><div class="lc-hint">Your idea is also run on this many scrambled copies of the market; it must beat nearly all of them to count as real.</div></div>
+      </div>
+    </details>
     <script>
       (function () {
         var pick = document.getElementById('create_timeframes_pick');
@@ -165,7 +189,7 @@
   {% else %}
   <a class="lc-btn big" href="/full-pipeline">Next step: Test →</a>
   {% endif %}
-  <p class="lc-hint" style="margin-top:6px;">Carries the newest saved strategy into the Test page, already selected.</p>
+  <p class="lc-hint" style="margin-top:6px;">Carries the newest saved strategy into the Test page, already selected. Nothing saved yet? Use one of the two paths above first.</p>
 </div>
 
 {% if recent_strategies %}
@@ -182,6 +206,12 @@
 </div>
 </div>
 <script>
+  document.querySelectorAll('.cr-chip').forEach(function (c) {
+    c.addEventListener('click', function () {
+      var t = document.getElementById('cr-idea');
+      if (t) { t.value = c.getAttribute('data-idea'); t.focus(); }
+    });
+  });
   function lcCreateTab(btn, panel) {
     document.querySelectorAll('.lc-tab-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');

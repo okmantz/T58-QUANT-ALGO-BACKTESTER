@@ -511,7 +511,7 @@
   function renderBacktestTab(d) {
     const b = d.backtest, el = document.getElementById('d-backtest');
     if (!b || !b.has) {
-      el.innerHTML = emptyState('This strategy has not been through the Full Pipeline yet. Run it once and its equity curve, stats and report show up here.', d.full_pipeline_href, 'Run Full Pipeline');
+      el.innerHTML = emptyState('This strategy has not been through the Full Pipeline yet. Run it once and its equity curve, stats and report show up here.', d.full_pipeline_href, 'Test a Strategy');
       return;
     }
     const st = b.stats || {};
@@ -581,7 +581,7 @@
 
   function renderResultsTab(d) {
     const r = d.results, el = document.getElementById('d-results');
-    if (!r || !r.has) { el.innerHTML = emptyState('Nothing recorded for this strategy yet.', d.full_pipeline_href, 'Run Full Pipeline'); return; }
+    if (!r || !r.has) { el.innerHTML = emptyState('Nothing recorded for this strategy yet.', d.full_pipeline_href, 'Test a Strategy'); return; }
     const la = r.lookahead, ls = r.last_search, lo = r.last_optimize;
     el.innerHTML = `
       <div class="stat-tiles">

@@ -234,7 +234,7 @@
   </div>
   <div class="acts">
     <button type="button" class="t58-btn ghost sm" data-t58-tour-start>&#127891; 60-second tour</button>
-    <a class="t58-btn primary sm" href="/full-pipeline">&#9654; Run Full Pipeline</a>
+    <a class="t58-btn primary sm" href="/full-pipeline">&#9654; Test a Strategy</a>
   </div>
 </div>
 
@@ -333,7 +333,7 @@
       {% if current_metrics %}
       <a class="t58-btn secondary sm" href="/validate-simple">Open Validate (pick checks) &rarr;</a>
       {% else %}
-      <a class="t58-btn primary sm" href="/full-pipeline">&#9654; Run Full Pipeline</a>
+      <a class="t58-btn primary sm" href="/full-pipeline">&#9654; Test a Strategy</a>
       {% endif %}
       <a class="t58-btn ghost sm" href="/library">Strategy Library &rarr;</a>
     </div>
@@ -387,6 +387,20 @@
   </div>
   <div class="flow-foot"><span>&#9760; {{ fl.graveyard }} in the <a href="/graveyard">Graveyard</a></span><span>{{ fl.running }} total runs</span></div>
 </div>
+
+<!-- ---- Account portfolio (opt-in: Account settings -> Personalize; needs a connected account with trading activity) ---- -->
+<div class="db-card" id="db-portfolio" hidden>
+  <h2>Your accounts <span style="font-size:11.5px;font-weight:500;color:var(--text-dim);margin-left:6px;">live P&amp;L, open and past trades, algo health</span> <a href="/deploy-live">Deploy &rarr;</a></h2>
+  <div id="db-portfolio-body"></div>
+</div>
+<script src="/static/t58-portfolio.js"></script>
+<script>
+  (function () {
+    var PF = window.T58Portfolio, box = document.getElementById('db-portfolio');
+    if (!PF || !box || !PF.enabled()) return;
+    PF.mount(document.getElementById('db-portfolio-body'), {compact: true, onData: function (d) { box.hidden = !d.eligible; }});
+  })();
+</script>
 
 <!-- ---- Your strategies: friendly cards ---- -->
 <div class="db-card">

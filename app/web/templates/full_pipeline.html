@@ -26,9 +26,9 @@
 
 {% set lc_step = 'test' %}
 {% include '_lifecycle_stepper.html' %}
-<div class="lc-crumb">Test &rsaquo; <b>Full Pipeline</b></div>
+<div class="lc-crumb">Test &rsaquo; <b>Test a strategy</b></div>
 <h1 class="lc-title">Test it properly</h1>
-<p class="lc-sub">The full check: baseline &rarr; preflight &rarr; walk-forward-aware search &rarr; re-validated Monte Carlo &rarr; out-of-sample &rarr; holdout &rarr; a READY / MARGINAL / NOT READY verdict. This is the only run allowed to call a strategy READY. Slowest thing this app runs — expect it to take a while on a full dataset.</p>
+<p class="lc-sub">The full check: baseline &rarr; preflight &rarr; walk-forward-aware search &rarr; re-validated Monte Carlo &rarr; out-of-sample &rarr; holdout &rarr; a verdict on the evidence ladder (Reject &rarr; Lead &rarr; Forward-Test Candidate &rarr; Evaluate &rarr; Funded) alongside the READY / MARGINAL / NOT READY read. This is the only run allowed to call a strategy READY. It is the slowest thing this app runs — expect it to take a while on a full dataset.</p>
 
 {% if error %}
 <div class="lc-error">{{ error }}</div>
@@ -111,110 +111,203 @@
     <div class="est">Slowest run in the app · results land on the job page and in Reports</div>
   </div>
 
-  <div style="display:flex; gap:10px; margin-bottom:14px; flex-wrap:wrap;">
-    <button class="lc-btn big" type="submit">&#9654; RUN FULL PIPELINE</button>
-    <button class="lc-btn big ghost batch" type="submit" formaction="/full-pipeline/start-batch">Run Batch (strategies ticked in Advanced)</button>
-    <button class="lc-btn big ghost schedule" type="submit" formaction="/full-pipeline/schedule-batch">Schedule Batch</button>
+  <div style="display:flex; gap:10px; margin-bottom:14px; flex-wrap:wrap; align-items:center;">
+    <button class="lc-btn big" type="submit">&#9654; Run the full test</button>
+    <span class="lc-hint">Batch runs and scheduling live in <a href="#adv-batch" onclick="document.getElementById('adv-details').open=true;" style="color:var(--lc-acc);">Advanced &rarr; Batch &amp; scheduling</a>.</span>
   </div>
 
-  <details class="lc-adv">
-    <summary>Advanced options <span class="lc-hint">defaults are sensible — skip this unless you know why</span></summary>
+  <details class="lc-adv" id="adv-details">
+    <summary>Advanced options <span class="lc-hint">defaults are sensible &mdash; open this only when you know what you want to change</span></summary>
     <div class="adv-body">
-      <div class="lc-subhead">Strategy — build, paste or upload</div>
-      <p class="lc-field-note">Only used when no saved strategy is picked above (a pick above wins, and pasting code here overrides the pick). To write a brand-new strategy in plain English, use <a href="/start-here/create" style="color:var(--lc-acc);">Create</a>.</p>
-      <div class="lc-adv-grid">
-        <div class="lc-adv-field"><label class="flabel">SMA fast (quick builder)</label><input type="number" name="sma_fast" value="20"></div>
-        <div class="lc-adv-field"><label class="flabel">SMA slow (quick builder)</label><input type="number" name="sma_slow" value="50"></div>
-        <div class="lc-adv-field"><label class="flabel">Stop loss (pips)</label><input type="number" name="sl_pips" value="20"></div>
-        <div class="lc-adv-field"><label class="flabel">Take profit (pips)</label><input type="number" name="tp_pips" value="40"></div>
-      </div>
-      <label class="flabel" style="margin-top:12px;">Or upload a strategy file (from this computer or your phone)</label>
-      <input type="file" id="strategy_file_input" name="strategy_file" accept=".py,.pine,.mq5,.json">
-      <label class="flabel" style="margin-top:10px;">Or paste strategy source</label>
-      <textarea class="code" name="strategy_code" id="strategy_code" placeholder="Paste a manual strategy JSON config, or Python / PineScript / MQL5 source"></textarea>
+      <nav class="adv-nav" aria-label="Advanced sections">
+        <a href="#adv-source">&#129513; Strategy source</a>
+        <a href="#adv-risk">&#128176; Account &amp; prop rules</a>
+        <a href="#adv-realism">&#127919; Realism</a>
+        <a href="#adv-search">&#128270; Search</a>
+        <a href="#adv-confidence">&#128737; Confidence</a>
+        <a href="#adv-options">&#9881; Options</a>
+        <a href="#adv-batch">&#128193; Batch &amp; scheduling</a>
+        <a href="#adv-notify">&#128276; Alerts &amp; timeframes</a>
+        <a href="#adv-ai">&#129302; AI assist</a>
+      </nav>
 
-      {% include "_accuracy_fields.html" %}
+      <section class="adv-sec" id="adv-source">
+        <div class="adv-h"><div class="adv-ic">&#129513;</div><div><div class="adv-t">Strategy source</div>
+          <div class="adv-d">Only used when no saved strategy is picked above. A pick above wins; pasting code here overrides the pick. To write a brand-new strategy in plain English, use <a href="/start-here/create" style="color:var(--lc-acc);">Create</a>.</div></div></div>
+        <div class="adv-b">
+          <div class="adv-grp">Quick moving-average builder</div>
+          <div class="lc-adv-grid">
+            <div class="lc-adv-field"><label class="flabel">Fast SMA period</label><input type="number" name="sma_fast" value="20"><div class="why">Bars in the fast average.</div></div>
+            <div class="lc-adv-field"><label class="flabel">Slow SMA period</label><input type="number" name="sma_slow" value="50"><div class="why">Bars in the slow average; the fast crossing it is the signal.</div></div>
+            <div class="lc-adv-field"><label class="flabel">Stop loss (pips)</label><input type="number" name="sl_pips" value="20"><div class="why">Distance to the stop, in pips of the pip size set below.</div></div>
+            <div class="lc-adv-field"><label class="flabel">Take profit (pips)</label><input type="number" name="tp_pips" value="40"><div class="why">Distance to the target.</div></div>
+          </div>
+          <div class="adv-grp">Or bring your own code</div>
+          <label class="flabel">Upload a strategy file (from this computer or your phone)</label>
+          <input type="file" id="strategy_file_input" name="strategy_file" accept=".py,.pine,.mq5,.json">
+          <label class="flabel" style="margin-top:10px;">Or paste strategy source</label>
+          <textarea class="code" name="strategy_code" id="strategy_code" placeholder="Paste a manual strategy JSON config, or Python / PineScript / MQL5 source"></textarea>
+        </div>
+      </section>
 
-      <div class="lc-subhead">Risk &amp; prop rules</div>
-      <div class="lc-adv-grid">
-        <div class="lc-adv-field"><label class="flabel">Initial balance</label><input type="number" name="initial_balance" id="fp_initial_balance" value="100000"></div>
-        <div class="lc-adv-field"><label class="flabel">Account size (prop rules)</label><input type="number" name="account_size" id="fp_account_size" value="100000"></div>
-        <div class="lc-adv-field"><label class="flabel">Risk mode</label>
-          <select name="risk_mode"><option value="percent">% of balance</option><option value="fixed">Fixed lot</option></select></div>
-        <div class="lc-adv-field"><label class="flabel">Risk value</label><input type="number" step="0.1" name="risk_value" value="1.0"></div>
-        <div class="lc-adv-field"><label class="flabel">Profit target %</label><input type="number" step="0.1" name="profit_target" value="8"></div>
-        <div class="lc-adv-field"><label class="flabel">Daily loss limit %</label><input type="number" step="0.1" name="daily_loss" value="5"></div>
-        <div class="lc-adv-field"><label class="flabel">Max drawdown %</label><input type="number" step="0.1" name="max_dd" value="10"></div>
-        <div class="lc-adv-field"><label class="flabel">Pip size</label><input type="number" step="0.0001" name="pip_size" id="fp_pip_size_field" value="0.0001"></div>
-        <div class="lc-adv-field"><label class="flabel">Contract $/point (blank = not lot-rounded)</label><input type="number" step="0.01" name="contract_size" id="fp_contract_size_field" value=""></div>
-        <div class="lc-adv-field"><label class="flabel">Commission per trade ($)</label><input type="number" step="0.01" name="commission" id="fp_commission_field" value="3"></div>
-      </div>
-      <button type="button" class="lc-btn ghost small" onclick="fpDetectPipSize()" style="margin-top:8px;">Detect pip size from data</button>
-      <p class="lc-hint" id="fp_pip_detect_status" style="margin-top:6px;"></p>
+      <section class="adv-sec" id="adv-risk">
+        <div class="adv-h"><div class="adv-ic">&#128176;</div><div><div class="adv-t">Account, risk &amp; prop rules</div>
+          <div class="adv-d">Picking a prop firm above fills the rule fields for you and applies that firm&rsquo;s full rule set (trailing type, consistency, payout gates). Change a field here only to test a rule the firm doesn&rsquo;t publish.</div></div></div>
+        <div class="adv-b">
+          <div class="adv-grp">Account</div>
+          <div class="lc-adv-grid">
+            <div class="lc-adv-field"><label class="flabel">Initial balance ($)</label><input type="number" name="initial_balance" id="fp_initial_balance" value="100000"><div class="why">Kept equal to the account size.</div></div>
+            <div class="lc-adv-field"><label class="flabel">Account size ($)</label><input type="number" name="account_size" id="fp_account_size" value="100000"><div class="why">The funded-account size the rules are percentages of.</div></div>
+          </div>
+          <div class="adv-grp">Position sizing</div>
+          <div class="lc-adv-grid">
+            <div class="lc-adv-field"><label class="flabel">Risk mode</label>
+              <select name="risk_mode"><option value="percent">% of balance</option><option value="fixed">Fixed lot</option></select><div class="why">How the size of each trade is chosen.</div></div>
+            <div class="lc-adv-field"><label class="flabel">Risk value</label><input type="number" step="0.1" name="risk_value" value="1.0"><div class="why">% of balance per trade, or lots when fixed.</div></div>
+          </div>
+          <div class="adv-grp">Prop-firm limits</div>
+          <div class="lc-adv-grid">
+            <div class="lc-adv-field"><label class="flabel">Profit target (%)</label><input type="number" step="0.1" name="profit_target" value="8"><div class="why">Gain needed to pass the evaluation.</div></div>
+            <div class="lc-adv-field"><label class="flabel">Daily loss limit (%)</label><input type="number" step="0.1" name="daily_loss" value="5"><div class="why">Largest one-day loss before the account fails.</div></div>
+            <div class="lc-adv-field"><label class="flabel">Max drawdown (%)</label><input type="number" step="0.1" name="max_dd" value="10"><div class="why">Largest fall from the high-water mark (or start) allowed.</div></div>
+          </div>
+          <div class="adv-grp">Instrument &amp; costs</div>
+          <div class="lc-adv-grid">
+            <div class="lc-adv-field"><label class="flabel">Pip size</label><input type="number" step="0.0001" name="pip_size" id="fp_pip_size_field" value="0.0001"><div class="why">Price move of one pip; 0.0001 for most FX, 0.01 for gold/JPY, 1 for index points.</div></div>
+            <div class="lc-adv-field"><label class="flabel">Contract $ per point</label><input type="number" step="0.01" name="contract_size" id="fp_contract_size_field" value=""><div class="why">Dollars per full point of price. Blank = size is not rounded to whole contracts.</div></div>
+            <div class="lc-adv-field"><label class="flabel">Commission per trade ($)</label><input type="number" step="0.01" name="commission" id="fp_commission_field" value="3"><div class="why">Round-turn cost charged on every trade.</div></div>
+          </div>
+          <button type="button" class="lc-btn ghost small" onclick="fpDetectPipSize()" style="margin-top:10px;">Detect pip size from data</button>
+          <p class="lc-hint" id="fp_pip_detect_status" style="margin-top:6px;"></p>
+        </div>
+      </section>
 
-      <div class="lc-subhead">Pipeline settings</div>
-      <div class="lc-adv-grid">
-        <div class="lc-adv-field"><label class="flabel">Walk-forward folds</label><input type="number" name="n_folds" value="4"></div>
-        <div class="lc-adv-field"><label class="flabel">Window mode</label>
-          <select name="window_mode"><option value="rolling">Rolling</option><option value="anchored">Anchored</option></select></div>
-        <div class="lc-adv-field"><label class="flabel">Fitness metric</label>
-          <select name="fitness_metric">
-            {% for key, label in fitness_metrics.items() %}
-            <option value="{{ key }}" {{ 'selected' if key == 'pass_gradient' else '' }}>{{ label }}</option>
-            {% endfor %}
-          </select>
-          <div class="why">Not trading a prop-firm evaluation? Pick "Long-Term Net Profit" — it scores candidates purely on total P&amp;L and ignores prop-firm drawdown/payout rules entirely.</div></div>
-        <div class="lc-adv-field"><label class="flabel">Optimizer mode</label>
-          <select name="optimizer_mode">
-            {% for key, label in optimizer_modes.items() %}
-            <option value="{{ key }}" {{ 'selected' if key == 'genetic' else '' }}>{{ label }}</option>
-            {% endfor %}
-          </select>
-          <div class="why">All three run the exact same chained out-of-sample scoring per candidate — only how the next configuration to try is chosen differs. TPE/CMA-ES need the optuna / cma packages on the server.</div></div>
-        <div class="lc-adv-field"><label class="flabel">GA population</label><input type="number" name="ga_population" value="12"></div>
-        <div class="lc-adv-field"><label class="flabel">GA generations</label><input type="number" name="ga_generations" value="6"></div>
-        <div class="lc-adv-field"><label class="flabel">Search-phase MC sims</label><input type="number" name="ga_search_mc_sims" value="200"></div>
-        <div class="lc-adv-field"><label class="flabel">Final MC sims</label><input type="number" name="final_mc_sims" value="10000"></div>
-        <div class="lc-adv-field"><label class="flabel">Baseline MC sims (diagnostic only)</label><input type="number" name="baseline_mc_sims" value="2000"></div>
-        <div class="lc-adv-field"><label class="flabel">Holdout fraction</label><input type="number" step="0.05" name="holdout_frac" value="0.2" id="lc-holdout-frac"></div>
-        <div class="lc-adv-field"><label class="flabel">OOS check folds</label><input type="number" name="oos_check_folds" value="4"></div>
-        <div class="lc-adv-field"><label class="flabel">Random seed</label><input type="number" name="random_seed" value="42"></div>
-        <div class="lc-adv-field"><label class="flabel">Library status override (blank = auto-pick from verdict)</label>
-          <select name="library_status">
-            <option value="">— auto (from verdict) —</option>
-            {% for s in strategy_statuses|default([]) %}
-            <option value="{{ s }}">{{ s }}</option>
-            {% endfor %}
-          </select></div>
-        <div class="lc-adv-field"><label class="flabel">Notify me when done (optional)</label>
-          <input type="url" name="notify_webhook_url" placeholder="Discord/Slack/Zapier webhook URL — leave blank for none">
-          <div class="why">Posts one message here the moment this run (single or batch) finishes — useful for an overnight Full Pipeline batch you don't want to babysit.</div></div>
-        <div class="lc-adv-field"><label class="flabel">Timeframes to test (optional)</label>
-          <input type="text" name="expand_timeframes" placeholder="e.g. 5m, 15m, 30m, 1h, 4h">
-          <div class="why">Leave blank to run once on the loaded data's own bar size. Each listed timeframe runs the ENTIRE pipeline, resampled from the loaded file. Not used by the batch buttons.</div></div>
-        <div class="lc-adv-field"><label class="flabel">Schedule batch start (24h HH:MM, local)</label>
-          <input type="text" name="schedule_start_at" placeholder="e.g. 23:30" pattern="[0-2][0-9]:[0-5][0-9]">
-          <div class="why">Only for the Schedule Batch button: validates now, starts at this clock time (today, or tomorrow if it's already passed).</div></div>
-      </div>
-      <label class="checkbox-row"><input type="checkbox" name="skip_optimization">Lock parameters -- skip the GA search entirely and backtest exactly what's supplied (use this to compare against another tool/platform on the identical rule, with no re-optimization)</label>
-      <label class="checkbox-row"><input type="checkbox" name="parallel_search" checked>Parallelize GA search across CPU cores</label>
-      <label class="checkbox-row"><input type="checkbox" name="adaptive_risk_enabled">Enable adaptive, limit-aware position sizing (throttles risk as the account nears its daily-loss/max-drawdown limits)</label>
-      <label class="checkbox-row"><input type="checkbox" name="reset_on_breach" checked>Reset-on-breach: score on the basis that a blown account gets a fresh eval and keeps going, not a dead end (recommended)</label>
-      <p class="lc-field-note">If you ran Quick Optimize on this strategy with adaptive sizing ON, leave it ON here too — comparing a Quick Optimize result with this enabled against a Full Pipeline run with it OFF (or vice versa) is not an apples-to-apples comparison.</p>
-      <label class="checkbox-row"><input type="checkbox" name="save_to_library" checked>Save the winning strategy to the Strategy Library</label>
-      <p class="lc-field-note">One strategy, one record: when you start from a Strategy Library entry, this run updates <b>that same strategy</b> — its report, stats and Validate/Champion progress stay attached to it, and the previous version is archived (never deleted). No extra copy is created. A strategy you upload or paste here (not from the library) is saved once under a new name.</p>
+      <section class="adv-sec" id="adv-realism">
+        <div class="adv-h"><div class="adv-ic">&#127919;</div><div><div class="adv-t">Realism &amp; execution</div>
+          <div class="adv-d">How closely the simulation follows the broker: spread, slippage, drawdown measurement and fills. Stricter settings lower the numbers and make them more honest.</div></div></div>
+        <div class="adv-b">
+          {% include "_accuracy_fields.html" %}
+        </div>
+      </section>
 
-      <div class="lc-subhead">Or run on multiple saved strategies (batch)</div>
-      <p class="lc-field-note">Runs the SAME full pipeline against every strategy checked below, one after another — the web equivalent of the desktop app's "RUN FULL PIPELINE (BATCH)" button. Uses the dataset and settings configured here; the single strategy picked above is ignored when you click the batch button.</p>
-      <div id="batch-strategy-list" class="batch-strategy-list"></div>
+      <section class="adv-sec" id="adv-search">
+        <div class="adv-h"><div class="adv-ic">&#128270;</div><div><div class="adv-t">Search</div>
+          <div class="adv-d">How the optimiser looks for better settings. Every candidate is scored on out-of-sample data chained across folds, so a bigger search finds more &mdash; and is penalised for it in the final verdict.</div></div></div>
+        <div class="adv-b">
+          <div class="adv-grp">What to optimise</div>
+          <div class="lc-adv-grid">
+            <div class="lc-adv-field"><label class="flabel">Fitness metric</label>
+              <select name="fitness_metric">
+                {% for key, label in fitness_metrics.items() %}
+                <option value="{{ key }}" {{ 'selected' if key == 'edge_lb_r' else '' }}>{{ label }}</option>
+                {% endfor %}
+              </select>
+              <div class="why">The default ranks candidates on their <b>edge</b> (lower bound of mean R per trade); pass odds size the account later. Not trading a prop-firm evaluation? Pick &ldquo;Long-Term Net Profit&rdquo;.</div></div>
+            <div class="lc-adv-field"><label class="flabel">Optimizer mode</label>
+              <select name="optimizer_mode">
+                {% for key, label in optimizer_modes.items() %}
+                <option value="{{ key }}" {{ 'selected' if key == 'genetic' else '' }}>{{ label }}</option>
+                {% endfor %}
+              </select>
+              <div class="why">All three score candidates identically &mdash; only how the next one is picked differs. TPE / CMA-ES need the optuna / cma packages.</div></div>
+          </div>
+          <div class="adv-grp">Search size</div>
+          <div class="lc-adv-grid">
+            <div class="lc-adv-field"><label class="flabel">GA population</label><input type="number" name="ga_population" value="12"><div class="why">Candidates per generation.</div></div>
+            <div class="lc-adv-field"><label class="flabel">GA generations</label><input type="number" name="ga_generations" value="6"><div class="why">Rounds of breeding. Population &times; generations = how many settings are tried.</div></div>
+            <div class="lc-adv-field"><label class="flabel">Search-phase Monte Carlo sims</label><input type="number" name="ga_search_mc_sims" value="200"><div class="why">Quick simulations used only to rank candidates.</div></div>
+          </div>
+          <div class="adv-grp">Walk-forward windows</div>
+          <div class="lc-adv-grid">
+            <div class="lc-adv-field"><label class="flabel">Walk-forward folds</label><input type="number" name="n_folds" value="4"><div class="why">How many train/test slices the history is cut into.</div></div>
+            <div class="lc-adv-field"><label class="flabel">Window mode</label>
+              <select name="window_mode"><option value="rolling">Rolling</option><option value="anchored">Anchored</option></select>
+              <div class="why">Rolling forgets old data; anchored always trains from the start.</div></div>
+          </div>
+        </div>
+      </section>
 
-      <div class="lc-subhead">AI Assist (optional, off by default)</div>
-      <p class="lc-field-note">When enabled, the GA search asks a local Ollama model for candidate parameter values once per generation and seeds them into the population alongside the normal random/bred candidates. Every suggestion still goes through the exact same backtest/prop-sim/Monte Carlo evaluation as any other candidate — it proposes numbers for parameters that already exist, never code. Needs Ollama reachable at the host below from wherever this server is running.</p>
-      <label class="checkbox-row"><input type="checkbox" name="ai_enabled" id="ai_enabled" {{ 'checked' if ai_enabled else '' }}>Enable AI Assist for this run</label>
-      <div class="lc-adv-grid">
-        <div class="lc-adv-field"><label class="flabel">Ollama host</label><input type="text" name="ai_host" value="{{ ai_host }}"></div>
-        <div class="lc-adv-field"><label class="flabel">Model</label><input type="text" name="ai_model" value="{{ ai_model }}"></div>
-      </div>
+      <section class="adv-sec" id="adv-confidence">
+        <div class="adv-h"><div class="adv-ic">&#128737;</div><div><div class="adv-t">Confidence &amp; held-back data</div>
+          <div class="adv-d">How much evidence the final verdict is built on. More simulations tighten the odds; the holdout is data the search never sees.</div></div></div>
+        <div class="adv-b">
+          <div class="lc-adv-grid">
+            <div class="lc-adv-field"><label class="flabel">Final Monte Carlo sims</label><input type="number" name="final_mc_sims" value="10000"><div class="why">Simulated attempts behind the headline pass / payout / breach odds.</div></div>
+            <div class="lc-adv-field"><label class="flabel">Baseline Monte Carlo sims</label><input type="number" name="baseline_mc_sims" value="2000"><div class="why">Diagnostic run of your original settings. Never affects the verdict.</div></div>
+            <div class="lc-adv-field"><label class="flabel">Holdout fraction</label><input type="number" step="0.05" name="holdout_frac" value="0.2" id="lc-holdout-frac"><div class="why">Share of the newest data locked away until the end (0.2 = last 20%). Needs to be big enough to hold ~30+ trades.</div></div>
+            <div class="lc-adv-field"><label class="flabel">Out-of-sample check folds</label><input type="number" name="oos_check_folds" value="4"><div class="why">Folds for the pooled out-of-sample edge check.</div></div>
+            <div class="lc-adv-field"><label class="flabel">Random seed</label><input type="number" name="random_seed" value="42"><div class="why">Same seed + same data = the same result, every time.</div></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="adv-sec" id="adv-options">
+        <div class="adv-h"><div class="adv-ic">&#9881;</div><div><div class="adv-t">Options</div>
+          <div class="adv-d">Switches that change how the run behaves. The recommended ones are pre-ticked.</div></div></div>
+        <div class="adv-b">
+          <label class="checkbox-row"><input type="checkbox" name="skip_optimization"><span><b>Lock parameters</b> &mdash; skip the search and backtest exactly what is supplied. Use it to compare against another platform on the identical rule.</span></label>
+          <label class="checkbox-row"><input type="checkbox" name="parallel_search" checked><span><b>Use all CPU cores</b> for the search (faster; same results).</span></label>
+          <label class="checkbox-row"><input type="checkbox" name="adaptive_risk_enabled"><span><b>Adaptive sizing</b> &mdash; throttle risk as the account nears its daily-loss or max-drawdown limit. Keep it the same as in Optimize or the two runs are not comparable.</span></label>
+          <label class="checkbox-row"><input type="checkbox" name="reset_on_breach" checked><span><b>Reset on breach</b> (recommended) &mdash; a blown account gets a fresh evaluation and keeps going, which is how you would really trade it.</span></label>
+          <label class="checkbox-row"><input type="checkbox" name="save_to_library" checked><span><b>Save the winner to the Strategy Library.</b> One strategy, one record: a run that starts from a library entry updates that same strategy (the previous version is archived, never deleted).</span></label>
+          <div class="lc-adv-grid" style="margin-top:10px;">
+            <div class="lc-adv-field"><label class="flabel">Library status override</label>
+              <select name="library_status">
+                <option value="">&mdash; auto (from verdict) &mdash;</option>
+                {% for st in strategy_statuses|default([]) %}
+                <option value="{{ st }}">{{ st }}</option>
+                {% endfor %}
+              </select><div class="why">Leave on auto unless you want to label the strategy yourself.</div></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="adv-sec" id="adv-batch">
+        <div class="adv-h"><div class="adv-ic">&#128193;</div><div><div class="adv-t">Batch &amp; scheduling</div>
+          <div class="adv-d">Run the <b>same</b> full test on several saved strategies, one after another &mdash; now, or at a set time tonight. Uses the data, prop firm and settings chosen on this page; the single strategy picked above is ignored.</div></div></div>
+        <div class="adv-b">
+          <div class="adv-grp">1 &middot; Tick the strategies</div>
+          <div id="batch-strategy-list" class="batch-strategy-list"></div>
+          <div class="adv-grp">2 &middot; Optional start time</div>
+          <div class="lc-adv-grid">
+            <div class="lc-adv-field"><label class="flabel">Start at (24h HH:MM, your local time)</label>
+              <input type="text" name="schedule_start_at" placeholder="e.g. 23:30" pattern="[0-2][0-9]:[0-5][0-9]">
+              <div class="why">Used by Schedule Batch only: checks everything now, then starts at this time (today, or tomorrow if it has passed).</div></div>
+          </div>
+          <div class="adv-grp">3 &middot; Go</div>
+          <div class="adv-actions">
+            <button class="lc-btn big ghost batch" type="submit" formaction="/full-pipeline/start-batch">&#9654; Run Batch now</button>
+            <button class="lc-btn big ghost schedule" type="submit" formaction="/full-pipeline/schedule-batch">&#128339; Schedule Batch</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="adv-sec" id="adv-notify">
+        <div class="adv-h"><div class="adv-ic">&#128276;</div><div><div class="adv-t">Alerts &amp; timeframes</div>
+          <div class="adv-d">Get told when a long run finishes, or repeat the whole test on several bar sizes.</div></div></div>
+        <div class="adv-b">
+          <div class="lc-adv-grid">
+            <div class="lc-adv-field"><label class="flabel">Notify me when done</label>
+              <input type="url" name="notify_webhook_url" placeholder="Discord / Slack / Zapier webhook URL (optional)">
+              <div class="why">Posts one message the moment the run (single or batch) finishes &mdash; made for overnight batches.</div></div>
+            <div class="lc-adv-field"><label class="flabel">Also test these timeframes</label>
+              <input type="text" name="expand_timeframes" placeholder="e.g. 5m, 15m, 30m, 1h, 4h">
+              <div class="why">Blank = one run on the data&rsquo;s own bar size. Each listed timeframe runs the entire test, resampled from your file. Not used by batches.</div></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="adv-sec" id="adv-ai">
+        <div class="adv-h"><div class="adv-ic">&#129302;</div><div><div class="adv-t">AI assist <span class="lc-hint">(optional, off by default)</span></div>
+          <div class="adv-d">The search can ask the AI for candidate parameter values once per generation. Every suggestion goes through the same backtest, prop simulation and Monte Carlo as any other candidate &mdash; it proposes numbers for parameters that already exist, never code. Uses the provider chosen under <a href="/settings/api-keys" style="color:var(--lc-acc);">API Keys</a> (a saved Claude / OpenAI key first, Ollama as the fallback).</div></div></div>
+        <div class="adv-b">
+          <label class="checkbox-row"><input type="checkbox" name="ai_enabled" id="ai_enabled" {{ 'checked' if ai_enabled else '' }}><span><b>Enable AI assist for this run</b></span></label>
+          <div class="lc-adv-grid">
+            <div class="lc-adv-field"><label class="flabel">Ollama host</label><input type="text" name="ai_host" value="{{ ai_host }}"><div class="why">Used when Ollama answers (no saved key, or as the fallback).</div></div>
+            <div class="lc-adv-field"><label class="flabel">Ollama model</label><input type="text" name="ai_model" value="{{ ai_model }}"></div>
+          </div>
+        </div>
+      </section>
     </div>
   </details>
 
@@ -272,8 +365,8 @@
     <div class="lc-kv"><span class="k">Market data</span><span class="v" id="lc-ck-dataset">pick above</span></div>
     <div class="lc-kv"><span class="k">Prop firm</span><span class="v" id="lc-ck-firm">pick above</span></div>
     <div class="lc-kv"><span class="k">Sizing fits budget</span><span class="v">fit-stop cap · floor in Advanced</span></div>
-    <div class="lc-kv"><span class="k">Holdout</span><span class="v">last 20% locked (Advanced)</span></div>
-    <div class="lc-kv"><span class="k">READY bar</span><span class="v">&ge;70% attempts, &ge;100 trades</span></div>
+    <div class="lc-kv"><span class="k">Holdout</span><span class="v" id="lc-ck-holdout">{{ READY_BAR.holdout_text }}</span></div>
+    <div class="lc-kv"><span class="k"><span data-metric="ready_bar">READY bar</span></span><span class="v">{{ READY_BAR.ready_short }}, &le;{{ '%.0f'|format(READY_BAR.breach_cap_pct) }}% breach</span></div>
   </div>
 
   {% include '_lifecycle_how.html' %}
@@ -286,7 +379,7 @@
 
   <div class="lc-side-card">
     <h4>&#9888; Watch-outs</h4>
-    <p class="lc-hint" style="font-size:12.5px;">Lucid is the only preset re-verified against the firm&rsquo;s own page (Oct 7). Other presets carry a “not re-verified” flag in the rules panel above. Continuous-futures data is roll-adjusted at import; single contracts are untouched.</p>
+    <p class="lc-hint" style="font-size:12.5px;">Every prop-firm rule set carries a check date. If a firm&rsquo;s rules were last verified more than {{ READY_BAR.rules_max_age_days }} days ago (or never), a small tick-box appears under the rules panel &mdash; read the firm&rsquo;s page, tick it, and it is good for another {{ READY_BAR.rules_max_age_days }} days. Continuous-futures data is roll-adjusted at import; single contracts are untouched.</p>
   </div>
 </div>
 </div>

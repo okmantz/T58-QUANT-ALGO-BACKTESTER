@@ -412,6 +412,10 @@
 
 
     <hr class="divider">
+    <label class="pz-switch"><input type="checkbox" id="pz-portfolio" disabled> Show account portfolio cards on the Dashboard</label>
+    <p class="field-note" id="pz-portfolio-note">Live P&amp;L, open and past trades, and algo health for each connected account, shown above your strategies. Off by default. Checking account availability&hellip;</p>
+
+    <hr class="divider">
     <label class="pz-switch"><input type="checkbox" id="pz-verse"> Show a Bible verse at the top of every page</label>
     <p class="field-note">A quiet single line (English Standard Version) that changes every 30 minutes. Off by default. Scripture quotations are from the ESV&reg; Bible, copyright &copy; 2001 by Crossway, a publishing ministry of Good News Publishers. If the ESV text file hasn't been generated on this install yet, the King James Version is shown instead and labelled as such.</p>
   </div>
@@ -547,6 +551,7 @@
 </div>
 <div id="pz-tip" role="tooltip" hidden></div>
 <script src="/static/t58-chrome.js" defer></script>
+<script src="/static/t58-portfolio.js"></script>
 <script>
 (function () {
   function init() {
@@ -554,6 +559,15 @@
     var tiles = [].slice.call(document.querySelectorAll('#pz-grid .pz-tile'));
     function mark() { tiles.forEach(function (t) { var on = t.dataset.bg === P.bg(); t.classList.toggle('on', on); t.setAttribute('aria-checked', on ? 'true' : 'false'); }); }
     tiles.forEach(function (t) { t.addEventListener('click', function () { if (t.classList.contains('locked')) return; P.setBg(t.dataset.bg); mark(); }); });
+    (function () {
+      var pc = document.getElementById('pz-portfolio'), note = document.getElementById('pz-portfolio-note'), PF = window.T58Portfolio;
+      if (!pc || !PF) return;
+      PF.load(function (d) {
+        if (d.eligible) { pc.disabled = false; pc.checked = PF.enabled(); note.innerHTML = note.innerHTML.replace('Checking account availability\u2026', 'Available: you have a connected account with trading activity.'); }
+        else { pc.checked = false; note.innerHTML = note.innerHTML.replace('Checking account availability\u2026', 'Not available yet. ' + (d.eligible_reason || 'Connect an account and start a forward test or live deploy') + ' to unlock it.'); }
+      });
+      pc.addEventListener('change', function () { PF.setEnabled(pc.checked); });
+    })();
     var cb = document.getElementById('pz-verse'); cb.checked = P.verse();
     cb.addEventListener('change', function () { P.setVerse(cb.checked); });
     var fx = document.getElementById('pz-fx'); fx.checked = P.fx();

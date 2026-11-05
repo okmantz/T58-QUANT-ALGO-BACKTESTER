@@ -28,133 +28,135 @@
 <div class="lc-run-grid">
 <div class="lc-run-main">
 
+<style>
+  .ch-podium{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px;}
+  .ch-slot{border:1px solid var(--lc-border2); border-radius:12px; padding:14px; background:var(--lc-panel2); min-width:0; position:relative;}
+  .ch-slot .medal{font-size:22px; line-height:1;} .ch-slot .place{font-size:11px; letter-spacing:.8px; text-transform:uppercase; color:var(--lc-muted); margin-top:4px;}
+  .ch-slot .sname{font-weight:700; font-size:14px; margin-top:6px; overflow-wrap:anywhere;} .ch-slot .smeta{font-size:12px; color:var(--lc-muted); margin-top:3px;}
+  .ch-slot.p1{border-color:#c9a227; background:linear-gradient(180deg,rgba(201,162,39,.10),var(--lc-panel2));}
+  .ch-slot.empty{border-style:dashed; color:var(--lc-muted);} .ch-slot form{margin-top:8px;}
+  .ch-slot .rm{background:none; border:0; color:var(--lc-muted); font-size:11.5px; cursor:pointer; padding:0; text-decoration:underline;}
+  .ch-cards{display:grid; grid-template-columns:repeat(auto-fill,minmax(270px,1fr)); gap:12px;}
+  .ch-card{display:block; border:1px solid var(--lc-border2); border-radius:12px; padding:14px; background:var(--lc-panel2); cursor:pointer; min-width:0; position:relative;}
+  .ch-card:hover{border-color:var(--lc-acc);} .ch-card.sel{border-color:var(--lc-acc); box-shadow:0 0 0 1px var(--lc-acc) inset; background:var(--ok-bg5);}
+  .ch-card input[type=radio]{position:absolute; opacity:0; pointer-events:none;}
+  .ch-top{display:flex; justify-content:space-between; gap:10px; align-items:flex-start;}
+  .ch-top .nm{font-weight:700; font-size:14px; overflow-wrap:anywhere; min-width:0;}
+  .ch-score{flex:0 0 auto; text-align:center; min-width:52px; border:1px solid var(--lc-border2); border-radius:10px; padding:4px 8px; background:var(--lc-panel);}
+  .ch-score b{display:block; font-size:19px; line-height:1.1;} .ch-score span{font-size:9.5px; letter-spacing:.8px; color:var(--lc-muted); text-transform:uppercase;}
+  .ch-score.hi b{color:var(--lc-acc);} .ch-score.mid b{color:var(--lc-amber);} .ch-score.lo b{color:var(--lc-red);}
+  .ch-chips{display:flex; flex-wrap:wrap; gap:6px; margin:8px 0;}
+  .ch-chip{font-size:11px; border-radius:999px; padding:2px 9px; border:1px solid var(--lc-border2); color:var(--lc-muted); white-space:nowrap;}
+  .ch-chip.mk{color:var(--lc-cyan); border-color:rgba(0,212,255,.35);} .ch-chip.pl{color:#e7c75a; border-color:rgba(201,162,39,.5);}
+  .ch-nums{display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:4px; margin-top:8px; text-align:center;}
+  .ch-nums div{background:var(--lc-panel); border-radius:8px; padding:5px 2px; min-width:0;} .ch-nums b{display:block; font-size:13px;} .ch-nums span{font-size:9.5px; color:var(--lc-muted); text-transform:uppercase; letter-spacing:.4px;}
+  .ch-next{font-size:12px; color:var(--lc-muted); margin-top:9px; line-height:1.45; overflow-wrap:anywhere;} .ch-next a{color:var(--lc-acc);}
+  .ch-assess{border:1px solid var(--lc-border2); border-radius:14px; padding:20px 22px; margin-bottom:18px; background:var(--lc-panel);}
+  .ch-assess .ahead{display:flex; justify-content:space-between; gap:14px; align-items:flex-start; flex-wrap:wrap;}
+  .ch-assess .ttl{font-size:11px; letter-spacing:1.4px; color:var(--lc-muted); text-transform:uppercase; font-weight:700;}
+  .ch-assess .an{font-size:19px; font-weight:700; margin:4px 0 8px; overflow-wrap:anywhere;}
+  .ch-status{display:inline-block; font-size:12px; font-weight:700; padding:3px 11px; border-radius:999px;}
+  .ch-status.ok{background:var(--lc-acc-dim); color:var(--lc-acc); border:1px solid var(--ok-bd2);} .ch-status.warn{background:#33240d; color:#ffd9a8; border:1px solid var(--warn-bd3);} .ch-status.bad{background:var(--err-bg3); color:var(--err-fg5); border:1px solid var(--err-bd2);}
+  .ch-bigscore{text-align:right;} .ch-bigscore b{font-size:34px; line-height:1;} .ch-bigscore small{color:var(--lc-muted); font-size:15px;}
+  .ch-bigscore .l{font-size:10.5px; letter-spacing:1px; color:var(--lc-muted); text-transform:uppercase;}
+  .ch-checks{margin:14px 0 4px; display:grid; gap:8px;}
+  .ch-chk{display:flex; gap:10px; align-items:flex-start; font-size:13.5px;} .ch-chk .ic{flex:0 0 22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:800;}
+  .ch-chk.ok .ic{background:var(--lc-acc-dim); color:var(--lc-acc);} .ch-chk.no .ic{background:var(--err-bg3); color:var(--lc-red);} .ch-chk .d{color:var(--lc-muted); font-size:12px; margin-top:1px;}
+  .ch-actions{display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:16px; padding-top:14px; border-top:1px solid var(--lc-border);}
+  .ch-actions select{width:auto; min-width:150px;}
+  .ch-cmp{margin-top:16px; border:1px solid var(--warn-bd3); border-radius:12px; padding:14px 16px; background:rgba(255,184,77,.05);}
+  .ch-cmp h5{margin:0 0 6px; font-size:12px; letter-spacing:1px; text-transform:uppercase; color:var(--lc-amber);}
+  .ch-cmp table{width:100%; border-collapse:collapse; font-size:13px; margin:8px 0;} .ch-cmp th{font-size:11px; color:var(--lc-muted); text-align:right; padding:4px 8px; text-transform:uppercase; letter-spacing:.6px;} .ch-cmp th:first-child{text-align:left;}
+  .ch-cmp td{padding:5px 8px; border-top:1px solid var(--lc-border); text-align:right; font-variant-numeric:tabular-nums;} .ch-cmp td:first-child{text-align:left; color:var(--lc-muted);} .ch-cmp td.w{color:var(--lc-acc); font-weight:700;}
+  .ch-empty{border:1px dashed var(--lc-border2); border-radius:12px; padding:20px; text-align:center; color:var(--lc-muted); margin-bottom:18px;}
+  @media (max-width:640px){ .ch-podium{grid-template-columns:1fr;} .ch-bigscore{text-align:left;} }
+</style>
+
 {% if champion %}
 <div class="ch-hero">
   <div>
-    <div class="eyebrow">&#9733; Current champion</div>
+    <div class="eyebrow">&#9733; Strongest strategy so far</div>
     <div class="hname">{{ champion.display_name or champion.filename }}</div>
-    <div class="lc-hint">{{ champion.strategy_type }} · {{ champion.promotion.stage_title }}</div>
+    <div class="lc-hint">{{ champion.strategy_type }} &middot; {{ champion.promotion.stage_title }}{% if champion.instrument %} &middot; {{ champion.instrument }}{% endif %}</div>
   </div>
   <div class="hstats">
-    <div class="hstat"><div class="v">{{ '%.0f%%'|format(champion.eval_pct) if champion.eval_pct is not none else '—' }}</div><div class="l">Eval</div></div>
-    <div class="hstat"><div class="v">{{ '%.0f%%'|format(champion.payout_pct) if champion.payout_pct is not none else '—' }}</div><div class="l">Payout</div></div>
-    <div class="hstat"><div class="v">{{ '%.0f%%'|format(champion.oos_pct) if champion.oos_pct is not none else '—' }}</div><div class="l">OOS</div></div>
+    <div class="hstat"><div class="v">{{ '%.0f'|format(champion.t58_score) if champion.t58_score is not none else '&mdash;'|safe }}</div><div class="l"><span data-metric="t58_score">T58</span></div></div>
+    <div class="hstat"><div class="v">{{ '%.0f%%'|format(champion.eval_pct) if champion.eval_pct is not none else '&mdash;'|safe }}</div><div class="l"><span data-metric="eval_pass_probability">Eval</span></div></div>
+    <div class="hstat"><div class="v">{{ '%.0f%%'|format(champion.payout_pct) if champion.payout_pct is not none else '&mdash;'|safe }}</div><div class="l"><span data-metric="first_payout_probability">Payout</span></div></div>
+    <div class="hstat"><div class="v">{{ '%.0f%%'|format(champion.oos_pct) if champion.oos_pct is not none else '&mdash;'|safe }}</div><div class="l"><span data-metric="oos_pct">OOS</span></div></div>
   </div>
 </div>
 {% endif %}
 
-<form id="champion-actions" method="post" enctype="multipart/form-data">
+<form id="champion-actions" method="post">
+
+<div class="lc-card">
+  <h3>&#127942; Podium</h3>
+  <p class="lc-hint" style="margin-bottom:12px;">Your three best strategies, in order. A strategy can take a place once it has reached <b>Champion Candidate</b> with no open critical issue. Two strategies on the same market are not diversification &mdash; the page compares them before one replaces the other.</p>
+  <div class="ch-podium">
+  {% for place in [1,2,3] %}
+    {% set h = podium.get(place) %}
+    {% if h %}
+    <div class="ch-slot p{{ place }}">
+      <div class="medal">{{ ['','&#129351;','&#129352;','&#129353;'][place]|safe }}</div>
+      <div class="place">{{ podium_labels[place] }}</div>
+      <div class="sname">{{ h.display_name }}</div>
+      <div class="smeta">{% if h.instrument %}{{ h.instrument }} &middot; {% endif %}T58 {{ '%.0f'|format(h.t58_score) if h.t58_score is not none else '&mdash;'|safe }} &middot; {{ h.promotion.stage_title }}</div>
+      <button type="submit" class="rm" formaction="/champion-simple/unaward" name="candidate" value="{{ h.strategy_type }}::{{ h.filename }}">Remove from podium</button>
+    </div>
+    {% else %}
+    <div class="ch-slot empty">
+      <div class="medal" style="opacity:.45;">{{ ['','&#129351;','&#129352;','&#129353;'][place]|safe }}</div>
+      <div class="place">{{ podium_labels[place] }}</div>
+      <div class="smeta">Open &mdash; select a champion-grade strategy below and award it.</div>
+    </div>
+    {% endif %}
+  {% endfor %}
+  </div>
+</div>
+
+<div id="ch-assess-slot">
+  <div class="ch-empty" id="ch-assess-empty">Select a strategy below to see its <b>promotion assessment</b> &mdash; what it has earned, what is missing and the one thing to do next.</div>
+</div>
 
 <div class="lc-card">
   <h3>Your strategies</h3>
   {% if board_rows %}
-  <div class="ch-list">
+  <div class="ch-cards">
   {% for r in board_rows %}
     {% set pick = r.strategy_type ~ '::' ~ r.filename %}
-    <label class="ch-row{% if prefill.candidate == pick %} sel{% endif %}" data-pick="{{ pick }}" data-name="{{ r.display_name }}"
-           data-can="{{ 1 if r.promotion.can_promote else 0 }}" data-next="{{ r.promotion.next_stage_title or '' }}"
-           data-nexthref="{{ r.next.href if r.next else '' }}">
+    {% set sc = r.get('t58_score') %}
+    <label class="ch-card{% if prefill.candidate == pick %} sel{% endif %}" data-pick="{{ pick }}">
       <input type="radio" name="candidate" value="{{ pick }}"{% if prefill.candidate == pick %} checked{% endif %}>
-      <div>
-        <div class="ch-name">{{ r.display_name }}</div>
-        <div class="ch-meta">{{ r.strategy_type }} · {{ r.promotion.stage_title }}</div>
+      <div class="ch-top">
+        <div class="nm">{{ r.display_name }}</div>
+        <div class="ch-score {{ 'hi' if sc is not none and sc >= 70 else ('mid' if sc is not none and sc >= 50 else ('lo' if sc is not none else '')) }}"
+             data-metric="t58_score"{% if sc is not none %} data-metric-value="{{ '%.0f'|format(sc) }}"{% endif %}>
+          <b>{{ '%.0f'|format(sc) if sc is not none else '&mdash;'|safe }}</b><span>T58</span></div>
       </div>
-      <div>
-        <div class="ch-nums">Eval <b>{{ '%.0f%%'|format(r.eval_pct) if r.eval_pct is not none else '—' }}</b> · Payout <b>{{ '%.0f%%'|format(r.payout_pct) if r.payout_pct is not none else '—' }}</b> · OOS <b>{{ '%.0f%%'|format(r.oos_pct) if r.oos_pct is not none else '—' }}</b></div>
-        <div class="ch-bar"><div style="width:{{ r.promotion.stage_pct or 0 }}%"></div></div>
+      <div class="ch-chips">
+        {% if r.get('instrument') %}<span class="ch-chip mk">{{ r.get('instrument') }}</span>{% endif %}
+        <span class="ch-chip" data-metric="promotion_stage" data-metric-value="{{ r.promotion.stage_title }}">{{ r.promotion.stage_title }}</span>
+        {% set _lad = (r.verdict or '')|ladder(r.get('ladder_stage')) %}<span class="lc-pill {{ _lad|ladder_class }}" data-ve='{{ r.verdict_explain|tojson }}' tabindex="0" role="button" title="Click to see why (legacy verdict: {{ r.verdict or 'UNTESTED' }})">{{ _lad }}</span>
+        {% if r.get('podium_place') %}<span class="ch-chip pl">{{ podium_labels[r.get('podium_place')] }}</span>{% endif %}
       </div>
-      <div>
-        {% set _lad = (r.verdict or '')|ladder(r.ladder_stage) %}<span class="lc-pill {{ _lad|ladder_class }}" data-ve='{{ r.verdict_explain|tojson }}' tabindex="0" role="button" title="Click to see why (legacy verdict: {{ r.verdict or 'UNTESTED' }})">{{ _lad }}</span>
-        {% if r.validation %}<div class="ch-meta" style="margin-top:5px;">Checks {{ r.validation.ran }}/{{ r.validation.total }}{% if r.validation.has_stale %} · <span style="color:var(--lc-amber);">outdated</span>{% endif %}</div>{% endif %}
+      <div class="ch-nums">
+        <div><b>{{ '%.0f%%'|format(r.get('eval_pct')) if r.get('eval_pct') is not none else '&mdash;'|safe }}</b><span data-metric="eval_pass_probability">Eval</span></div>
+        <div><b>{{ '%.0f%%'|format(r.get('payout_pct')) if r.get('payout_pct') is not none else '&mdash;'|safe }}</b><span data-metric="first_payout_probability">Payout</span></div>
+        <div><b>{{ '%.0f%%'|format(r.get('oos_pct')) if r.get('oos_pct') is not none else '&mdash;'|safe }}</b><span data-metric="oos_pct">OOS</span></div>
+        <div><b>{{ '%.0f%%'|format(r.get('win_rate')) if r.get('win_rate') is not none else '&mdash;'|safe }}</b><span data-metric="win_rate">Win</span></div>
+        <div><b>{{ '%.0f'|format(r.get('trades')) if r.get('trades') is not none else '&mdash;'|safe }}</b><span data-metric="trades">Trades</span></div>
       </div>
+      <div class="ch-bar" style="margin-top:10px;"><div style="width:{{ r.promotion.stage_pct or 0 }}%"></div></div>
       <div class="ch-next">
-        {% if r.next %}
-          {{ r.next.text }}
-          {% if r.next.href %}<br><a href="{{ r.next.href }}" onclick="event.stopPropagation()">{{ r.next.label }} &rarr;</a>{% endif %}
-        {% endif %}
+        {% if r.next %}{{ r.next.text }}{% if r.next.href %} &middot; <a href="{{ r.next.href }}" onclick="event.stopPropagation()">{{ r.next.label }} &rarr;</a>{% endif %}{% endif %}
       </div>
     </label>
   {% endfor %}
   </div>
-
-  <div class="ch-actionbar">
-    <div>
-      <div class="sel-name" id="sel-name">Select a strategy</div>
-      <div class="sel-sub" id="sel-sub">Pick one from the list to see what it needs.</div>
-    </div>
-    <button class="lc-btn big" type="submit" formaction="/champion-simple/promote" id="promote-btn" disabled>&#127942; Promote</button>
-  </div>
-
-  {% for r in board_rows %}
-  <div class="ch-reqs" data-for="{{ r.strategy_type }}::{{ r.filename }}">
-    <div class="lc-hint" style="margin-bottom:4px;">{% if r.promotion.next_stage_title %}Requirements for <b>{{ r.promotion.next_stage_title }}</b>{% else %}Final stage reached{% endif %}</div>
-    {% for q in r.promotion.requirements %}
-    <div class="ch-req {{ 'ok' if q.met else 'no' }}"><span class="dot">{{ '✓' if q.met else '✗' }}</span><div>{{ q.label }}{% if q.detail %}<div class="rd">{{ q.detail }}</div>{% endif %}</div></div>
-    {% endfor %}
-  </div>
-  {% endfor %}
   {% else %}
-  <p class="lc-hint">No strategies yet — run one through the Full Pipeline or Validate so it lands here.</p>
+  <p class="lc-hint">No strategies yet &mdash; run one through <a href="/full-pipeline">Test</a> so it lands here.</p>
   {% endif %}
-</div>
-
-<div class="lc-card">
-  <h3>Re-run checks on the selected strategy</h3>
-  <p class="lc-hint" style="margin-bottom:12px;">Results are saved onto the strategy itself. The prop firm sets account size and balance.</p>
-  <div class="lc-row">
-    <div class="lc-col">
-      <label class="flabel" for="lc-dataset-pick">Market data</label>
-      <select class="inp" name="existing_dataset" id="lc-dataset-pick">
-        <option value="">— upload a CSV instead —</option>
-        {% for g in dataset_groups %}
-        <optgroup label="{{ g.instrument }}">
-          {% for f in g.files %}
-          <option value="{{ f.full_name }}"{% if prefill.existing_dataset == f.full_name %} selected{% endif %}>{{ f.name }}</option>
-          {% endfor %}
-        </optgroup>
-        {% endfor %}
-      </select>
-      <label class="flabel" style="margin-top:10px;" for="lc-csv-file">…or upload market data (CSV)</label>
-      <input type="file" name="csv_file" id="lc-csv-file" accept=".csv">
-    </div>
-    <div class="lc-col">
-      <label class="flabel" for="lc-prop-preset">Prop firm</label>
-      <select class="inp" name="prop_preset" id="lc-prop-preset">
-        <option value="">— no prop firm —</option>
-        {% for p in prop_presets %}
-        <option value="{{ p.key }}"{% if prefill.prop_preset == p.key %} selected{% endif %}>{{ p.label }}</option>
-        {% endfor %}
-      </select>
-      <div class="lc-rules-line" id="lc-rules-line"></div>
-      <label class="flabel" style="margin-top:10px;" for="lc-timeframe">Timeframe</label>
-      <select class="inp" name="timeframe" id="lc-timeframe">
-        <option value="">Dataset's native timeframe</option>
-        {% for tf in timeframe_choices %}
-        <option value="{{ tf }}"{% if prefill.timeframe == tf %} selected{% endif %}>{{ tf }}</option>
-        {% endfor %}
-      </select>
-    </div>
-  </div>
-  <label class="flabel" style="margin-top:14px;">Checks</label>
-  <div class="ch-toggles">
-    {% for key, label in [('monte_carlo','Monte Carlo'),('cpcv','CPCV'),('pbo','PBO'),('walk_forward','Walk-Forward'),('wfga','Walk-Forward GA'),('sensitivity','Sensitivity'),('robustness','Robustness'),('regime','Regime Matrix')] %}
-    <label class="ch-toggle"><input type="checkbox" name="check_{{ key }}" data-check="{{ key }}"><span>{{ label }}</span></label>
-    {% endfor %}
-  </div>
-  <details class="lc-adv" style="margin-top:14px;">
-    <summary>Advanced — accuracy &amp; check knobs</summary>
-    <div class="adv-body">
-      {% include '_accuracy_fields.html' %}
-      <div class="lc-adv-grid">
-        <div class="lc-adv-field"><label class="flabel">Monte-Carlo sims</label><input type="number" name="mc_sims" value="1000"></div>
-        <div class="lc-adv-field"><label class="flabel">CPCV/PBO groups</label><input type="number" name="cpcv_groups" value="4"></div>
-        <div class="lc-adv-field"><label class="flabel">CPCV/PBO test groups</label><input type="number" name="cpcv_test_groups" value="2"></div>
-        <div class="lc-adv-field"><label class="flabel">Max paths</label><input type="number" name="cpcv_max_paths" value="15"></div>
-        <div class="lc-adv-field"><label class="flabel">Walk-forward folds</label><input type="number" name="wf_folds" value="3"></div>
-      </div>
-    </div>
-  </details>
-  <div style="margin-top:16px;"><button class="lc-btn big" type="submit" formaction="/champion-simple/rerun">Re-run checks</button></div>
 </div>
 </form>
 
@@ -181,10 +183,11 @@
   </div>
   <div class="lc-side-card">
     <h4>&#128203; Promotion gates</h4>
-    <div class="lc-kv"><span class="k">&rarr; Validated</span><span class="v">backtest + 5 checks run + no leak</span></div>
-    <div class="lc-kv"><span class="k">&rarr; Champion Candidate</span><span class="v">eval &ge;60% · payout &ge;55% · OOS &ge;50%</span></div>
-    <div class="lc-kv"><span class="k">&rarr; Forward Testing</span><span class="v">READY · eval &ge;70%</span></div>
-    <div class="lc-kv"><span class="k">&rarr; Production Ready</span><span class="v">&ge;14 days forward</span></div>
+    <div class="lc-kv"><span class="k">&rarr; Validated</span><span class="v">backtest + all 5 checks run + no leak</span></div>
+    <div class="lc-kv"><span class="k">&rarr; Champion Candidate</span><span class="v">eval &ge;{{ '%.0f'|format(gates.cc_eval) }}% &middot; payout &ge;{{ '%.0f'|format(gates.cc_payout) }}% &middot; OOS &ge;{{ '%.0f'|format(gates.cc_oos) }}%</span></div>
+    <div class="lc-kv"><span class="k">&rarr; Forward Testing</span><span class="v">READY or Forward-Test Candidate &middot; eval &ge;{{ '%.0f'|format(gates.ft_eval) }}%</span></div>
+    <div class="lc-kv"><span class="k">&rarr; Production Ready</span><span class="v">&ge;{{ '%.0f'|format(gates.prod_days) }} days forward</span></div>
+    <div class="lc-kv"><span class="k">Podium place</span><span class="v">Champion Candidate or later</span></div>
   </div>
   <div class="lc-side-card">
     <h4>&#129517; Next</h4>
@@ -201,46 +204,105 @@
 {% include '_lifecycle_rules_js.html' %}
 <script>
   (function () {
-    if (window.lcBindPropPreset) window.lcBindPropPreset(document.getElementById('lc-prop-preset'));
-    if (window.lcSyncCheckCards) window.lcSyncCheckCards(document);
+    var f = document.getElementById('lc-prop-preset');
+    if (f && window.lcBindPropPreset) window.lcBindPropPreset(f);
+    // The rules panel follows the selected strategy's own prop firm when it has one recorded.
+    window.lcShowRulesFor = function (key) {
+      var P = window.LC_PROP_PRESETS || [];
+      for (var i = 0; i < P.length; i++) if (P[i].key === key) return window.lcRenderPropRules(P[i]);
+      window.lcRenderPropRules(null);
+    };
   })();
 </script>
-
-<script>
-  // Guided lifecycle handoff: the board candidate picked above (or the
-  // board champion) becomes the Deploy page's strategy pick.
-  (function () {
-    var btn = document.getElementById('lc-next-step');
-    if (!btn) return;
-    btn.addEventListener('click', function () {
-      var sel = document.querySelector('input[name="candidate"]:checked');
-      var v = sel ? sel.value : {{ ((champion.strategy_type ~ '::' ~ champion.filename) if champion else '') | tojson }};
-      window.location = '/forward-test' + (v ? '?strategy=' + encodeURIComponent(v) : '');
-    });
-  })();
-</script>
+<script>window.CH_DATA = {{ {'assess': assessments, 'compare': comparisons} | tojson | safe }};</script>
 <script>
 (function () {
-  var rows = document.querySelectorAll('.ch-row');
-  var btn = document.getElementById('promote-btn');
-  function select(row, prefillChecks) {
-    rows.forEach(function (r) { r.classList.toggle('sel', r === row); });
-    document.querySelectorAll('.ch-reqs').forEach(function (p) { p.classList.toggle('on', row && p.dataset['for'] === row.dataset.pick); });
-    if (!row) return;
-    document.getElementById('sel-name').textContent = row.dataset.name;
-    var can = row.dataset.can === '1';
-    document.getElementById('sel-sub').textContent = can ? ('Ready to move to ' + row.dataset.next + '.')
-      : (row.dataset.next ? ('Not ready for ' + row.dataset.next + ' yet — requirements below.') : 'Final stage reached.');
-    btn.disabled = !can;
-    if (prefillChecks) {
-      var m = /[?&]run=([^&]*)/.exec(row.dataset.nexthref || '');
-      if (m) { var want = decodeURIComponent(m[1]).split(',');
-        document.querySelectorAll('input[data-check]').forEach(function (c) { c.checked = want.indexOf(c.dataset.check) >= 0; }); }
-    }
+  var D = window.CH_DATA || {assess: {}, compare: {}};
+  var cards = document.querySelectorAll('.ch-card');
+  var slot = document.getElementById('ch-assess-slot');
+  function esc(s) { var d = document.createElement('div'); d.textContent = (s === null || s === undefined) ? '' : String(s); return d.innerHTML; }
+  function btn(cls, attrs, label) { return '<button class="lc-btn ' + cls + '" type="submit" ' + attrs + '>' + label + '</button>'; }
+
+  function cmpHtml(list, pick, a) {
+    if (!list || !list.length) return '';
+    var h = '';
+    list.forEach(function (c) {
+      h += '<div class="ch-cmp"><h5>Same market &middot; ' + esc(c.market) + ' &mdash; compare before you replace</h5>'
+        + '<div style="font-size:13px;">' + esc(c.advice) + '</div>'
+        + '<table><tr><th></th><th>' + esc(c.new_name) + ' (selected)</th><th>' + esc(c.old_name) + (c.old_place ? ' (#' + c.old_place + ')' : ' (' + esc(c.old_stage) + ')') + '</th></tr>';
+      c.lines.forEach(function (l) {
+        h += '<tr><td>' + esc(l.label) + '</td><td class="' + (l.winner === 'new' ? 'w' : '') + '">' + esc(l.new) + '</td><td class="' + (l.winner === 'old' ? 'w' : '') + '">' + esc(l.old) + '</td></tr>';
+      });
+      h += '</table></div>';
+    });
+    return h;
   }
-  rows.forEach(function (r) { r.addEventListener('click', function () { var i = r.querySelector('input'); i.checked = true; select(r, true); }); });
-  var checked = document.querySelector('.ch-row input:checked');
-  if (checked) select(checked.closest('.ch-row'), true);
+
+  function render(pick) {
+    var a = D.assess[pick];
+    if (!a) { slot.innerHTML = ''; return; }
+    var tone = a.tone || 'warn';
+    var h = '<div class="ch-assess"><div class="ahead"><div style="min-width:0;flex:1 1 240px;">'
+      + '<div class="ttl">Promotion assessment</div><div class="an">' + esc(a.name) + '</div>'
+      + '<span class="ch-status ' + tone + '">' + esc(a.headline) + '</span>'
+      + ' <span class="lc-hint" style="margin-left:6px;">' + esc(a.stage) + (a.instrument ? ' &middot; ' + esc(a.instrument) : '') + '</span></div>'
+      + '<div class="ch-bigscore"><div class="l"><span data-metric="t58_score">T58 score</span></div><b>' + (a.score === null || a.score === undefined ? '&mdash;' : Math.round(a.score)) + '</b><small>/100</small></div></div>'
+      + '<div class="ch-checks">';
+    a.checks.forEach(function (c) {
+      h += '<div class="ch-chk ' + (c.ok ? 'ok' : 'no') + '"><span class="ic">' + (c.ok ? '&#10003;' : '&#10007;') + '</span><div><div>' + esc(c.label) + '</div><div class="d">' + esc(c.detail) + '</div></div></div>';
+    });
+    h += '</div>';
+    if (!a.eligible && a.unmet && a.unmet.length) {
+      h += '<div class="lc-hint" style="margin-top:12px;"><b>Still needed for ' + esc(a.next_stage || 'the next stage') + ':</b><ul style="margin:4px 0 0 18px; padding:0;">';
+      a.unmet.forEach(function (u) { h += '<li>' + esc(u.label) + (u.detail ? ' &mdash; ' + esc(u.detail) : '') + '</li>'; });
+      h += '</ul></div>';
+    }
+    h += '<div class="ch-actions">';
+    var val = esc(pick);
+    if (a.next_stage) {
+      var label = 'Promote to ' + esc(a.next_stage);
+      if (a.path_titles && a.path_titles.length > 1) label += ' <small style="opacity:.8">(records ' + esc(a.path_titles.join(' + ')) + ')</small>';
+      h += btn('big', 'formaction="/champion-simple/promote"' + (a.eligible ? '' : ' disabled'), '&#127942; ' + label);
+    } else {
+      h += '<span class="lc-hint">Final stage reached.</span>';
+    }
+    if (a.can_award) {
+      h += '<span style="flex:1 1 20px;"></span><label class="flabel" style="margin:0;" for="ch-place">Podium</label>'
+        + '<select class="inp" id="ch-place" name="place"><option value="1"' + (a.podium_place === 1 ? ' selected' : '') + '>1st place</option><option value="2"' + (a.podium_place === 2 ? ' selected' : '') + '>2nd place</option><option value="3"' + (a.podium_place === 3 ? ' selected' : '') + '>3rd place</option></select>';
+      var cl = (D.compare || {})[pick] || [];
+      var podiumClash = cl.some(function (c) { return !!c.old_place; });
+      if (podiumClash) {
+        h += btn('ghost', 'formaction="/champion-simple/award" name="replace" value="1"', 'Replace and award');
+      } else {
+        h += btn('ghost', 'formaction="/champion-simple/award"', 'Award place');
+      }
+    }
+    h += '</div>';
+    if (!a.eligible && a.next && a.next.text) {
+      h += '<div class="lc-hint" style="margin-top:10px;">Next step: ' + esc(a.next.text) + (a.next.href ? ' &mdash; <a href="' + esc(a.next.href) + '" style="color:var(--lc-acc);">' + esc(a.next.label) + ' &rarr;</a>' : '') + '</div>';
+    }
+    h += cmpHtml((D.compare || {})[pick], pick, a);
+    h += '</div>';
+    slot.innerHTML = h;
+    if (window.T58Metrics && window.T58Metrics.scan) window.T58Metrics.scan(slot);
+  }
+
+  function select(card) {
+    cards.forEach(function (c) { c.classList.toggle('sel', c === card); });
+    if (!card) return;
+    render(card.dataset.pick);
+    var row = card.querySelector('input'); if (row) row.checked = true;
+  }
+  cards.forEach(function (c) { c.addEventListener('click', function (ev) { if (ev.target.closest('a,[data-ve],[data-metric]')) return; select(c); }); });
+  var checked = document.querySelector('.ch-card input:checked');
+  if (checked) select(checked.closest('.ch-card'));
+
+  var nb = document.getElementById('lc-next-step');
+  if (nb) nb.addEventListener('click', function () {
+    var sel = document.querySelector('.ch-card input:checked');
+    var v = sel ? sel.value : {{ ((champion.strategy_type ~ '::' ~ champion.filename) if champion else '') | tojson }};
+    window.location = '/forward-test' + (v ? '?strategy=' + encodeURIComponent(v) : '');
+  });
 })();
 </script>
 </body>

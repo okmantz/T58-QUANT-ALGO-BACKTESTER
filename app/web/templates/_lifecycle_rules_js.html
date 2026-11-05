@@ -23,6 +23,38 @@
   function fmtMoney(v) { return (v === null || v === undefined || v === '') ? '—' : '$' + Number(v).toLocaleString(); }
   function kv(k, v) { return '<div class="lc-kv"><span class="k">' + k + '</span><span class="v">' + v + '</span></div>'; }
 
+  /* Rules-stamp line. Normal case: one quiet "✓ rules checked" line. Only when the stamp is missing or older than 30 days does a small
+     "I re-checked these on the firm's page" box appear -- ticking it stamps the preset for another 30 days (POST /api/prop-presets/<key>/acknowledge). */
+  function rulesStampHtml(p) {
+    var st = p.rules_state || (p.verified_on ? 'ok' : 'unverified');
+    if (st === 'ok') {
+      var left = (p.rules_days_left === null || p.rules_days_left === undefined) ? '' : ' &middot; re-check due in ' + p.rules_days_left + ' d';
+      return '<p class="lc-stamp"><span class="lc-ok">&#10003; Rules checked ' + esc(p.verified_on || p.rules_checked_on || '') + '</span><span class="lc-hint">' + left + '</span></p>';
+    }
+    var why = st === 'stale'
+      ? 'Last checked ' + esc(p.verified_on) + ' (' + esc(p.rules_age_days) + ' days ago).'
+      : 'These numbers were never confirmed on the firm&rsquo;s own page.';
+    var link = p.rules_page_url ? ' <a href="' + esc(p.rules_page_url) + '" target="_blank" rel="noopener">Open rules page</a>' : '';
+    return '<div class="lc-stamp lc-stamp-due"><label class="lc-ack"><input type="checkbox" data-ack="' + esc(p.key) + '"> '
+      + '<span>I re-read this firm&rsquo;s rules and they match</span></label>'
+      + '<span class="lc-hint">' + why + link + ' Counts for 30 days.</span><span class="lc-ack-msg" role="status"></span></div>';
+  }
+
+  document.addEventListener('change', function (ev) {
+    var cb = ev.target;
+    if (!cb || !cb.getAttribute || !cb.getAttribute('data-ack') || !cb.checked) return;
+    var key = cb.getAttribute('data-ack');
+    var msg = cb.closest('.lc-stamp').querySelector('.lc-ack-msg');
+    cb.disabled = true;
+    fetch('/api/prop-presets/' + encodeURIComponent(key) + '/acknowledge', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({confirm: true})
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      if (!j.ok) { cb.disabled = false; cb.checked = false; if (msg) msg.textContent = j.error || 'Could not save.'; return; }
+      for (var i = 0; i < PRESETS.length; i++) if (PRESETS[i].key === key) { PRESETS[i] = j.preset; break; }
+      window.lcRenderPropRules(j.preset);
+    }).catch(function () { cb.disabled = false; cb.checked = false; if (msg) msg.textContent = 'Could not reach the app.'; });
+  });
+
   window.lcRenderPropRules = function (p) {
     var body = document.getElementById('lc-rules-body');
     var line = document.getElementById('lc-rules-line');
@@ -61,11 +93,7 @@
       : '—');
     h += kv('Min trading days', (p.min_trading_days !== null && p.min_trading_days !== undefined) ? p.min_trading_days : '—');
     if (p.max_contracts) h += kv('Max contracts', p.max_contracts + ' mini-equiv');
-    if (p.rules_checked_on) {
-      h += '<p style="margin-top:8px; font-size:12px;"><span class="lc-ok">✓ Rule fields page-checked ' + esc(p.rules_checked_on) + '</span></p>';
-    } else {
-      h += '<p style="margin-top:8px; font-size:12px;"><span class="lc-warn">⚠ Not re-verified</span> <span class="lc-hint">against the firm&rsquo;s current rules page — treat these numbers as approximate.</span></p>';
-    }
+    h += rulesStampHtml(p);
     if (p.source_note) {
       var note = String(p.source_note);
       if (note.length > 260) note = note.slice(0, 260) + '…';
