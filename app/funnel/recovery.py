@@ -552,7 +552,12 @@ def _diagnose_pipeline_impl(result, dataset_label: str = "",
     risk, rules = risk or {}, rules or {}
     timeframe = timeframe or ""
     mc = getattr(result, "final_mc", None)
-    mc_d = {"risk_of_ruin_pct": getattr(mc, "risk_of_ruin_pct", None),
+    try:
+        from app.monte_carlo.engine import eval_ruin_gate_pct as _egp
+        _eg = _egp(mc)
+    except Exception:  # noqa: BLE001
+        _eg = None
+    mc_d = {"risk_of_ruin_pct": getattr(mc, "risk_of_ruin_pct", None), "eval_ruin_gate_pct": _eg,
             "p95_drawdown_pct": getattr(mc, "p95_drawdown_pct", None),
             "median_drawdown_pct": getattr(mc, "median_drawdown_pct", None),
             "per_attempt_pass_probability": getattr(mc, "per_attempt_pass_probability", None),
@@ -591,7 +596,7 @@ def _diagnose_pipeline_impl(result, dataset_label: str = "",
             ])
 
     if getattr(result, "risk_of_ruin_hard_fail", False):
-        ruin = _num(mc_d["risk_of_ruin_pct"])
+        ruin = _num(mc_d.get("eval_ruin_gate_pct")) if mc_d.get("eval_ruin_gate_pct") is not None else _num(mc_d["risk_of_ruin_pct"])
         cap = _num(getattr(result, "risk_of_ruin_cap", 20.0)) or 20.0
         return RecoveryPlan(
             stage="pipeline", failure_class="PIPE_RUIN", passed=False,
