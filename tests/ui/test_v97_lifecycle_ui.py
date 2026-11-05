@@ -124,7 +124,7 @@ def test_champion_board_untested_row_never_points_at_validate(client, monkeypatc
     monkeypatch.setattr(server.champion_board, "list_board",
                         lambda: [_row(untested=True)])
     body = client.get("/champion-simple").get_data(as_text=True)
-    assert "Run Full Pipeline" in body
+    assert "Test a Strategy" in body
     assert "Open Validate hub" not in body
     assert "/full-pipeline?load_strategy_type=python" in body
 
@@ -143,7 +143,7 @@ def test_dashboard_untested_row_never_points_at_validate(client, monkeypatch):
                         lambda: [_row(untested=True)])
     body = client.get("/dashboard").get_data(as_text=True)
     assert "Open Validate hub" not in body
-    assert "Run Full Pipeline" in body
+    assert "Test a Strategy" in body
 
 
 def test_dashboard_tested_row_points_at_validate_checks(client, monkeypatch):

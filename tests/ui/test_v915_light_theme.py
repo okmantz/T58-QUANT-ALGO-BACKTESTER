@@ -25,7 +25,7 @@ LIFECYCLE = ROOT / "app/web/templates/_lifecycle_css.html"
 # blocks removed). If a dark declaration changes, these break.
 # 2026-10-22: theme.css digest re-pinned after the Personalize work (seasonal backdrops, Bible verse bar, live-PnL pill) ADDED
 # new dark-scope rules; no existing dark token or rule was changed (test_dark_token_values_pinned still passes).
-DARK_HASH = {
+DARK_HASH = {  # re-pinned 2026-11: only NEW selectors added (adv-sec, pf-*, readability block); no existing dark rule changed
     # NOTE (WS-E, 2026-10-10): hashes measured on the pre-task working
     # tree with the same normalisation _dark_hash() applies. The WS-E
     # edits only ADD light-scoped rules, so a correct tree reproduces
@@ -42,7 +42,7 @@ DARK_HASH = {
     # Re-pinned 2026-10-30: Lucide sidebar icons (.lu, muted nav-icon colour), the notification bell + inbox panel rules, and the
     # three unlockable backdrops (obsidian-gold / sakura-reverie / abyssal-blue) were added to theme.css (commits f49c523..e0ec4f8).
     # No dark token moved (test_dark_token_values_pinned still passes).
-    "theme.css": "793f9089fd1591c4b0b9e1a3af73872a7cd996db5f3e7165047908c49088f381",
+    "theme.css": "4829f4129edd06972eaa66d6c65b3a2f86cc2101775bea9f8f8452b5c7de234b",
     # Re-pinned 2026-10-28: .badge.pass now uses var(--ok) instead of var(--teal) (commit 8f643dd); in the dark scope both are #35e0b0.
     # Re-pinned 2026-10-30: the "Why this verdict" waterfall component (.wf / .wf-step rules) was ADDED (commit f49c523); no existing rule changed.
     "job-theme.css": "1ea80e4f3812928af01d78a9f684cf1e6d13381ea3cebcdba7662127ba89b0a2",
@@ -51,7 +51,7 @@ DARK_HASH = {
     # Re-pinned (repo cleanup): the pages' hard-coded colors became var(--token) references whose DARK
     # values are the old literals (verified token-by-token: reverse-substituting reproduces the original CSS
     # exactly), and theme.css gained the page-token block. job-theme.css's pin had already drifted.
-    "_lifecycle_css.html": "87c894b3b9d27f0a47f1722f4ba0c240c8eaa0ddcd4ea99998c8620aaa96e6ec",
+    "_lifecycle_css.html": "49697425da247eb7abb70ff39bc2f08a8df2a699cd2d3490aa0f00fe2777dff4",
 }
 
 DARK_TOKENS = {  # :root values as found at task start -- do not move
