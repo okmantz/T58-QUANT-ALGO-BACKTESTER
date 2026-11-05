@@ -81,26 +81,32 @@ New buyers: [docs/buyer/INSTALL.md](docs/buyer/INSTALL.md), then [docs/buyer/QUI
    checked for **lookahead bias**: signals are re-computed on truncated data and the first bar that changes is reported. The Strategy Library
    keeps status tags and each strategy's backtest and search history.
 3. **Prop rules** — account size, target, daily loss, max drawdown (trailing/static, intrabar/EOD), consistency, payout rules. Presets for FTMO,
-   Apex, TopStep, The5%ers, FundedNext and Lucid carry a verified date; check it before trading real money.
+   Apex, TopStep, The5%ers, FundedNext and Lucid (including 25k accounts for FTMO, Apex and Lucid) carry a verified date and a source link. A rule set
+   whose date is older than **30 days** (or missing) shows a small *Rules re-verified* tick-box under the rules panel: read the firm's page, tick it,
+   and the preset is good for another 30 days. Unverified presets are labelled and cannot reach READY.
 4. **Risk and execution** — fixed-$ or %-equity risk, commission, slippage, spread, pip size.
 5. **Run** — backtest, prop simulation, Monte Carlo and report in one click.
 
 | Stage | Tools |
 |---|---|
 | **Create** | Strategy Discovery Engine (pick a market and prop firm; Speed Run, Search Lab, Evolution Lab and the deep Forge gauntlet are its presets), plain-English / Python / PineScript / MQL5 import, the no-code Manual builder, Generate Strategies (AI), Research Agent (read-only engine calls, never invented numbers) |
-| **Test** | Run & Report, Payout Probability (eval pass, funded, payout 1, 2 ... with an optional scaling stress test), Prop-Firm Recommender (ranks every preset against your trade sequence) |
+| **Test** | Full Pipeline (the one run allowed to produce a verdict; its Advanced options are sectioned, and **Run Batch / Schedule Batch** live in *Advanced → Batch & scheduling*), Run & Report, Payout Probability (eval pass, funded, payout 1, 2 ... with an optional scaling stress test), Prop-Firm Recommender (ranks every preset against your trade sequence) |
 | **Optimize** | Search Lab (5-stage funnel to a leaderboard), Iterative Refinement (GA), Full Pipeline, Optimize (Quick Optimize: searches the most recent 150k bars by default, adjustable under Advanced), Multi-Objective (NSGA-II Pareto front), Evolution Lab (unattended generate, filter, validate, mutate, ranked by PROP FITNESS) |
 | **Validate** | One page, eight checks you tick and run together or alone: Monte Carlo, CPCV, PBO, Walk-Forward, Walk-Forward-Aware GA, Parameter Sensitivity, Parameter Robustness, Regime Survival |
-| **Champion** | Multi-Asset Portfolio, Multi-Strategy Ensemble, Family Diversity, Automated Portfolio Composer |
-| **Deployment** | Forward Test (MT5 demo), Webhook Relay (TradingView), Overnight Autopilot, Auto-Retune, Deploy Live, Live PnL pill, Live Market monitor |
+| **Champion** | The Champion board: every validated strategy with its T58 score, a podium (1st/2nd/3rd), a short promotion assessment and a **Promote to Champion** button on each row, plus a side-by-side replacement comparison when a promoted strategy overlaps an existing champion on the same market. Multi-Asset Portfolio, Multi-Strategy Ensemble, Family Diversity, Automated Portfolio Composer |
+| **Deployment** | Deploy page with a portfolio overview (per account: firm, live P&L, open and recent trades, algo health), Forward Test (MT5 demo), Webhook Relay (TradingView), Overnight Autopilot, Auto-Retune, Deploy Live, Live PnL pill, Live Market monitor |
 | **Quant Lab** | Strategy Translator (to PineScript v5 / MQL5), Auto Regime Selector, Health / Drift Monitor, Pairs, Options Pricing, Order Book Simulator, Sentiment Correlation, Markowitz, Volatility Surface, Factor Model |
 
-**Optimizer defaults.** Every GA form defaults to the same fitness, `pass_gradient`; Speed Run uses `edge_lb_r` (lower bound of mean R after 2x costs).
+**Optimizer defaults.** The Optimize / Refine GA forms default to `pass_gradient` (pass odds with a small edge term). Speed Run and the Full Pipeline default to
+`edge_lb_r` (lower bound of mean R after 2x costs), so the verdict run selects on the edge and uses pass odds only to size the account.
 The optimizers share one persistent worker pool, memoize backtests by effective parameter values, and score plateau-robust finalists by perturbing the
 winner's neighbours. After a GA run, **Map the winner's neighbourhood** opens Parameter Robustness, which shades the neighbouring parameter grid and
 says in plain words whether the winner sits on a plateau or a lone spike.
 
-**Deployment notes.** Deploy Live connects MT5, cTrader, DXtrade, TradeLocker or Tradovate with enforced guardrails (news blackout, no weekend
+**Deployment notes.** The Deploy page opens with the portfolio overview and a one-line "what to do next" for your current state (connect an account, pick a Champion,
+deploy, or watch the health badge). Dashboard portfolio cards (live P&L, open and past positions per account) are **off by default**: switch them on under
+*Account settings → Personalize*; the switch is available only once an account is connected and a forward test or live deploy has trading activity.
+Deploy Live connects MT5, cTrader, DXtrade, TradeLocker or Tradovate with enforced guardrails (news blackout, no weekend
 holds, no hedging, size cap, daily-loss and drawdown halts); start on a demo. Forward Test and Overnight Autopilot need a running MT5 terminal
 (desktop only). Webhook Relay needs a public https address and a TradingView plan with webhooks; it feeds a T58 paper account and optionally a demo broker.
 
@@ -111,7 +117,10 @@ configurations. Candidates are drawn from paper-sourced families, the full indic
 the graveyard (known-dead neighbourhoods are skipped). Every configuration is optimized, then verified with real-engine backtests plus a lookahead
 test: a prefix-invariance check on the signals and a second probe on an early slice of the history, so a signal that peeks at the future is rejected.
 A finalist must also clear **Full Pipeline's own preflight** (the same sizing resolution on the full-size contract, at least 100 trades and at most 25% of
-signals skipped for sizing) before it is called a winner, so every winner can be run through Full Pipeline. The trial count feeds the Deflated Sharpe
+signals skipped for sizing) before it is called a winner, so every winner can be run through Full Pipeline. A READY verdict then needs **300+ trades**
+(the 100-trade preflight floor only decides whether the run is analysed at all). Champions are promoted through a fixed sequence (reproduction, deflated
+sequence, null gate, pooled edge, sealed slice); each read of the sealed slice is booked in a lifetime ledger and the k-th read must clear a
+Bonferroni-spent confidence, so the final slice cannot be quietly re-used. The trial count feeds the Deflated Sharpe
 correction. Details: [docs/DISCOVERY_ENGINE.md](docs/DISCOVERY_ENGINE.md).
 
 - **Strategy Graveyard** — searchable by market and text, with **See all** and **Revive**, which re-optimizes a dead strategy on a chosen market.
@@ -219,6 +228,13 @@ economic question: `EV = p × q × V − p × A − c`. For firms that charge a 
 Combine, $49 per month) `c` is the monthly price × the months the evaluation is expected to take (median time to pass,
 rounded up to whole 30-day periods), so slow passers are no longer priced as if they paid for one month.
 
+## Edge Rulebook
+
+The **Edge Rulebook** page (sidebar) states the project's staged rules in the same numbers the app enforces, with live calculators: the z-bar for a given
+number of looks, the trades needed to detect a given edge, the required lift, the 10-hypotheses-per-quarter **alpha ledger**, and the forward-test
+**kill line** (a running log-likelihood ratio of H1 = +0.15R against H0 = 0R; the strategy is cut when it falls to -2.25, which in the Rulebook's simulation removes a dead edge after a median of about 300 trades). The forward-test monitor reports it beside the SPRT, and a hit is listed as a halt reason.
+Source: `app/validation/rulebook.py`, `app/forward_test/sprt_monitor.py`. A binary screen is applied to every Full Pipeline run (`rulebook_screen` in the result).
+
 ## Monte Carlo
 
 One method is used everywhere: **day-block bootstrap with 1-day blocks**. Whole session days are resampled, so every trade of a day stays together and the
@@ -244,8 +260,11 @@ strategies to compare, and you can promote a strategy from there. See the Deploy
   multiple testing, regimes, trend and mean reversion, prop-firm behaviour), each with a one-line role and links. Drop PDFs anywhere under `research/` and
   the optional AI assist reads them when suggesting parameters (keyword matching only, nothing leaves your machine). Links were compiled without being opened:
   run `python scripts/check_paper_links.py` to find dead ones, or add `--download` to save the arXiv PDFs. See [research/README.md](research/README.md).
-- **Global Events**: a plain-language session brief, the economic calendar and an optional X feed (Bearer token under API Keys, paid X plan; see
-  [docs/GLOBAL_EVENTS.md](docs/GLOBAL_EVENTS.md)).
+- **Global Events**: headlines and the theater map, a plain-language session brief, the economic calendar and an optional X feed (Bearer token under
+  API Keys, paid X plan), plus market intelligence computed locally from daily bars: **Market Regime Intelligence** (per instrument: Trending, Range-bound,
+  High-vol or Event-driven, each with the exact rule and numbers that produced it), key macro releases (CPI, PPI, jobs, GDP, PCE, rates), central-bank
+  decision dates, market sessions, futures stats, volatility regime, correlation matrix, cross-asset monitor and geopolitics. Context, not a signal; see
+  [docs/GLOBAL_EVENTS.md](docs/GLOBAL_EVENTS.md).
 - **Options Outlook** (Black-Scholes candidates with an optional AI narrative), the **AI Assistant** dashboard (news, scanner, chat) and a beginner **Resources** guide.
 
 ## Account, ranks and themes
@@ -253,7 +272,7 @@ strategies to compare, and you can promote a strategy from there. See the Deploy
 **Account Settings** holds your research profile: a rank and title earned from XP, collectible metallic badges, a three-badge showcase, shareable
 achievement cards and downloadable certificates (SVG or PNG). The **Achievements** page filters by status, difficulty and category. Six scenes unlock
 through achievements (Obsidian Gold, Sakura Reverie, Abyssal Blue, Endless Sands, Coastal Italy, Bioluminescence; locked tiles show what to do), five
-whole-interface themes and six **Workspace presets** (Obsidian, Cyberpunk, Nordic, Evergreen, Sovereign, Midnight -- each an earned reward) can be switched on,
+whole-interface themes and five **Workspace presets** (Obsidian, Cyberpunk, Nordic, Evergreen, Sovereign -- each an earned reward) can be switched on,
 and your theme, preset, accent and background sync with the account. The Sakura, Abyssal and other animated scenes follow one shared clock, so the
 Sakura sky moves through sunrise, morning, noon, afternoon, sunset, evening and night continuously, whichever page you are on. The bell beside your picture is the notification inbox; a weekly digest arrives on Sundays.
 Personalization also offers the original mountains, the Nordic Kingdom fjord (available as soon as you are signed in) and four seasonal scenes, and an optional Bible verse bar (off by default). There are no online
@@ -261,12 +280,21 @@ leaderboards: nothing in the app talks to a T58 server for that.
 
 ## Settings and defaults
 
-- **AI Assist** is off by default. Ollama (local, free) is the default provider; **API Keys → AI provider** switches every feature to Claude or OpenAI with your key
-  (it falls back to Ollama if no key is saved). The model only proposes values for already-discovered tunable parameters, never code, and every suggestion goes
+- **AI Assist** is off by default. The provider setting defaults to **Auto**: if a Claude or OpenAI key is saved it is used first, and any failure or a missing key
+  falls back to Ollama (local, free). Picking Claude, OpenAI or Ollama explicitly under **API Keys → AI provider** pins it (a pinned cloud provider still falls back to
+  Ollama if its call fails). The model only proposes values for already-discovered tunable parameters, never code, and every suggestion goes
   through the same backtest, prop-sim and Monte Carlo pipeline.
 - **Costs are never zero by default**: realistic spread and slippage plus $3 per trade commission (`app/backtest/risk.py`). You can set any cost to 0.
 - **One account size**: RiskConfig and prop rules both default to $100,000.
-- **Presets with no verified stamp** are labelled unverified and cannot reach READY (`app/prop/presets.py`).
+- **Presets with no verified stamp** (or a stamp older than 30 days that has not been re-acknowledged in the app) are labelled unverified and cannot reach READY (`app/prop/presets.py`).
+  Acknowledgements are saved in `data/preset_stamps.json`.
+- **Numbers shown in panels come from one place**: the READY bar (pass rate, trade count, breach cap, holdout, rules freshness) is read from the pipeline defaults
+  (`app/orchestration/ready_bar.py`), so a change to a default changes every page and popup that quotes it.
+- **Explanations everywhere**: terms such as win rate, trades, profit factor, drawdown, T58 score and the READY bar are clickable for a plain-language popup
+  (definitions in `app/scoring/metric_defs.py`, served at `/api/metrics`).
+- **Market data pack**: `data/data_pack.json` freezes a canonical NQ / ES / MNQ / MES history with the sealed window fixed on a calendar date
+  (`2025-09-01`) and a content hash of that window. `python scripts/freeze_data_pack.py --verify` (or `/api/data-pack`) says whether the files still match.
+  MES and MNQ reuse the ES and NQ price history with a tenth of the dollars per point. See [docs/DATA_COVERAGE.md](docs/DATA_COVERAGE.md).
 - **Licensing**: master key (offline, owner), Google Sheet keys (customers) or an optional license server. See [docs/LICENSING.md](docs/LICENSING.md).
 - **Speed switches** (environment variables): `T58_MC_VECTORIZE=0` (Monte Carlo falls back to the per-path loop), `T58_LOOKAHEAD_DISK_CACHE=0`,
   `T58_CACHE_DIR`, `T58_MODULE_CACHE=0` (a strategy with mutable module state sets `T58_STATEFUL = True`).
