@@ -272,10 +272,10 @@ def _periodic_max_drawdown(equity_df: pd.DataFrame, freq: str, seg_id: np.ndarra
     compiled implementation, not a Python loop calling it 1500 times) --
     same math, computed once instead of once per period.
     """
-    df = equity_df.copy()
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df = df.set_index("timestamp")
-    equity = df["equity"]
+    # SPEED (2026-11-05): only two columns are needed. The old ``equity_df.copy()`` duplicated every column AND deep-copied the
+    # (large) ``attrs`` dict (prop attempts, reset events...) on every call; this builds the same Series from the two arrays.
+    equity = pd.Series(equity_df["equity"].to_numpy(), index=pd.DatetimeIndex(pd.to_datetime(equity_df["timestamp"]), name="timestamp"),
+                       name="equity")
     if equity.empty:
         return 0.0
     # VAL-006 side-effect fix: equity.index is now correctly tz-aware
