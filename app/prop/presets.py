@@ -162,6 +162,12 @@ class PropFirmPreset:
 
     def to_dict(self) -> dict:
         d = dict(self.__dict__)
+        # Computed (never stored): lets the rules panel show the small "re-checked" box only when it is needed.
+        state, reason = rules_stamp_state(self)
+        age = rules_stamp_age_days(self)
+        d.update(rules_state=state, rules_state_reason=reason, rules_age_days=age,
+                 rules_days_left=None if age is None else max(0, RULES_STAMP_MAX_AGE_DAYS - age),
+                 rules_page_url=self.source_url or FIRM_RULES_URLS.get(self.firm, ""))
         return d
 
 
@@ -196,6 +202,7 @@ _AS_OF_V6 = "2026-10-04"  # v6 pass (Oct 2026): Apex split into EOD/Intraday
 # corrected to intrabar, FundedNext re-mapped to the Stellar 2-Step
 # product, The5ers Bootcamp relabeled to High-Stakes, and funded-stage
 # consistency / payout-gate fields (B5/B10) wired through to_prop_rules.
+_AS_OF_V11 = "2026-11-04"  # 25k accounts added (unverified until re-read against the firm page)
 _AS_OF_V7 = "2026-10-05"  # v7 pass (Oct 2026): algo_trading_allowed field added,
 # all 15 legacy presets backfilled from firms' own rules pages, 4 new
 # algo-friendly presets (E8 One, FunderPro One Phase, Atlas 1-Step,
@@ -283,6 +290,26 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
             "https://ftmo.com/en/faq/which-instruments-can-i-trade-and-what-strategies-am-i-allowed-to-use/"
         ),
     ),
+    PropFirmPreset(
+        key="ftmo_25k", firm="FTMO", label="FTMO - $25k Challenge",
+        account_size=25_000, evaluation_profit_target_pct=10.0,
+        daily_loss_limit_pct=5.0, max_drawdown_pct=10.0,
+        drawdown_type="static", drawdown_check_mode="intrabar",
+        consistency_rule_pct=None, min_trading_days=4,
+        payout_frequency_days=14,
+        max_inactive_days=30,
+        as_of=_AS_OF_V11,
+        source_note=(
+            "Added 2026-11-04 from published 25k tables on secondary sources (not the firm's own page) -- UNVERIFIED: it can never support a READY verdict until you re-read the firm's page and re-acknowledge it in the app. "
+            "$25k Phase 1: $2,500 target (10%), $1,250 daily loss (5%), $2,500 static max loss (10%), 4 minimum trading days -- "
+            "same shape as the other FTMO 2-Step sizes; see the $10k preset's note for the phase-modeling caveats."
+        ),
+        algo_trading_allowed=True,
+        algo_policy_note=(
+            "FTMO explicitly allows algorithmic trading and EAs -- same official FAQ as the other FTMO presets: "
+            "https://ftmo.com/en/faq/which-instruments-can-i-trade-and-what-strategies-am-i-allowed-to-use/"
+        ),
+    ),
     # --- Apex Trader Funding -------------------------------------------
     # v6 (Oct 2026) SPLIT: Apex sells EOD and Intraday account types with
     # genuinely different drawdown rules, so the old single "Apex 50k/100k"
@@ -303,6 +330,50 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
     # there is NO evaluation-stage consistency rule post Apex 4.0, so
     # consistency_rule_pct stays None). min_trading_days stays 0 (Apex
     # 4.0, March 2026: no minimum -- a same-day pass is valid).
+    PropFirmPreset(
+        key="apex_25k_eod", firm="Apex Trader Funding", label="Apex - $25k Evaluation (EOD)",
+        account_size=25_000, evaluation_profit_target_pct=6.0,
+        daily_loss_limit_pct=2.0,  # $500 EOD daily loss limit
+        max_drawdown_pct=4.0,      # $1,000 trailing max drawdown
+        drawdown_type="trailing", drawdown_check_mode="eod",
+        consistency_rule_pct=None, min_trading_days=0,
+        payout_frequency_days=5,
+        winning_days_for_payout=5, min_winning_day_profit=250.0,
+        funded_consistency_rule_pct=50.0,
+        max_contracts=4,
+        as_of=_AS_OF_V11,
+        source_note=(
+            "Added 2026-11-04 from published 25k tables on secondary sources (not the firm's own page) -- UNVERIFIED: it can never support a READY verdict until you re-read the firm's page and re-acknowledge it in the app. "
+            "$25k EOD: $1,500 target (6%), $1,000 trailing max drawdown (4%), $500 daily loss limit (2%), 4 evaluation contracts. "
+            "Payout gates copied from the $50k EOD preset (5 winning days, 50% funded consistency) -- confirm them for the 25k size."
+        ),
+        algo_trading_allowed=False,
+        algo_policy_note=(
+            "Apex BANS automated trading -- https://apextraderfunding.com/help-center/getting-started/prohibited-activities/ "
+            "(see the $50k EOD preset's note)."
+        ),
+    ),
+    PropFirmPreset(
+        key="apex_25k_intraday", firm="Apex Trader Funding", label="Apex - $25k Evaluation (Intraday)",
+        account_size=25_000, evaluation_profit_target_pct=6.0,
+        daily_loss_limit_pct=100.0,  # no daily loss limit on the Intraday type
+        max_drawdown_pct=4.0,        # $1,000 trailing max drawdown
+        drawdown_type="trailing", drawdown_check_mode="intrabar",
+        consistency_rule_pct=None, min_trading_days=0,
+        payout_frequency_days=5,
+        winning_days_for_payout=5, min_winning_day_profit=200.0,
+        funded_consistency_rule_pct=50.0,
+        max_contracts=4,
+        as_of=_AS_OF_V11,
+        source_note=(
+            "Added 2026-11-04 from published 25k tables on secondary sources (not the firm's own page) -- UNVERIFIED: it can never support a READY verdict until you re-read the firm's page and re-acknowledge it in the app. "
+            "$25k Intraday: $1,500 target (6%), $1,000 trailing max drawdown (4%) monitored intraday, no daily loss limit, 4 evaluation contracts."
+        ),
+        algo_trading_allowed=False,
+        algo_policy_note=(
+            "Apex BANS automated trading -- https://apextraderfunding.com/help-center/getting-started/prohibited-activities/"
+        ),
+    ),
     PropFirmPreset(
         key="apex_50k_eod", firm="Apex Trader Funding", label="Apex - $50k Evaluation (EOD)",
         account_size=50_000, evaluation_profit_target_pct=6.0,
@@ -662,6 +733,30 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
             "https://intercom.help/lucid-trading/en/articles/11321405-prohibited-trading-strategies"
         ),
     ),
+    PropFirmPreset(
+        key="lucid_25k", firm="Lucid Trading", label="Lucid Trading - $25k Evaluation",
+        account_size=25_000, evaluation_profit_target_pct=5.0,
+        daily_loss_limit_pct=2.4, max_drawdown_pct=4.0,
+        drawdown_type="trailing", drawdown_check_mode="eod",
+        dd_basis="eod", daily_loss_basis="floating", daily_loss_action="lock_day",
+        trailing_lock=True, trailing_lock_offset_pct=0.4, max_contracts=2, rules_checked_on="2026-11-04",
+        trailing_distance_basis="account", flatten_time_ct="15:45",
+        consistency_rule_pct=None, min_trading_days=1,
+        payout_frequency_days=3,
+        funded_consistency_rule_pct=40.0,
+        as_of=_AS_OF_V11,
+        source_note=(
+            "Added 2026-11-04 from published 25k tables on secondary sources (not the firm's own page) -- UNVERIFIED: it can never support a READY verdict until you re-read the firm's page and re-acknowledge it in the app. "
+            "LucidPro $25k: $1,250 target (5%), $1,000 EOD trailing max loss (4%) that locks at $25,100 once balance passes $26,100, "
+            "2 minis / 20 micros, 40% funded consistency. The daily loss limit is optional at purchase and sources disagree for Pro "
+            "($600 = 2.4% is modeled as a soft day-lock -- the conservative choice); confirm at checkout."
+        ),
+        algo_trading_allowed=True,
+        algo_policy_note=(
+            "Lucid permits automated systems that do not exploit the platform; HFT, latency arbitrage and reverse/hedge arbitrage are prohibited -- "
+            "https://intercom.help/lucid-trading/en/articles/11321405-prohibited-trading-strategies"
+        ),
+    ),
     # --- E8 Markets -----------------------------------------------------
     # v7 (Oct 2026): E8 explicitly permits algo trading on the E8 One
     # 1-Step program -- their official help center lists "Algo, EA, Bots
@@ -954,21 +1049,92 @@ def _load_stamp_overrides() -> dict:
     return {}
 
 
-_VERIFIED_STAMPS = {**_VERIFIED_STAMPS, **{k: (d, (u or (_VERIFIED_STAMPS.get(k) or ("", "", ""))[1]), t)
-                                            for k, (d, u, t) in _load_stamp_overrides().items()}}
-for _p in PROP_FIRM_PRESETS:
-    _st = _VERIFIED_STAMPS.get(_p.key)
-    if _st:
+_BASE_STAMPS = dict(_VERIFIED_STAMPS)
+
+# Firm rules pages used when an in-app acknowledgement is recorded for a preset that has no source URL of its own yet.
+FIRM_RULES_URLS = {
+    "FTMO": "https://ftmo.com/en/trading-objectives/",
+    "Apex Trader Funding": "https://apextraderfunding.com/help-center/evaluation-accounts-ea/",
+    "Lucid Trading": "https://support.lucidtrading.com/en/articles/12890029-lucidpro-evaluation-account",
+    "TopStep": "https://help.topstep.com/en/collections/1437-trading-combine",
+    "The5%ers": "https://the5ers.com/",
+    "FundedNext": "https://help.fundednext.com/en/articles/17255124-stellar-2-step-challenge",
+    "E8 Markets": "https://e8markets.com/e8-one",
+    "FunderPro": "https://funderpro.com/",
+    "Atlas Funded": "https://atlasfunded.com/",
+    "The Futures Desk": "https://thefuturesdesk.com/",
+}
+
+
+def _refresh_stamps() -> None:
+    """(Re)apply the stamp table + ``data/preset_stamps.json`` overrides (owner re-stamps and in-app acknowledgements) to every preset."""
+    global _VERIFIED_STAMPS
+    over = _load_stamp_overrides()
+    _VERIFIED_STAMPS = {**_BASE_STAMPS, **{k: (d, (u or (_BASE_STAMPS.get(k) or ("", "", ""))[1]), t) for k, (d, u, t) in over.items()}}
+    for _p in PROP_FIRM_PRESETS:
+        _st = _VERIFIED_STAMPS.get(_p.key)
+        if not _st:
+            for _f in ("verified_on", "source_url", "verification_tier"):
+                object.__setattr__(_p, _f, "")
+            continue
         object.__setattr__(_p, "verified_on", _st[0])
         object.__setattr__(_p, "source_url", _st[1])
         object.__setattr__(_p, "verification_tier", _st[2])
+        base_note = _p.source_note.split(" Marked verified by the account owner")[0]
         if _st[2] == "owner_attested":
-            object.__setattr__(_p, "source_note", ((_p.source_note + " ") if _p.source_note else "") + (
+            base_note = ((base_note + " ") if base_note else "") + (
                 f"Marked verified by the account owner on {_st[0]} (owner-attested). Not independently re-checked "
-                f"against the firm's page in that session -- confirm dollar figures at the firm's site before relying on them."))
-del _p, _st
+                f"against the firm's page in that session -- confirm dollar figures at the firm's site before relying on them.")
+        object.__setattr__(_p, "source_note", base_note)
+
+
+_refresh_stamps()
 
 _BY_KEY: dict[str, PropFirmPreset] = {p.key: p for p in PROP_FIRM_PRESETS}
+
+
+# ---------------------------------------------------------------------------
+# In-app "rules re-checked" acknowledgement (2026-11 build). One small checkbox: the owner confirms they just read the firm's own
+# rules page and the numbers in the preset still match. It writes a primary-tier stamp dated today to ``data/preset_stamps.json`` (the
+# same file scripts/restamp_presets.py uses), which keeps the preset READY-eligible for RULES_STAMP_MAX_AGE_DAYS (30) days; after that
+# the checkbox reappears. The UI shows it only when a preset is stale / unverified AND is the one in use.
+# ---------------------------------------------------------------------------
+
+
+def _stamp_file():
+    from pathlib import Path as _P
+    return _P(__file__).resolve().parents[2] / "data" / "preset_stamps.json"
+
+
+def acknowledge_preset(key: str, today: "date | None" = None) -> dict:
+    """Record that the owner re-checked ``key`` against the firm's own page today. Returns ack_status(key)."""
+    import json as _json
+    from datetime import date as _date
+    preset = get_preset(key)                                   # KeyError for an unknown key
+    url = preset.source_url or FIRM_RULES_URLS.get(preset.firm, "")
+    if not url:
+        raise ValueError(f"no rules-page URL is known for '{preset.firm}' -- add one to FIRM_RULES_URLS first")
+    fp = _stamp_file()
+    try:
+        raw = _json.loads(fp.read_text(encoding="utf-8")) if fp.exists() else {}
+    except Exception:  # noqa: BLE001
+        raw = {}
+    raw[key] = {"date": (today or _date.today()).isoformat(), "url": url, "tier": "primary", "by": "in-app acknowledgement"}
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    fp.write_text(_json.dumps(raw, indent=2, sort_keys=True), encoding="utf-8")
+    _refresh_stamps()
+    return ack_status(key, today)
+
+
+def ack_status(key: str, today: "date | None" = None) -> dict:
+    """{key, firm, label, state ok|stale|unverified, needs_ack, age_days, days_left, verified_on, source_url, reason}.
+    ``needs_ack`` is True only when the rules stamp is missing or older than the allowed age -- i.e. exactly when the checkbox should show."""
+    p = get_preset(key)
+    state, reason = rules_stamp_state(p, today)
+    age = rules_stamp_age_days(p, today)
+    left = None if age is None else max(0, RULES_STAMP_MAX_AGE_DAYS - age)
+    return {"key": key, "firm": p.firm, "label": p.label, "state": state, "needs_ack": state != "ok", "age_days": age,
+            "days_left": left, "verified_on": p.verified_on, "source_url": p.source_url or FIRM_RULES_URLS.get(p.firm, ""), "reason": reason}
 
 
 # ---------------------------------------------------------------------------
@@ -1171,6 +1337,13 @@ _FIRM_FEE_ROWS = [
         notes="2-Step Challenge EUR 1,080 (= $1,249.37 at 1.15682 EUR/USD, 2026-08-14). Reset = full price again (no published retry discount). "
               "Split starts at 80%. Fee refund with first Reward not modelled. "
               "Cross-checked: https://www.passproptradingfirms.com/best-prop-firms/ftmo-review/ftmo-account-prices/"),
+    # 25k accounts (added 2026-11): the rules are on the firms' pages (see the preset notes); PRICES were not verified, so they are
+    # left unknown (None) -- never guessed. Fee/EV maths treats an unknown price as "not modelled" and says so.
+    _secondary_fee("ftmo_25k", None, None, 80.0, "https://ftmo.com/en/trading-objectives/", notes="25k price not verified; add it from FTMO checkout."),
+    _secondary_fee("apex_25k_eod", None, None, 90.0, _APEX_URL, notes="25k price not verified; check Apex checkout. " + _APEX_NOTE),
+    _secondary_fee("apex_25k_intraday", None, None, 90.0, _APEX_URL, notes="25k price not verified; check Apex checkout. " + _APEX_NOTE),
+    _secondary_fee("lucid_25k", None, None, 90.0, "https://support.lucidtrading.com/en/articles/12890029-lucidpro-evaluation-account",
+                   notes="25k price not verified; check Lucid checkout."),
 ]
 for _row in _FIRM_FEE_ROWS:
     FIRM_FEES.setdefault(_row.preset_key, _row)
@@ -1225,6 +1398,7 @@ def fee_table() -> list[dict]:
 #   * a stamp older than RULES_STAMP_MAX_AGE_DAYS no longer counts -- firms change rules often.
 READY_VERIFICATION_TIERS = ("primary",)
 RULES_STAMP_MAX_AGE_DAYS = 30
+ACK_VALID_DAYS = RULES_STAMP_MAX_AGE_DAYS   # an in-app acknowledgement is good for this many days
 
 
 def rules_stamp_age_days(preset: "PropFirmPreset", today: "date | None" = None) -> int | None:
