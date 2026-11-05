@@ -197,6 +197,15 @@ class DiscoveryEngine:
 
         # champions: entry floor + provenance (the facade measures edge on the same dev slice the sequence reproduces on)
         champs = self._prepare_champions(out.champions, dev_gate, req, preset)
+        if not champs:
+            _rej = getattr(self, "_floor_rejects", [])
+            if _rej:
+                _best = _rej[0]
+                notes.append(f"No champion met the entry floor ({obj.DEFAULT_FLOOR.min_trades}+ trades, mean-R t >= {obj.DEFAULT_FLOOR.min_t_stat:g}): "
+                             f"{len(_rej)} candidate(s) were rejected; the closest ({_best.get('family') or 'unknown family'}) failed on "
+                             f"{'; '.join(_best['floor_reasons'])}. Nothing was promoted -- that is a result, not an error.")
+            else:
+                notes.append("No champion was produced by this run, so nothing was promoted.")
         k = req.max_promote if req.max_promote is not None else preset.top_n_promote
         champs = champs[: max(0, int(k))]
         promotions: list = []
@@ -240,6 +249,7 @@ class DiscoveryEngine:
     # --------------------------------------------------------------------------------------------------- champion prep
     def _prepare_champions(self, champions: list, dev_df, req: EngineRequest, preset: Preset) -> list:
         from app.discovery_engine.engine_steps import edge_record, evaluate_spec
+        self._floor_rejects = []
         ranked = []
         for c in champions or []:
             c = dict(c)
@@ -260,7 +270,7 @@ class DiscoveryEngine:
             c["floor_reasons"] = []
             if sc.n_trades < obj.DEFAULT_FLOOR.min_trades:
                 c["floor_reasons"].append(f"{sc.n_trades} trades < {obj.DEFAULT_FLOOR.min_trades}")
-            if np.isfinite(sc.t_stat) and sc.t_stat < obj.DEFAULT_FLOOR.min_t_stat:
+            if sc.t_stat is not None and np.isfinite(sc.t_stat) and sc.t_stat < obj.DEFAULT_FLOOR.min_t_stat:
                 c["floor_reasons"].append(f"mean-R t {sc.t_stat:.2f} < {obj.DEFAULT_FLOOR.min_t_stat:g}")
             ranked.append(c)
         # the ONE ranking: edge_lb_r (None sorts last); candidates under the floor stay listed but cannot be promoted
@@ -269,7 +279,10 @@ class DiscoveryEngine:
         for c in ranked:
             if c["floor_reasons"]:
                 c.setdefault("promotion", {"passed": False, "failed_step": "entry_floor", "failed_reason": "; ".join(c["floor_reasons"])})
-        return eligible if eligible else ranked[:1]
+        # 2026-11 audit: a champion that fails the entry floor is NEVER promoted. "No champion met the floor" is a normal outcome (reported
+        # in the run notes with the best near-miss's reasons), not a reason to promote the least-bad candidate.
+        self._floor_rejects = [c for c in ranked if c["floor_reasons"]]
+        return eligible
 
 
 # ------------------------------------------------------------------------------------------------------ default backends

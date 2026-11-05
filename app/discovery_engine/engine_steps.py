@@ -30,12 +30,32 @@ def _cleanup_tmp() -> None:
 atexit.register(_cleanup_tmp)
 
 
+_STRATEGY_CACHE: dict = {}
+_STRATEGY_CACHE_MAX = 64
+
+
 def _strategy(spec: dict):
-    """Live Strategy for a candidate spec. The temp dir (python candidates load lazily from it) lives until process exit."""
+    """Live Strategy for a candidate spec. The temp dir (python candidates load lazily from it) lives until process exit.
+
+    Memoised by the spec's canonical JSON: the promotion steps evaluate the same champion on the dev slice, every pooled market and
+    the sealed slice, and each used to write a fresh temp dir and re-import the candidate (disk churn and import time per call).
+    A strategy object is a pure function of its spec, so sharing one across read-only backtests is safe."""
+    import json
     from app.search.strategy_space import build_strategy_from_spec
+    try:
+        key = json.dumps(spec, sort_keys=True, default=str)
+    except Exception:  # noqa: BLE001 - unhashable spec: just build it
+        key = None
+    if key is not None and key in _STRATEGY_CACHE:
+        return _STRATEGY_CACHE[key]
     tmp = Path(tempfile.mkdtemp(prefix="t58_promo_"))
     _TMP_DIRS.append(tmp)
-    return build_strategy_from_spec(spec, tmp)
+    strat = build_strategy_from_spec(spec, tmp)
+    if key is not None:
+        if len(_STRATEGY_CACHE) >= _STRATEGY_CACHE_MAX:
+            _STRATEGY_CACHE.pop(next(iter(_STRATEGY_CACHE)))
+        _STRATEGY_CACHE[key] = strat
+    return strat
 
 
 def evaluate_spec(spec: dict, df: pd.DataFrame, risk, cost_multiplier: float = 1.0):
@@ -72,7 +92,7 @@ def per_market_r(spec: dict, frames: dict, risks: dict, cost_multiplier: float =
 
 def build_steps(*, dev_df: pd.DataFrame, sealed_df: pd.DataFrame | None, risk, frames: dict | None = None, risks: dict | None = None,
                 pool_matrix: np.ndarray | None = None, n_trials: int = 1, cfg: PromotionConfig | None = None,
-                holdout_budget=None, null_runner=None) -> Steps:
+                holdout_budget=None, null_runner=None, sealed_ledger=None) -> Steps:
     """Wire the five steps to the real engine.
 
     ``frames`` / ``risks``: {SYMBOL: DataFrame} / {SYMBOL: RiskConfig} for the pooled test (the candidate's own market should be one
@@ -112,14 +132,23 @@ def build_steps(*, dev_df: pd.DataFrame, sealed_df: pd.DataFrame | None, risk, f
     def sealed_slice(c, ctx):
         if sealed_df is None or not len(sealed_df):
             return StepResult("sealed_slice", False, detail="no sealed slice was reserved for this run")
+        # Lifetime ledger (2026-11 audit): every read of this exact sealed slice, in any run, is a booked look. The k-th read must clear a
+        # Bonferroni-spent confidence and past ``sealed_max_lifetime_looks`` the slice is refused -- it is development data by then.
+        from app.discovery_engine.holdout import HoldoutExhausted, SealedLedger
+        ledger = sealed_ledger if sealed_ledger is not None else SealedLedger(max_looks=cfg.sealed_max_lifetime_looks)
+        fp = prov.data_fingerprint(sealed_df)
+        try:
+            looks = ledger.spend(fp)
+        except HoldoutExhausted as exc:
+            return StepResult("sealed_slice", False, detail=str(exc), data={"sealed_lifetime_looks": ledger.reads(fp), "refused": True})
+        sealed = sealed_df                          # the per-run HoldoutBudget no longer caps a run's champions at one: each is a booked look
         if holdout_budget is not None:
-            sealed = holdout_budget.read_sealed(sealed_df, who="promotion")
-        else:
-            sealed = sealed_df
+            holdout_budget.sealed_reads += 1
+            holdout_budget.log.append({"look": "sealed", "who": "promotion", "lifetime_looks": looks})
         from app.optimize.two_stage import trade_r_and_days
         tr = evaluate_spec(c.get("spec"), sealed, risk, cfg.cost_multiplier)
         rs, days = trade_r_and_days(tr) if tr else ([], [])
-        return sealed_step(rs, days, tied=ctx["tied"], cfg=cfg)
+        return sealed_step(rs, days, tied=ctx["tied"], cfg=cfg, looks=looks)
 
     return Steps(reproduction=reproduction, sequence_deflated=sequence_deflated, null_gate=null_gate,
                  pooled_edge=pooled_edge, sealed_slice=sealed_slice)

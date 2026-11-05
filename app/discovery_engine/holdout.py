@@ -179,3 +179,42 @@ class LookRegistry:
         except Exception:  # noqa: BLE001 -- best-effort; the count returned is still right for this process
             pass
         return int(d[k])
+
+
+# ------------------------------------------------------------------------------------ lifetime sealed-slice ledger (2026-11 audit)
+#: Reads of ONE sealed slice (same data fingerprint) after which it is development data, not a holdout. Each read is a look: the
+#: confidence a result must reach is Bonferroni-spent over the looks (``sealed_confidence``) and past this many reads the slice
+#: is refused outright. New data (a different fingerprint) is a fresh slice and resets the count by itself.
+SEALED_MAX_LIFETIME_LOOKS = 6
+
+
+def sealed_confidence(base_conf: float, looks: int) -> float:
+    """One-sided confidence the k-th lifetime read of the same sealed slice must reach: ``1 - (1 - base) / k``.
+    Look 1 keeps ``base``; look 2 asks for 0.95 when base is 0.90; look 3 for ~0.967; it tends to 1 as reads accumulate."""
+    k = max(1, int(looks))
+    return float(min(0.9999, 1.0 - (1.0 - float(base_conf)) / k))
+
+
+class SealedLedger(LookRegistry):
+    """Lifetime ledger of sealed-slice reads per data fingerprint, kept across runs (``reports/holdout_looks.json``).
+
+    ``HoldoutBudget`` only knew about THIS run, so re-running the engine on the same data re-read the same sealed 10% and turned it
+    into a validation set. ``spend`` books one read and returns the lifetime count; ``reads`` is the count so far."""
+
+    def __init__(self, path=None, max_looks: int = SEALED_MAX_LIFETIME_LOOKS):
+        super().__init__(path)
+        self.max_looks = int(max_looks)
+
+    def reads(self, slice_fp: str) -> int:
+        return self.count(slice_fp, "sealed")
+
+    def exhausted(self, slice_fp: str) -> bool:
+        return self.reads(slice_fp) >= self.max_looks
+
+    def spend(self, slice_fp: str) -> int:
+        """Book one read of the sealed slice; raises ``HoldoutExhausted`` BEFORE booking when the lifetime budget is already spent."""
+        if self.exhausted(slice_fp):
+            raise HoldoutExhausted(
+                f"this sealed slice ({slice_fp}) has been read {self.reads(slice_fp)} times across runs (limit {self.max_looks}) -- it is "
+                "development data now, not a holdout. Add newer bars (a new sealed slice) or seal a later window before promoting again.")
+        return self.record(slice_fp, "sealed")

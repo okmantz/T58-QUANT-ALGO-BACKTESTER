@@ -123,6 +123,7 @@ class PromotionConfig:
     sealed_conf_poolable: float = 0.90        # confirmation of an already-pooled-proven edge
     sealed_conf_tied: float = 0.975           # STRICTER for instrument-tied families (no pooled evidence)
     sealed_min_trades_tied: int = 50
+    sealed_max_lifetime_looks: int = 6        # reads of ONE sealed slice (per data fingerprint, across runs) before it is refused
     cost_multiplier: float = 2.0
     repro_abs_tol: float = 0.02
     repro_rel_tol: float = 0.10
@@ -179,15 +180,23 @@ def pooled_step(per_market: dict, cfg: PromotionConfig) -> StepResult:
     return StepResult("pooled_edge", res.passed, detail=res.render(), data=res.to_dict())
 
 
-def sealed_step(rs: list, days: list, *, tied: bool, cfg: PromotionConfig) -> StepResult:
+def sealed_step(rs: list, days: list, *, tied: bool, cfg: PromotionConfig, looks: int = 1) -> StepResult:
     """Step 5. One read of the sealed slice. The bar is a one-sided day-block-bootstrap lower bound above zero; STRICTER (higher
-    confidence and more trades) for instrument-tied families, which have no pooled evidence behind them."""
+    confidence and more trades) for instrument-tied families, which have no pooled evidence behind them.
+
+    ``looks`` is the LIFETIME read count of this exact slice including this one (``SealedLedger``): the k-th read must reach
+    ``1 - (1 - conf) / k`` so a researcher who keeps re-running the engine on the same data cannot turn the slice into a validation set."""
+    from app.discovery_engine.holdout import sealed_confidence
     from app.validation.pooled_edge import pooled_edge_test
-    conf = cfg.sealed_conf_tied if tied else cfg.sealed_conf_poolable
+    base = cfg.sealed_conf_tied if tied else cfg.sealed_conf_poolable
+    conf = sealed_confidence(base, looks)
     need = cfg.sealed_min_trades_tied if tied else cfg.sealed_min_trades
     res = pooled_edge_test({"sealed": (rs, days)}, min_trades=need, conf=conf, cost_multiplier=cfg.cost_multiplier)
     kind = "instrument-tied (stricter bar)" if tied else "poolable"
-    return StepResult("sealed_slice", res.passed, detail=f"[{kind}] {res.render()}", data=res.to_dict())
+    look_note = (f" Sealed-slice read #{looks} of this data: confidence raised from {base:.1%} to {conf:.2%} (alpha spent over {looks} looks)." if looks > 1 else "")
+    data = res.to_dict()
+    data.update({"sealed_lifetime_looks": int(looks), "sealed_confidence": float(conf), "sealed_base_confidence": float(base), "sealed_min_trades": int(need)})
+    return StepResult("sealed_slice", res.passed, detail=f"[{kind}] {res.render()}{look_note}", data=data)
 
 
 def _skipped(name: str, why: str) -> StepResult:
