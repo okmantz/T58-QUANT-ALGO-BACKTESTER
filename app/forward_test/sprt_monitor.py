@@ -71,6 +71,13 @@ class SprtMonitor:
     def status(self) -> dict:
         d = sprt_decision(self.r_values, self.h1_r, self.sd_r, 0.0, self.alpha, self.beta, self.max_trades)
         halted = self.kill.check(self.r_values, self.days if all(x is not None for x in self.days) else None)
+        # Rulebook kill line (2026-11-03, section 4): LLR of "+0.15R" vs "no edge"; cut the strategy at <= -2.25.
+        from app.validation.rulebook import llr_path
+        llr = llr_path(self.r_values)
+        d["rulebook_llr"] = llr
+        if llr["killed"]:
+            halted = list(halted) + [f"Rulebook kill line hit: LLR {llr['llr']:.2f} <= {llr['kill_at']:.2f} at trade {llr['killed_at_trade']} "
+                                     "(the live edge is no longer consistent with +0.15R)"]
         d["kill_switch"] = halted
         d["halted"] = bool(halted)
         d["ladder_state"] = {"ACCEPT_H1": "EVALUATE"}.get(d["decision"], "FORWARD-TEST CANDIDATE" if d["decision"] == "CONTINUE" else "REJECT")
