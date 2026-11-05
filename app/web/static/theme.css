@@ -1372,3 +1372,36 @@ html[data-ui-accent] body { --accent: var(--teal) !important; }
 html[data-ui-accent] { accent-color: var(--teal); }
 input[type="range"], input[type="checkbox"], input[type="radio"], progress { accent-color: var(--teal); }
 ::selection { background: rgba(var(--teal-rgb), .30); }
+
+/* ---- 2026-11 readability pass: nothing cut off, nothing overlapping ----
+   * The floating AI-chat bubble (fixed, bottom-right) used to sit on top of the last rows of the right rail
+     ("Holdout", "READY bar"); every page now ends with room for it.
+   * Page titles wrap instead of running under the avatar / hamburger chrome and never collide with the first line of text.
+   * Key/value rows (Run checklist, rules panel) wrap long values instead of truncating them. */
+.t58-main { padding-bottom: 120px; }
+.t58-main h1, h1.lc-title, .lc-sub, .lc-crumb { overflow-wrap: anywhere; line-height: 1.25; }
+h1.lc-title { margin-bottom: 8px; }
+.lc-sub { margin-top: 6px; }
+@media (max-width: 760px) {
+  .t58-main > :first-child, .t58-main .lc-wrap > .lc-crumb { padding-right: 56px; }  /* clear the avatar button */
+  .t58-main { padding-top: 76px; }
+  .lc-side-card, .lc-card { overflow-wrap: anywhere; }
+}
+.lc-kv, .lc-prev-row { flex-wrap: wrap; }
+
+/* Portfolio cards (t58-portfolio.js) */
+.pf-total { font-size:13px; color:var(--text-muted); margin-bottom:10px; } .pf-total b { font-size:18px; margin-left:6px; }
+.pf-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:12px; }
+.pf-card { border:1px solid var(--border-light, var(--border)); border-radius:12px; padding:14px; background:var(--panel-2); min-width:0; }
+.pf-card header { display:flex; justify-content:space-between; gap:8px; align-items:flex-start; margin-bottom:10px; }
+.pf-name { font-weight:700; overflow-wrap:anywhere; } .pf-sub { font-size:12px; color:var(--text-muted); overflow-wrap:anywhere; }
+.pf-health { font-size:11.5px; font-weight:700; padding:3px 10px; border-radius:999px; white-space:nowrap; border:1px solid currentColor; }
+.pf-health.ok { color:#35d878; } .pf-health.watch { color:#f5b83d; } .pf-health.halted { color:#ff5d73; } .pf-health.idle { color:var(--text-muted); }
+.pf-nums { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 12px; }
+.pf-nums div { display:flex; flex-direction:column; min-width:0; } .pf-k { font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--text-muted); } .pf-nums b { font-size:15px; overflow-wrap:anywhere; }
+.pf-why { font-size:12px; color:var(--text-muted); margin:10px 0 2px; line-height:1.45; }
+.pf-sec { font-size:11px; text-transform:uppercase; letter-spacing:.8px; color:var(--teal, #35e0b0); font-weight:700; margin:12px 0 4px; }
+.pf-tr { display:grid; grid-template-columns:auto 1fr auto auto; gap:8px; font-size:12.5px; padding:3px 0; align-items:center; }
+.pf-dir { font-size:10.5px; text-transform:uppercase; font-weight:700; padding:1px 6px; border-radius:6px; background:rgba(128,128,128,.18); } .pf-dir.long { color:#35d878; } .pf-dir.short { color:#ff5d73; }
+.pf-mut { color:var(--text-muted); font-size:11.5px; } .pf-pos { color:#35d878; } .pf-neg { color:#ff5d73; }
+.pf-empty { font-size:12.5px; color:var(--text-muted); padding:6px 0; } .pf-next { margin-top:12px; font-size:13px; padding:8px 12px; border-radius:10px; background:rgba(53,224,176,.08); border:1px solid rgba(53,224,176,.25); }

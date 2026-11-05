@@ -16,7 +16,7 @@
 
   function newState(p) {
     var start = p.account;
-    return { day: 0, balance: start, peak: start, floor: start - p.account * p.maxDdPct / 100, dayPnl: 0, bestDay: 0, dayPnls: [], status: 'running', reason: '', passed: false, trades: 0, passDay: null };
+    return { day: 0, balance: start, peak: start, floor: start - p.account * p.maxDdPct / 100, dayPnl: 0, bestDay: 0, dayPnls: [], curve: [start], floors: [start - p.account * p.maxDdPct / 100], status: 'running', reason: '', passed: false, trades: 0, passDay: null };
   }
   function floorFor(p, st) {
     var base = p.account - p.account * p.maxDdPct / 100;
@@ -44,7 +44,7 @@
       if (st.balance <= st.floor) { st.status = 'failed'; st.reason = 'Drawdown breached'; break; }
       if (st.dayPnl <= -dailyLimit) { st.status = 'failed'; st.reason = 'Daily loss limit hit'; break; }
     }
-    st.dayPnls.push(st.dayPnl);
+    st.dayPnls.push(st.dayPnl); st.curve.push(st.balance); st.floors.push(st.floor);
     if (st.dayPnl > st.bestDay) st.bestDay = st.dayPnl;
     if (st.status === 'running' && !st.passed && profitOf(st, p) >= p.account * p.targetPct / 100 && st.day >= p.minDays && consistencyOk(p, st)) {
       st.passed = true; st.passDay = st.day; st.status = 'passed'; st.reason = 'Profit target reached';
@@ -82,10 +82,25 @@
     res.failPct = res.failDdPct + res.failDailyPct;
     return res;
   }
+  /* 95% Wilson interval for a proportion k/n, in percent -- so a 500-path estimate is never shown as exact */
+  function wilson(k, n) {
+    if (!n) return [0, 100]; var z = 1.96, ph = k / n, d = 1 + z * z / n, c = ph + z * z / (2 * n), a = z * Math.sqrt(ph * (1 - ph) / n + z * z / (4 * n * n));
+    return [Math.max(0, (c - a) / d * 100), Math.min(100, (c + a) / d * 100)];
+  }
+  /* pass / fail / payout at a ladder of risk-per-trade values, plus the highest-pass level whose FAIL rate stays under failCap */
+  function riskSweep(p, levels, n, seed, failCap) {
+    var rows = (levels || [0.25, 0.5, 0.75, 1, 1.5, 2]).map(function (r) {
+      var q = {}; for (var k in p) q[k] = p[k]; q.riskPct = r; var m = monteCarlo(q, n || 300, seed || 1);
+      return { risk: r, passPct: m.passPct, failPct: m.failPct, payoutPct: m.payoutPct, timeoutPct: m.timeoutPct };
+    });
+    var cap = failCap == null ? 20 : failCap, best = null;
+    rows.forEach(function (r) { if (r.failPct <= cap && (!best || r.passPct > best.passPct)) best = r; });
+    return { rows: rows, best: best, failCap: cap };
+  }
   function expectedR(p) { return p.winRate * p.payoffR - (1 - p.winRate); }
 
   var API = { rng: rng, newState: newState, stepDay: stepDay, monteCarlo: monteCarlo, floorFor: floorFor, consistencyOk: consistencyOk,
-              consistencyUsed: consistencyUsed, expectedR: expectedR, fundedPhase: fundedPhase };
+              consistencyUsed: consistencyUsed, expectedR: expectedR, fundedPhase: fundedPhase, wilson: wilson, riskSweep: riskSweep };
   root.T58PropSim = API;
   if (typeof module !== 'undefined' && module.exports) module.exports = API;
 
@@ -191,8 +206,8 @@
     var rbox = el('div'); rbox.style.marginTop = '14px'; rbox.appendChild(el('label', null, 'Risk per trade (% of account) — drag me')); rbox.appendChild(riskLab); rbox.appendChild(risk); left.appendChild(rbox);
     risk.addEventListener('input', function () { P.riskPct = parseFloat(risk.value); recompute(true); });
 
-    var statusBox = el('div'), gauges = el('div'), odds = el('div', 'odds'), btns = el('div', 'btns'), info = el('div', 'muted');
-    right.appendChild(statusBox); right.appendChild(btns); right.appendChild(gauges); right.appendChild(el('h4', null, 'Probabilities (500 simulated attempts at this risk)')).style.margin = '14px 0 0'; right.appendChild(odds); right.appendChild(info);
+    var statusBox = el('div'), gauges = el('div'), odds = el('div', 'odds'), btns = el('div', 'btns'), info = el('div', 'muted'), chart = el('div', 'pschart'), sweep = el('div', 'pssweep');
+    right.appendChild(statusBox); right.appendChild(btns); right.appendChild(chart); right.appendChild(gauges); right.appendChild(el('h4', null, 'Probabilities (500 simulated attempts at this risk)')).style.margin = '14px 0 0'; right.appendChild(odds); right.appendChild(sweep); right.appendChild(info);
     function mkBtn(t, cls, fn) { var b = el('button', cls, t); b.type = 'button'; b.addEventListener('click', fn); btns.appendChild(b); return b; }
     var playBtn = mkBtn('▶ Play a new attempt', 'p', function () { if (timer) { clearInterval(timer); timer = null; playBtn.textContent = '▶ Play a new attempt'; return; } if (st.status !== 'running') reset(); playBtn.textContent = '⏸ Pause'; timer = setInterval(function () { stepDay(P, st, rand); drawGauges(); if (st.status !== 'running') { clearInterval(timer); timer = null; playBtn.textContent = '▶ Play a new attempt'; } }, 450); });
     mkBtn('Step 1 day', '', function () { if (st.status !== 'running') reset(); stepDay(P, st, rand); drawGauges(); });
@@ -204,7 +219,7 @@
     }
     function drawGauges() {
       var prof = st.balance - P.account, target = P.account * P.targetPct / 100, dLimit = P.account * P.dailyLossPct / 100;
-      statusBox.textContent = ''; var s = el('div', 'status ' + st.status, st.status === 'running' ? 'Day ' + st.day + ' — attempt in progress' : (st.status === 'passed' ? '✔ PASSED on day ' + st.passDay : (st.status === 'failed' ? '✖ FAILED — ' + st.reason : '⏱ ' + st.reason))); statusBox.appendChild(s);
+      drawChart(); statusBox.textContent = ''; var s = el('div', 'status ' + st.status, st.status === 'running' ? 'Day ' + st.day + ' — attempt in progress' : (st.status === 'passed' ? '✔ PASSED on day ' + st.passDay : (st.status === 'failed' ? '✖ FAILED — ' + st.reason : '⏱ ' + st.reason))); statusBox.appendChild(s);
       gauges.textContent = '';
       gauges.appendChild(el('div', 'big ' + (prof >= 0 ? 'pos' : 'neg'), money(st.balance))).appendChild(el('span', 'muted', '  balance (' + (prof >= 0 ? '+' : '') + money(prof) + ')'));
       gauges.appendChild(gauge('Profit target progress', money(Math.max(0, prof)) + ' / ' + money(target), prof / target * 100, 'var(--teal)', null, 'Needs ' + money(Math.max(0, target - prof)) + ' more'));
@@ -214,11 +229,38 @@
       gauges.appendChild(gauge('Trading days completed', st.day + ' / ' + P.minDays + ' min', st.day / Math.max(1, P.minDays) * 100, 'var(--blue,#6fa8ff)', null, st.day >= P.minDays ? 'Minimum days met' : (P.minDays - st.day) + ' more day(s) needed'));
       if (P.consistencyPct != null && P.consistencyPct > 0) { var cu = consistencyUsed(P, st); gauges.appendChild(gauge('Consistency rule (best day share of profit)', cu.toFixed(0) + '% / ' + P.consistencyPct + '% max', cu / P.consistencyPct * 100, cu > P.consistencyPct ? 'var(--coral)' : 'var(--teal)', 'consistency_rule', cu > P.consistencyPct ? 'One big day is too large a share of your profit — keep trading to dilute it' : 'Within the rule')); }
     }
+    function drawChart() {
+      chart.textContent = '';
+      var c = st.curve, f = st.floors, W = 560, H = 150, pad = 6, tgt = P.account * (1 + P.targetPct / 100);
+      var lo = Math.min.apply(null, c.concat(f)), hi = Math.max.apply(null, c.concat([tgt]));
+      if (hi === lo) { hi += 1; }
+      var n = Math.max(c.length - 1, 1);
+      function X(i) { return pad + i / Math.max(n, 5) * (W - 2 * pad); } function Y(v) { return H - pad - (v - lo) / (hi - lo) * (H - 2 * pad); }
+      var NS = 'http://www.w3.org/2000/svg', svg = document.createElementNS(NS, 'svg'); svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', 'Equity, drawdown floor and profit target for this attempt'); svg.style.width = '100%'; svg.style.height = 'auto';
+      function line(pts, color, dash, w) { var pl = document.createElementNS(NS, 'polyline'); pl.setAttribute('points', pts.map(function (v, i) { return X(i).toFixed(1) + ',' + Y(v).toFixed(1); }).join(' ')); pl.setAttribute('fill', 'none'); pl.setAttribute('stroke', color); pl.setAttribute('stroke-width', w || 2); if (dash) pl.setAttribute('stroke-dasharray', dash); svg.appendChild(pl); }
+      line([tgt, tgt].length ? c.map(function () { return tgt; }) : [], '#35d878', '5 4', 1.2);
+      line(f, '#ff5d73', '5 4', 1.5); line(c, '#35e0b0', null, 2.2);
+      chart.appendChild(svg);
+      chart.appendChild(el('div', 'muted', 'Green line: balance. Red dashed: the drawdown floor that rises with your peak. Green dashed: profit target.'));
+    }
+    function drawSweep() {
+      sweep.textContent = '';
+      var sw = riskSweep(P, null, 250, seed, 20);
+      sweep.appendChild(el('h4', null, 'Which risk per trade works best?')).style.margin = '14px 0 4px';
+      var t = el('table'); t.style.cssText = 'width:100%;border-collapse:collapse;font-size:12.5px';
+      var hr = el('tr'); ['Risk / trade', 'Pass', 'Fail', 'Payout'].forEach(function (h) { var th = el('th', null, h); th.style.cssText = 'text-align:left;padding:4px 6px;color:var(--text-muted)'; hr.appendChild(th); }); t.appendChild(hr);
+      sw.rows.forEach(function (r) {
+        var tr = el('tr'), isBest = sw.best && r.risk === sw.best.risk, isCur = Math.abs(r.risk - P.riskPct) < 0.03;
+        [r.risk + '%' + (isBest ? '  \u2605' : '') + (isCur ? '  (yours)' : ''), r.passPct.toFixed(0) + '%', r.failPct.toFixed(0) + '%', r.payoutPct.toFixed(0) + '%'].forEach(function (v) { var td = el('td', null, v); td.style.cssText = 'padding:4px 6px;border-top:1px solid var(--border)' + (isBest ? ';font-weight:700;color:var(--teal)' : ''); tr.appendChild(td); }); t.appendChild(tr);
+      });
+      sweep.appendChild(t);
+      sweep.appendChild(el('div', 'muted', sw.best ? '\u2605 = highest pass rate whose fail rate stays at or under ' + sw.failCap + '%. Raising risk speeds up passing but also breaches more often. Estimates are from ' + 250 + ' simulated attempts per row.' : 'No tested risk level keeps the fail rate under ' + sw.failCap + '%: the edge or the rules do not support passing safely. Improve the strategy before sizing up.'));
+    }
     function oddCard(label, val, color, metric) { var d = el('div', 'odd'), l = el('span', null, label); if (metric) l.setAttribute('data-metric', metric); d.appendChild(l); var b = el('b', null, val); b.style.color = color; d.appendChild(b); return d; }
     var mcTimer = null;
     function drawOdds() {
-      var r = monteCarlo(P, 500, seed); odds.textContent = '';
-      odds.appendChild(oddCard('Pass', r.passPct.toFixed(0) + '%', 'var(--teal)', 'eval_pass_probability'));
+      var r = monteCarlo(P, 500, seed); odds.textContent = ''; drawSweep();
+      var wl = wilson(r.pass, r.n); odds.appendChild(oddCard('Pass (95% range ' + wl[0].toFixed(0) + '-' + wl[1].toFixed(0) + '%)', r.passPct.toFixed(0) + '%', 'var(--teal)', 'eval_pass_probability'));
       odds.appendChild(oddCard('Fail', r.failPct.toFixed(0) + '%', 'var(--coral)'));
       odds.appendChild(oddCard('Payout milestone', r.payoutPct.toFixed(0) + '%', 'var(--amber)', 'first_payout_probability'));
       odds.appendChild(oddCard('Time out', r.timeoutPct.toFixed(0) + '%', 'var(--text-muted)'));
