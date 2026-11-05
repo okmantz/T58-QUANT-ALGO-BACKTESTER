@@ -18,7 +18,6 @@ from pathlib import Path
 DEFAULT_STRATEGY_FILES: dict[str, tuple[str, ...]] = {
     "python": (
         "NQ1! Context Aligned Drive 1m v2.py",
-        "NQ1! Context Aligned Drive 1m.py",
         "NQ1! Gap Aligned Drive Ensemble 1m.py",
         "NQ1! Trend Momentum Continuation 5m.py",
         "NQ1! V1T 1m.py",
