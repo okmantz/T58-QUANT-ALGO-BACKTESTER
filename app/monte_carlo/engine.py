@@ -298,6 +298,10 @@ class MonteCarloResult:
     # risk_of_ruin_pct stays the combined figure for backward compatibility.
     eval_breach_pct: float = 0.0
     funded_breach_within_horizon_pct: float = 0.0
+    # 2026-11 audit: the RUIN GATE measures the event that costs a fee -- breaching the EVALUATION before passing -- over the attempt's whole
+    # life (an evaluation has no calendar deadline, so a slow bust is still a lost fee). Funded-stage bust is reported separately
+    # (funded_bust_pct / funded_breach_within_horizon_pct) and caps READY at MARGINAL instead of rejecting.
+    eval_breach_lifetime_pct: float = 0.0
     # The *_ci95 fields above are Wilson intervals over the SIMULATED attempts (~10,000), so they
     # measure simulation noise (about +/-1 point). The *_sample intervals below instead use the number
     # of INDEPENDENT attempt windows the source trade history can support, so they reflect whether the
@@ -1718,6 +1722,7 @@ def run_monte_carlo(
         per_attempt_paid_probability=float(sum_attempts_reached_payout / sum_total_attempts * 100) if sum_total_attempts else 0.0,
         per_attempt_paid_ci95=_wilson_score_interval(int(sum_attempts_reached_payout), int(sum_total_attempts)),
         eval_breach_pct=float(eval_breach_frac * 100.0),
+        eval_breach_lifetime_pct=float(len(failed_days_eval_all) / sum_total_attempts * 100.0) if sum_total_attempts else 0.0,
         funded_breach_within_horizon_pct=float(funded_breach_frac * 100.0),
         per_attempt_pass_ci95_sample=_pass_ci_s,
         per_attempt_paid_ci95_sample=_paid_ci_s,
@@ -1734,3 +1739,17 @@ def run_monte_carlo(
         outer_bootstrap=_ob_summary,
     )
     return result
+
+
+def eval_ruin_gate_pct(mc) -> float | None:
+    """The number the RUIN GATE and the ruin score use: % of purchased evaluation accounts that breached BEFORE passing (cost = the fee).
+
+    The larger of the within-horizon and the whole-attempt figure, so a slow bust is never hidden by the 90-day window. Results built
+    before the stage split existed (no ``effective_independent_attempts``) fall back to the combined ``risk_of_ruin_pct``."""
+    if mc is None:
+        return None
+    if (getattr(mc, "effective_independent_attempts", 0.0) or 0.0) > 0:
+        return float(max(float(getattr(mc, "eval_breach_pct", 0.0) or 0.0), float(getattr(mc, "eval_breach_lifetime_pct", 0.0) or 0.0)))
+    v = getattr(mc, "risk_of_ruin_pct", None)
+    return None if v is None else float(v)
+
