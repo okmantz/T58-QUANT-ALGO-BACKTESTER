@@ -1573,8 +1573,18 @@ def run_monte_carlo(
     _cal_span = (max(base_dates) - min(base_dates)).days + 1 if base_dates else 0
     _horizon_covered = _cal_span >= _horizon
 
+    # SPEED (2026-11-05): the same few arrays are asked for many percentiles; sort each once and reuse it (np.percentile of a
+    # sorted copy returns exactly the same numbers). Holding ``arr`` in the cache keeps its id() from being reused.
+    _pct_sorted: dict = {}
+
     def pct(arr, q):
-        return float(np.percentile(arr, q)) if len(arr) else 0.0
+        if not len(arr):
+            return 0.0
+        hit = _pct_sorted.get(id(arr))
+        if hit is None or hit[0] is not arr:
+            hit = (arr, np.sort(np.asarray(arr)))
+            _pct_sorted[id(arr)] = hit
+        return float(np.percentile(hit[1], q))
 
     pass_ci95 = _wilson_score_interval(int(passed_arr.sum()), len(passed_arr))
     payout_ci95 = _wilson_score_interval(int(first_payout_arr.sum()), len(first_payout_arr))
