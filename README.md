@@ -249,7 +249,7 @@ contain, which is why the score also leans on replay from real start dates. The 
 ## Champion and Deployment
 
 Cost-stress-adjusted fitness (every GA candidate re-backtested at inflated spread, slippage and commission) and a declarative adaptive-risk layer
-(de-risk after N losses, cut size on a bad day, coast near the target) apply across every optimizer. The Dashboard's equity curve lets you select several
+(de-risk after N losses, cut size on a bad day, coast near the target) apply across every optimizer. **Adaptive sizing is on by default on the Test (Full Pipeline) page** -- untick it there to compare against a fixed-size run. The Dashboard's equity curve lets you select several
 strategies to compare, and you can promote a strategy from there. See the Deployment table above for the live tools.
 
 ## Library and research
