@@ -542,7 +542,12 @@ def _champion_view(i, c, p):
                       "detail": s.get("detail") or ""})
     failed = (p or {}).get("failed_step")
     edge = c.get("edge") or {}
+    n_pass = sum(1 for x in steps if x["state"] == "pass")
+    n_fail = sum(1 for x in steps if x["state"] == "fail")
+    n_skip = sum(1 for x in steps if x["state"] == "skipped")
+    summary = f"{n_pass} of {len(steps)} checks passed" + (f", {n_fail} failed" if n_fail else "") + (f", {n_skip} not run" if n_skip else "") if steps else ""
     return {
+        "steps_summary": summary,
         "index": i, "family": c.get("family"), "family_title": _family_title(c.get("family")), "candidate_id": c.get("candidate_id"),
         "passed": bool((p or {}).get("passed")), "failed_step": STEP_LABELS.get(failed, failed) if failed else None,
         "failed_reason": (p or {}).get("failed_reason") or "", "edge_lb_r": c.get("edge_lb_r"),
@@ -573,6 +578,7 @@ def job_status(job_id):
             "n_evaluations": res.n_evaluations, "families_run": len(res.families_run), "n_forward": len(res.passed),
             "champions": champs, "notes": res.notes, "elapsed_seconds": round(res.elapsed_seconds),
             "effective_trials": (res.trial_inputs or {}).get("n_tests"),
+            "trial_sensitivity": (res.trial_inputs or {}).get("sensitivity") or [],
         }
     return jsonify(out)
 
