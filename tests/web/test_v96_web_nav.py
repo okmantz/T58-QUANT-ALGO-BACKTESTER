@@ -44,10 +44,11 @@ def test_champion_simple_page_has_board_and_actions(client):
     assert r.status_code == 200
     body = r.get_data(as_text=True)
     assert "Champion board" in body
-    assert 'formaction="/champion-simple/promote"' in body
-    assert 'formaction="/champion-simple/rerun"' in body
-    for name in ("check_monte_carlo", "check_cpcv", "check_pbo"):
-        assert f'name="{name}"' in body, name
+    assert "/champion-simple/promote" in body
+    assert "PROMOTION ASSESSMENT" in body.upper()
+    # 2026-11: the "re-run checks" block was removed from the Champion page (Validate owns re-runs).
+    assert "/champion-simple/rerun" not in body
+    assert "Re-run checks" not in body
 
 
 # ------------------------------------------------------------- (b) sidebar
