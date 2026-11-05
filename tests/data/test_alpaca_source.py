@@ -41,6 +41,7 @@ def test_normalize_bars_raises_on_missing_columns():
 
 
 def test_timeframe_object_rejects_unknown_label():
+    pytest.importorskip("alpaca", reason="optional dependency alpaca-py is not installed")
     with pytest.raises(alpaca_source.AlpacaFetchError):
         alpaca_source._timeframe_object("3Weeks")
 
@@ -62,6 +63,7 @@ def test_save_bars_as_csv_sanitizes_unsafe_symbol_characters():
 
 
 def test_fetch_stock_bars_calls_alpaca_client_with_expected_request():
+    pytest.importorskip("alpaca", reason="optional dependency alpaca-py is not installed")
     fake_client_cls = MagicMock()
     fake_client_instance = fake_client_cls.return_value
     fake_client_instance.get_stock_bars.return_value.df = _fake_bars_df()
