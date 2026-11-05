@@ -230,6 +230,7 @@
     if (c.trades != null) facts.push('<b>' + c.trades + '</b> trades');
     if (facts.length) h += '<p class="dj-facts">' + facts.map(function (f) { return '<span>' + f + '</span>'; }).join('') + '</p>';
     if (c.failed_reason && !c.passed) h += '<p class="dj-meta" style="margin:8px 0 0;">' + esc(c.failed_reason) + '</p>';
+    if (c.steps_summary) h += '<p class="dj-meta" style="margin:8px 0 2px;"><b>' + esc(c.steps_summary) + '</b></p>';
     if (c.steps && c.steps.length) {
       h += '<ul class="dj-steps">' + c.steps.map(function (s) {
         return '<li class="' + s.state + '"><span class="i">' + (s.state === 'pass' ? '✓' : (s.state === 'fail' ? '✗' : '–')) + '</span><span>' + esc(s.label) + (s.detail ? ' <small>— ' + esc(s.detail) + '</small>' : '') + '</span></li>';
@@ -246,7 +247,8 @@
       h += '<div class="dj-banner none"><b>No strategy passed every check this time.</b><br>That is a normal and honest outcome &mdash; the checks are strict on purpose. Below are the closest candidates and exactly where each one failed. Try another market, another bar size, or a deeper search.</div>';
     }
     h += '<div class="dj-card"><h2>Results</h2><p class="dj-meta">Tried ' + Number(r.n_evaluations).toLocaleString() + ' ideas across ' + r.families_run + ' strategy types in ' + mins(r.elapsed_seconds) + '.' +
-      (r.effective_trials ? ' Counted as about ' + Math.round(r.effective_trials) + ' independent tries for the luck discount.' : '') + '</p>';
+      (r.effective_trials ? ' Counted as about ' + Math.round(r.effective_trials) + ' independent tries for the luck discount.' : '') + '</p>' +
+      ((r.trial_sensitivity && r.trial_sensitivity.length) ? '<p class="dj-meta">How sensitive is that count? ' + r.trial_sensitivity.map(function (t) { return 'if look-alikes are merged at correlation ' + Number(t.corr_threshold).toFixed(2) + ': about ' + Math.round(t.effective_trials); }).join(' &middot; ') + '. The verdict uses 0.90.</p>' : '');
     if (!r.champions.length) h += '<p class="dj-meta">Nothing cleared the minimum bar to be ranked.</p>';
     h += r.champions.map(champ).join('');
     if (r.notes && r.notes.length) h += '<p class="dj-meta" style="margin-top:12px;">' + r.notes.map(esc).join('<br>') + '</p>';
