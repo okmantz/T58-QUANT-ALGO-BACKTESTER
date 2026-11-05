@@ -746,6 +746,18 @@ def _new_login_id() -> str:
 
 
 @app.context_processor
+def _inject_ready_bar():
+    """READY_BAR: the live READY / holdout / breach bars (app.orchestration.ready_bar) so side panels never quote stale numbers."""
+    try:
+        from app.orchestration.ready_bar import ready_bar
+        return {"READY_BAR": ready_bar()}
+    except Exception:  # noqa: BLE001 -- a panel must never break a page
+        return {"READY_BAR": {"min_trades": 300, "pass_pct": 70.0, "breach_cap_pct": 20.0, "holdout_pct": 20, "preflight_trades": 100,
+                              "holdout_text": "last 20% locked (Advanced)", "ready_short": ">= 70% pass, >= 300 trades", "line_ready": "",
+                              "rules_max_age_days": 30, "funded_bust_cap_pct": 35.0}}
+
+
+@app.context_processor
 def _inject_login_id():
     return {"t58_login_id": session.get("t58_login_id") or _new_login_id()}
 
@@ -1440,6 +1452,65 @@ def _prop_presets_json() -> str:
     approximate and dated.
     """
     return json.dumps([p.to_dict() for p in list_prop_firm_presets()])
+
+
+@app.route("/rulebook")
+def rulebook_page():
+    """The Edge Rulebook as a working page: stage map, deflation lookup, alpha ledger, frame check and kill-line calculator."""
+    from app.validation import rulebook as rb
+    return render_template("rulebook.html", active_page="rulebook", snap=rb.snapshot(), gate_map=rb.GATE_NAME_MAP,
+                           notice=request.args.get("notice"), notice_ok=request.args.get("ok"))
+
+
+@app.route("/rulebook/hypothesis", methods=["POST"])
+def rulebook_add_hypothesis():
+    from app.validation import rulebook as rb
+    f = request.form
+    try:
+        b = float(f.get("payoff") or 2)
+        c = float(f.get("cost_r") or rb.DEFAULT_COST_R)
+    except ValueError:
+        return redirect(url_for("rulebook_page", notice="Payoff and cost must be numbers.", ok="0"))
+    frame = rb.Frame(mechanism=f.get("mechanism", ""), sign=f.get("sign", ""), payoff_b=b, cost_r=c).check()
+    if not frame["passed"]:
+        return redirect(url_for("rulebook_page", notice="Stage 0 (Frame) not met: " + " ".join(frame["problems"]), ok="0"))
+    res = rb.add_hypothesis(f.get("mechanism", ""), f.get("segment", ""), b, c)
+    if not res["ok"]:
+        return redirect(url_for("rulebook_page", notice=res["error"], ok="0"))
+    row = res["row"]
+    return redirect(url_for("rulebook_page", ok="1", notice=f"Logged {row['id']}. N is now {row['n_after']}, so the bar for this quarter is z = {row['z_bar']}."))
+
+
+@app.route("/api/rulebook/calc")
+def api_rulebook_calc():
+    """?sr=0.10&looks=10  ->  z bar + trades needed;  ?b=2&c=0.05 -> required lift."""
+    from app.validation import rulebook as rb
+    try:
+        sr = float(request.args.get("sr", 0.10)); looks = int(request.args.get("looks", 1))
+        b = float(request.args.get("b", 2)); c = float(request.args.get("c", rb.DEFAULT_COST_R))
+    except ValueError:
+        return jsonify({"ok": False, "error": "numbers only"}), 400
+    return jsonify({"ok": True, "z_bar": round(rb.z_bar(looks), 3), "trades_needed": rb.trades_needed(sr, looks) if sr > 0 else None,
+                    "required_lift_pts": round(rb.required_lift(b, rb.TARGET_EDGE_R, c) * 100, 2),
+                    "breakeven_win_rate": round(rb.breakeven_win_rate(b, c) * 100, 2)})
+
+
+@app.route("/api/prop-presets/<key>/acknowledge", methods=["POST"])
+def api_prop_preset_acknowledge(key):
+    """In-app "I re-checked this firm's rules page" box: stamps the preset today (good for 30 days, see app.prop.presets.acknowledge_preset)."""
+    from app.prop.presets import ack_status, acknowledge_preset, get_preset
+    try:
+        get_preset(key)
+    except KeyError:
+        return jsonify({"ok": False, "error": f"Unknown prop-firm preset '{key}'."}), 404
+    body = request.get_json(silent=True) or {}
+    if body.get("confirm") is not True:
+        return jsonify({"ok": False, "error": "Tick the box to confirm you re-read the firm's rules page.", "status": ack_status(key)}), 400
+    try:
+        st = acknowledge_preset(key)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    return jsonify({"ok": True, "status": st, "preset": get_preset(key).to_dict()})
 
 
 def _prop_rules_from_search_evo_form(form) -> PropRules:
@@ -3863,8 +3934,21 @@ def validate_fix_candidate_download(job_id):
 
 def _champion_page_ctx(**extra) -> dict:
     rows = champion_board.list_board()
+    assessments = {}
+    comparisons = {}
+    for r in rows:
+        pick = f"{r['strategy_type']}::{r['filename']}"
+        assessments[pick] = champion_board.assessment_for_row(r)
+        clash = champion_board.overlapping_holders(r, rows)
+        if clash:
+            comparisons[pick] = [champion_board.compare_rows(r, o) for o in clash]
     return dict(active_page="champion_simple", board_rows=rows,
                 champion=champion_board.strongest_validated_candidate(rows),
+                podium=champion_board.podium_holders(rows), podium_labels=champion_board.PODIUM_LABELS,
+                assessments=assessments, comparisons=comparisons,
+                gates=dict(cc_eval=champion_board.CHAMPION_CANDIDATE_MIN_EVAL_PCT, cc_payout=champion_board.CHAMPION_CANDIDATE_MIN_PAYOUT_PCT,
+                           cc_oos=champion_board.CHAMPION_CANDIDATE_MIN_OOS_PCT, ft_eval=champion_board.FORWARD_TEST_MIN_EVAL_PCT,
+                           prod_days=champion_board.MIN_FORWARD_TEST_DAYS),
                 **_simple_pickers(), **extra)
 
 
@@ -3884,22 +3968,29 @@ def champion_simple_promote():
     return redirect(url_for("champion_simple_form", notice="Pick a strategy to promote.", ok="0"))
 
 
-@app.route("/champion-simple/rerun", methods=["POST"])
-def champion_simple_rerun():
-    """Re-run ticked checks for one board strategy. Runs as the same
-    background job as the Validate page (live percent, results saved onto
-    the strategy) and returns to the Champion page when it finishes."""
-    form = request.form
-    candidate = (form.get("candidate") or "").strip()
+@app.route("/champion-simple/award", methods=["POST"])
+def champion_simple_award():
+    """Give a champion-grade strategy 1st / 2nd / 3rd place. ``replace=1`` confirms replacing a podium holder on the same market."""
+    candidate = (request.form.get("candidate") or "").strip()
+    strategy_type, _, filename = candidate.partition("::")
+    try:
+        place = int(request.form.get("place") or 0)
+    except ValueError:
+        place = 0
+    if not (strategy_type and filename):
+        return redirect(url_for("champion_simple_form", notice="Pick a strategy first.", ok="0"))
+    ok, message = champion_board.award_place(strategy_type, filename, place, replace_same_market=request.form.get("replace") == "1")
+    return redirect(url_for("champion_simple_form", notice=message, ok="1" if ok else "0", candidate=candidate))
+
+
+@app.route("/champion-simple/unaward", methods=["POST"])
+def champion_simple_unaward():
+    candidate = (request.form.get("candidate") or "").strip()
     strategy_type, _, filename = candidate.partition("::")
     if not (strategy_type and filename):
-        return render_template("champion_simple.html", **_champion_page_ctx(
-            notice="Pick a strategy in the list first.", notice_ok="0")), 400
-    job_id, err = _start_validate_job(form, request.files, candidate=candidate, source="champion")
-    if err:
-        msg, status = err
-        return render_template("champion_simple.html", **_champion_page_ctx(notice=msg, notice_ok="0")), status
-    return redirect(url_for("validate_simple_job", job_id=job_id))
+        return redirect(url_for("champion_simple_form", notice="Pick a strategy first.", ok="0"))
+    ok, message = champion_board.clear_place(strategy_type, filename)
+    return redirect(url_for("champion_simple_form", notice=message, ok="1" if ok else "0", candidate=candidate))
 
 
 @app.route("/validate")
@@ -5132,7 +5223,7 @@ def api_keys_save_ai():
         model=(form.get("ollama_model") or existing_ollama.model).strip(),
         api_key=(form.get("ollama_api_key") or existing_ollama.api_key),
         vision_model=(form.get("ollama_vision_model") or existing_ollama.vision_model).strip(),
-        provider=(form.get("ai_provider") or existing_ollama.provider or "ollama").strip().lower(),
+        provider=(form.get("ai_provider") or existing_ollama.provider or "auto").strip().lower(),
     ))
     from app.ai.ollama_settings import save_remote_models
     save_remote_models(form.get("claude_model", ""), form.get("openai_model", ""))
@@ -11314,6 +11405,7 @@ def deploy_live_start():
         if not ok:
             return jsonify({"ok": False, "error": message}), 400
         _LIVE_DEPLOY_SESSION["session"] = session
+        _LIVE_DEPLOY_SESSION["login"] = str(getattr(account, "login", "") or "")
         _LIVE_DEPLOY_SESSION["log"] = log
         # Pipeline-progress: actually typing "DEPLOY LIVE" and successfully
         # starting a session is itself the meaningful milestone for this
@@ -11409,6 +11501,51 @@ def api_live_pnl():
         if sess is not None and (sess.status.running or sess.status.halted_reason):
             rows.append(_pnl_row("demo", "Demo forward test", sess.status))
     return jsonify({"sessions": rows})
+
+
+@app.route("/api/data-pack")
+def api_data_pack():
+    """Status of the frozen T58 market data pack (NQ / ES / MNQ / MES, sealed window fixed on a calendar date)."""
+    from app.data import data_pack
+    try:
+        return jsonify(data_pack.verify())
+    except Exception as exc:  # noqa: BLE001 - e.g. no parquet engine installed
+        return jsonify({"ok": False, "status": "error", "detail": str(exc), "symbols": {}})
+
+
+@app.route("/api/portfolio")
+def api_portfolio():
+    """Per-account portfolio overview (firm, live P&L, open/past trades, algo health) for the Deploy page and the
+    Dashboard portfolio cards. Read-only; never exposes credentials. Empty when no account is connected."""
+    from app.live_deploy import portfolio as _pf
+    from app.live_deploy.live_settings import load_accounts
+    from app.forward_test.journal import ForwardTestJournal
+    status = None
+    login = ""
+    if _web_live_deploy_guard() is None:
+        with _LIVE_DEPLOY_LOCK:
+            sess = _LIVE_DEPLOY_SESSION["session"]
+            if sess is not None:
+                s = sess.status
+                status = {"running": s.running, "connected": s.connected, "balance": s.balance, "equity": s.equity,
+                          "halted_reason": s.halted_reason, "alert": s.alert, "drift_flag": s.drift_flag}
+                login = str(_LIVE_DEPLOY_SESSION.get("login", "") or "")
+    try:
+        accounts = load_accounts()
+    except Exception:  # noqa: BLE001
+        accounts = []
+    journal = None
+    try:
+        journal = ForwardTestJournal()
+        return jsonify(_pf.build_portfolio(accounts, journal, status, login))
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"accounts": [], "eligible": False, "eligible_reason": "", "error": str(exc)})
+    finally:
+        try:
+            if journal is not None:
+                journal.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 @app.route("/api/suggest-loop-config")
