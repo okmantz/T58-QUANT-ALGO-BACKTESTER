@@ -101,7 +101,7 @@ def resolve(board_row: Optional[dict] = None, run: Optional[dict] = None) -> dic
         if sharpe is not None:
             why = f"Single backtest: Sharpe {sharpe:.2f}" + (f", max drawdown {dd:.1f}%" if dd is not None else "") + \
                   " -- but no verdict yet."
-        return _out("untested", "info", "Run the Full Pipeline", why, steps, "Run Full Pipeline", run_href)
+        return _out("untested", "info", "Run the Full Pipeline", why, steps, "Test a Strategy", run_href)
 
     f = _board_facts(board_row) if board_row else {}
     verdict = (f.get("verdict") or "").upper()
