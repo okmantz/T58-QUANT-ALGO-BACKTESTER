@@ -33,6 +33,24 @@ class LadderResult:
         return f"LADDER: {self.stage}{hc}  |  verdict {self.legacy_verdict}  |  EV {self.ev_label or 'n/a'}"
 
 
+HARD_REASON_MARKERS = ("HARD SAFETY GATE FAILED", "LOOKAHEAD CHECK CRASHED", "EV TEST FAILED")
+
+
+def is_hard_failed(verdict: str, reasons=None, *, ev_label: str | None = None, ruin_hard_fail: bool = False,
+                   lookahead_hard_fail: bool = False, lookahead_crashed: bool = False) -> bool:
+    """True when the strategy failed something that no amount of paper trading can fix: a lookahead leak (or a lookahead check that crashed,
+    which is treated as a failure), the ruin gate, or an EV test that says the fee is not worth it. 2026-11 audit: the ladder used to see only
+    the EV label, so a NOT READY caused by lookahead could still be promoted to FORWARD-TEST CANDIDATE on 'edge evidence' alone."""
+    if ruin_hard_fail or lookahead_hard_fail or lookahead_crashed:
+        return True
+    v = str(verdict or "").upper()
+    if v == "NOT READY" and str(ev_label or "").upper() == "NOT WORTH A FEE":
+        return True
+    if v == "NOT READY" and any(m in str(r) for r in (reasons or []) for m in HARD_REASON_MARKERS):
+        return True
+    return False
+
+
 def ladder_stage(verdict: str, ev_label: str | None, *, pooled_status: str | None = None, hard_failed: bool = False,
                  forward_state: str | None = None, per_attempt_pass_lb_pct: float | None = None,
                  high_confidence_pct: float = 70.0, edge_evidence: dict | None = None, caps: list | None = None) -> LadderResult:

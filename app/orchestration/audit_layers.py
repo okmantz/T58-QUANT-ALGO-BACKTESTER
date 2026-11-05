@@ -125,7 +125,25 @@ def edge_unseen_r_list(oos_fold_r, hold_trades) -> list:
     return [float(x) for x in (oos_fold_r or []) if x is not None and x == x] + (_rm(hold_trades) if hold_trades else [])
 
 
-def unseen_dsr(unseen_r, effective_trials: int, *, min_psr: float = 0.95) -> dict | None:
+#: Fewer measured cluster-representative trial Sharpes than this and the dispersion is not a statistic: fall back to the planted-study constant.
+MIN_TRIALS_FOR_MEASURED_SPREAD = 8
+
+
+def trial_sharpe_spread(sr: float, measured_std: float | None, n_measured: int, min_trials: int = MIN_TRIALS_FOR_MEASURED_SPREAD) -> tuple[list, str]:
+    """(trial Sharpes to hand to the DSR, 'measured' | 'constant'). Measured: normal quantiles scaled to the run's own cluster-level
+    dispersion, centred on ``sr``. Constant: the synthetic-study spread (only below ``min_trials`` measured clusters)."""
+    import numpy as _np
+    if measured_std is not None and n_measured >= int(min_trials) and _np.isfinite(measured_std) and measured_std > 0:
+        from scipy.stats import norm as _norm
+        k = int(min(50, max(int(n_measured), 7)))
+        z = _norm.ppf((_np.arange(k) + 0.5) / k)
+        z = (z - z.mean()) / z.std(ddof=1)
+        return list(float(sr) + float(measured_std) * z), "measured"
+    from app.validation.planted_edge import TRIAL_SHARPE_SPREAD
+    return list(float(sr) + TRIAL_SHARPE_SPREAD), "constant"
+
+
+def unseen_dsr(unseen_r, effective_trials: int, *, min_psr: float = 0.95, trial_sharpe_std: float | None = None, n_trial_sharpes: int = 0) -> dict | None:
     """Deflated Sharpe on UNSEEN trades only (holdout + walk-forward out-of-sample R), 2026-11-04 audit P0-2.
 
     The old gate deflated the IN-SAMPLE Sharpe by the search-wide trial count, so a bigger search was punished for being big even when the
@@ -136,7 +154,6 @@ def unseen_dsr(unseen_r, effective_trials: int, *, min_psr: float = 0.95) -> dic
         import numpy as _np
         from app.search.robustness import deflated_sharpe_gate
         from app.scoring.t58_scorecard import dsr_unseen_to_score
-        from app.validation.planted_edge import TRIAL_SHARPE_SPREAD
         a = _np.asarray([float(x) for x in (unseen_r or []) if x is not None and x == x], dtype=float)
         if len(a) < 30 or float(a.std(ddof=1)) <= 0:
             return None
@@ -145,23 +162,27 @@ def unseen_dsr(unseen_r, effective_trials: int, *, min_psr: float = 0.95) -> dic
         sk = float(((a - a.mean()) ** 3).mean() / sd0 ** 3) if sd0 > 0 else 0.0
         ku = float(((a - a.mean()) ** 4).mean() / sd0 ** 4) if sd0 > 0 else 3.0
         trials = max(2, int(effective_trials))
-        g = deflated_sharpe_gate(sr, list(sr + TRIAL_SHARPE_SPREAD), trials, len(a), returns_skew=sk, returns_kurtosis=ku,
+        _spread, _basis = trial_sharpe_spread(sr, trial_sharpe_std, int(n_trial_sharpes))
+        g = deflated_sharpe_gate(sr, _spread, trials, len(a), returns_skew=sk, returns_kurtosis=ku,
                                  min_probabilistic_sharpe=float(min_psr))
         return {"psr": float(g.probabilistic_sharpe), "passed": bool(g.passed), "n": int(len(a)), "sharpe": sr, "trials": trials,
-                "score": dsr_unseen_to_score(float(g.probabilistic_sharpe)), "reason": g.reason}
+                "score": dsr_unseen_to_score(float(g.probabilistic_sharpe)), "reason": g.reason,
+                "spread_basis": _basis, "trial_sharpe_std": (None if trial_sharpe_std is None else float(trial_sharpe_std)),
+                "n_trial_sharpes": int(n_trial_sharpes)}
     except Exception:  # noqa: BLE001
         return None
 
 
-def edge_evidence_for_ladder(confirmation, null_ev, cost_ev, ev, cfg, verdict) -> dict:
+def edge_evidence_for_ladder(confirmation, null_ev, cost_ev, ev, cfg, verdict, hard_failed: bool = False) -> dict:
     """The four facts that earn FORWARD-TEST CANDIDATE on edge evidence alone (2026-11-04, P2-1): holdout confirmed; random-entry null not
     rejected; unseen expectancy lower bound > 0 at stressed costs; EV per attempt > 0. A hard NOT READY from lookahead / ruin never qualifies."""
+    if hard_failed:                       # lookahead / ruin / EV hard failure: no edge evidence can promote this strategy
+        return {}
     try:
         null_p = None if not null_ev else null_ev.get("p_value")
         null_ok = null_p is None or float(null_p) <= float(getattr(cfg, "null_p_max", 0.10))
         eb = (cost_ev or {}).get("unseen_expectancy_bound") or {}
         cost_ok = eb.get("lb") is not None and float(eb["lb"]) > float(getattr(cfg, "min_expectancy_lb_r", 0.0))
-        hard = verdict == "NOT READY" and not any(("EV" in str(x) and "NOT WORTH" in str(x)) for x in [])
         out = {"holdout_confirmed": bool((confirmation or {}).get("confirmed")), "null_ok": bool(null_ok and null_p is not None), "cost_ok": bool(cost_ok),
                "ev_mean": getattr(ev, "ev", None)}
         out["null_p"] = null_p
@@ -214,8 +235,11 @@ def apply_audit_layers(
     verdict: str, reasons: list, *, cfg, prop_rules, df, dev_df, instrument_label, final_strategy, risk, adaptive_risk,
     final_mc, final_holdout, payout_ev: dict | None, lookahead_check_crashed: bool, n_trials: int,
     log=lambda m: None, parameters_tuned: bool = True, final_trades=None, oos_fold_r=None, dsr_gate_result=None, null_ev=None, cost_ev=None, transfer_ev=None,
+    hard_failed: bool = False,
 ):
-    """Returns (verdict, reasons, ev_verdict: EVVerdict, evidence: dict)."""
+    """Returns (verdict, reasons, ev_verdict: EVVerdict, evidence: dict).
+
+    ``hard_failed``: the pipeline already knows the strategy failed a lookahead / ruin hard gate (see ``verdict_ladder.is_hard_failed``)."""
     reasons = list(reasons)
     rank = {"NOT READY": 0, "MARGINAL": 1, "READY": 2}
     evidence: dict = {}
@@ -337,7 +361,9 @@ def apply_audit_layers(
     except Exception:  # noqa: BLE001
         _unseen_r = []
     _eff_trials = getattr(dsr_gate_result, "effective_trials", None) or getattr(dsr_gate_result, "n_trials", None) or int(n_trials)
-    _du = unseen_dsr(_unseen_r, int(_eff_trials), min_psr=float(getattr(cfg, "dsr_min_probabilistic_sharpe", 0.95)))
+    _du = unseen_dsr(_unseen_r, int(_eff_trials), min_psr=float(getattr(cfg, "dsr_min_probabilistic_sharpe", 0.95)),
+                     trial_sharpe_std=getattr(dsr_gate_result, "trial_sharpe_std", None),
+                     n_trial_sharpes=int(getattr(dsr_gate_result, "trial_sharpe_n", 0) or 0))
     evidence["dsr_unseen"] = _du
     if _du is not None:
         log(f"  Deflated Sharpe on unseen data: PSR {_du['psr']:.3f} over {_du['n']} unseen trades vs {_du['trials']} effective trial(s) "
@@ -386,10 +412,12 @@ def apply_audit_layers(
             demote("MARGINAL", "EV EVIDENCE INCOMPLETE: " + " ".join(ev.reasons[:1]) + " READY needs an economic verdict.")
     # 8. ladder stage printed next to the verdict everywhere
     from app.orchestration.verdict_ladder import ladder_stage
-    _edge_ev = edge_evidence_for_ladder(confirmation, null_ev, cost_ev, ev, cfg, verdict)
+    from app.orchestration.verdict_ladder import is_hard_failed
+    _hard = is_hard_failed(verdict, reasons, ev_label=ev.label, lookahead_crashed=lookahead_check_crashed) or bool(hard_failed)
+    _edge_ev = edge_evidence_for_ladder(confirmation, null_ev, cost_ev, ev, cfg, verdict, hard_failed=_hard)
     evidence["edge_evidence"] = _edge_ev
     _lad = ladder_stage(verdict, ev.label, pooled_status=evidence.get("pooled_status"),
-                        hard_failed=(verdict == "NOT READY" and ev.label == "NOT WORTH A FEE"),
+                        hard_failed=_hard,
                         per_attempt_pass_lb_pct=None, high_confidence_pct=min_pct,
                         edge_evidence=_edge_ev,
                         caps=[r for r in reasons if isinstance(r, str) and ("CAPPED" in r or "NOT PROVEN" in r.upper())][:4])

@@ -376,7 +376,7 @@ class FullPipelineConfig:
     # Hard READY gate: the 95% lower bound on average R per trade AFTER the 2x cost stress must exceed this (R units).
     min_expectancy_lb_r: float = 0.0
     # READY demote: share of FUNDED accounts (after passing) that may breach within the ruin horizon.
-    funded_breach_cap_pct: float = 50.0
+    funded_breach_cap_pct: float = 35.0
 
     # -- Lock-parameters / fixed-backtest mode (2026-09-24) --------------
     # Found via an external RoboQuant comparison: comparing "the same
@@ -978,7 +978,11 @@ def _make_verdict_core(
     candidate" step. Defaults to False so every existing caller/test
     that doesn't pass it keeps its prior behavior exactly."""
     reasons: list[str] = []
-    ruin = final_mc.risk_of_ruin_pct
+    # 2026-11 audit: the gate measures the event that costs a fee -- breaching the EVALUATION -- not the combined 90-day figure
+    # (funded-stage bust is reported apart and has its own MARGINAL cap below).
+    from app.monte_carlo.engine import eval_ruin_gate_pct
+    _gate_ruin = eval_ruin_gate_pct(final_mc)
+    ruin = float(final_mc.risk_of_ruin_pct if _gate_ruin is None else _gate_ruin)
     ruin_hard_fail = ruin > risk_of_ruin_cap
     _ruin_split = _ruin_split_text(final_mc)
 
@@ -1039,9 +1043,8 @@ def _make_verdict_core(
     # -- The one legitimate hard gate ------------------------------------
     if ruin_hard_fail:
         reasons.append(
-            f"HARD SAFETY GATE FAILED: Monte Carlo risk of ruin is {ruin:.1f}% "
-            f"({getattr(final_mc, 'risk_of_ruin_definition', 'share of purchased accounts that breached a firm rule')}), "
-            f"above the configured cap of {risk_of_ruin_cap:.1f}%.{_ruin_split} This strategy is NOT READY regardless of "
+            f"HARD SAFETY GATE FAILED: {ruin:.1f}% of purchased evaluation accounts breached a firm rule before passing "
+            f"(each one costs the evaluation fee), above the configured cap of {risk_of_ruin_cap:.1f}%.{_ruin_split} This strategy is NOT READY regardless of "
             f"how the rest of the evidence looks -- ruin is the one metric this pipeline treats as "
             f"a genuine pass/fail requirement rather than evidence to weigh (see "
             f"FullPipelineConfig.risk_of_ruin_cap)."
@@ -1392,7 +1395,7 @@ _VERDICT_TO_LIBRARY_STATUS = {
 def _make_verdict_inner(*args, attempt_replay=None, replay_disagreement_pts: float = 25.0, replay_min_gap_pts: float = 10.0, null_result=None, null_p_max: float = 0.10, cost_stress=None, cost_stress_min_retained: float = 0.25, mc_dispersion_pts=None, payout30=None, payout30_min_pct: float = 25.0, payout30_mode: str = 'soft', payout30_max_score_penalty: float = 5.0, payout30_hard_floor_pct: float = 0.0, payout30_min_windows: float = 3.0, paid_min_pct: float = 35.0,
                   transfer=None, transfer_mode: str = "cap",
                   evidence_required: bool = False, min_expectancy_lb_r: float = 0.0, min_trades_for_expectancy_gate: int = 30,
-                  funded_breach_cap_pct: float = 50.0, **kwargs):
+                  funded_breach_cap_pct: float = 35.0, **kwargs):
     """Accuracy-overhaul wrapper around the original verdict logic.
 
     Adds two honesty gates that can only DEMOTE a READY verdict to MARGINAL
@@ -1762,7 +1765,10 @@ def _gate_vector(core: dict, extra: dict, scorecard=None, core_verdict: str | No
         if mc is None:
             return add("ruin", "Risk of ruin", "n/a")
         cap = float(core.get("risk_of_ruin_cap", 20.0))
-        add("ruin", "Risk of ruin", "fail" if mc.risk_of_ruin_pct > cap else "pass", f"{mc.risk_of_ruin_pct:.1f}% vs cap {cap:g}%")
+        from app.monte_carlo.engine import eval_ruin_gate_pct
+        _g = eval_ruin_gate_pct(mc)
+        _g = mc.risk_of_ruin_pct if _g is None else _g
+        add("ruin", "Evaluation breach (ruin)", "fail" if _g > cap else "pass", f"{_g:.1f}% of evaluations breached vs cap {cap:g}%")
     def _pooled():
         ps = getattr(wf, "pooled_status", None) if wf is not None else None
         if ps is None and wf is None and core.get("cpcv_primary_result") is None:
@@ -1851,7 +1857,7 @@ def _gate_vector(core: dict, extra: dict, scorecard=None, core_verdict: str | No
         if fa < 30:
             return add("funded", "Funded-account survival", "n/a", f"{fa} funded accounts")
         br = float(getattr(mc, "funded_breach_within_horizon_pct", 0.0))
-        add("funded", "Funded-account survival", "pass" if br <= float(extra.get("funded_breach_cap_pct", 50.0)) else "cap", f"{br:.0f}% breach")
+        add("funded", "Funded-account survival", "pass" if br <= float(extra.get("funded_breach_cap_pct", 35.0)) else "cap", f"{br:.0f}% breach")
     def _horizon():
         add("ruin_window", "Ruin window covered by history", "pass" if getattr(mc, "ruin_horizon_covered", True) is not False else "cap")
     def _sample():
@@ -1885,7 +1891,7 @@ def _gate_vector(core: dict, extra: dict, scorecard=None, core_verdict: str | No
 
 
 def _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt, cfg, log,
-                              workers: int = 1, progress_hook=None, run_null: bool = True, median_days_to_pass=None):
+                              workers: int = 1, progress_hook=None, run_null: bool = True, median_days_to_pass=None, instrument=None):
     """Evidence the verdict wrapper gates on, computed once on the final
     strategy: (a) the real engine re-run from many start dates on fresh
     accounts, (b) a random-entry null DISTRIBUTION with the strategy's own
@@ -2025,6 +2031,19 @@ def _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt
             f"  Cost stress ({_mult:g}x): net ${cost_stress['net_profit']:,.0f} "
             f"vs ${cost_stress['base_net_profit']:,.0f} at 1x ({cost_stress['trades']} trades)."
         )
+        # 2026-11 audit: futures costs are fixed ticks and dollars per contract -> a ladder in price POINTS (2/4/8/12 ticks = NQ's 0.5/1/2/3).
+        try:
+            from app.backtest.statistics import compute_point_cost_ladder, point_ladder_summary
+            from app.data.instrument_specs import get_any_instrument_spec, guess_any_instrument_symbol
+            _sym = guess_any_instrument_symbol(instrument or getattr(final_strategy, "name", None) or "")
+            _spec = get_any_instrument_spec(_sym) if _sym else None
+            _tick = float(getattr(_spec, "tick_size", 0.0) or 0.0)
+            if _tick > 0:
+                _lad = compute_point_cost_ladder(final_bt.trades, _tick)
+                cost_stress["point_ladder"] = {"symbol": _sym, "tick_size": _tick, "rungs": _lad, "summary": point_ladder_summary(_lad)}
+                log(f"  Cost ladder ({_sym}): " + point_ladder_summary(_lad))
+        except Exception as _exc:  # noqa: BLE001
+            log(f"  Point cost ladder skipped: {_exc}")
     except Exception as exc:  # noqa: BLE001
         log(f"  Cost-stress evidence skipped: {exc}")
     return replay, null, cost_stress
@@ -3222,6 +3241,8 @@ def run_full_pipeline(
                 _ledger_record_trials(strategy, (ga_result.total_evaluations if (refinement_ran and ga_result is not None) else 1),
                                       data_fp=_dsr_fp)
                 trial_sharpes: list[float] = []
+                _dsr_sink_keys: list = []
+                _cluster_reps_sharpes: list[float] = []
                 if refinement_ran and ga_result is not None and ga_result.leaderboard:
                     # v9.15 (WS-F): the leaderboard re-backtests are
                     # independent -- fan them out (identical Sharpe list:
@@ -3240,6 +3261,7 @@ def run_full_pipeline(
                         _dsr_specs, dev_df, risk, final_tmp_dir, _mc_workers, trade_sink=_dsr_sink)
                     # the PBO gate (6d) reuses these full-run trade lists instead of re-backtesting every CPCV path
                     leaderboard_trades = {_dsr_lb_index[_k]: _tr for _k, _tr in _dsr_sink.items()}
+                    _dsr_sink_keys = list(_dsr_sink.keys())
                 if not trial_sharpes:
                     # No GA leaderboard to sample a spread from (refinement
                     # didn't run or produced nothing re-backtestable): fall
@@ -3265,6 +3287,12 @@ def run_full_pipeline(
                     try:
                         from app.validation.effective_trials import daily_pnl_series, scale_trial_count
                         _streams = [daily_pnl_series(_tr) for _tr in leaderboard_trades.values()]
+                        try:                                  # one Sharpe per correlation cluster -> the measured trial dispersion (audit 2026-11)
+                            from app.validation.effective_trials import representatives as _reps
+                            _cluster_reps_sharpes = [float(trial_sharpes[_dsr_sink_keys[_i]]) for _i in _reps(_streams, cfg.dsr_cluster_corr)
+                                                     if _i < len(_dsr_sink_keys) and _dsr_sink_keys[_i] < len(trial_sharpes)]
+                        except Exception:  # noqa: BLE001
+                            _cluster_reps_sharpes = []
                         _eff = scale_trial_count(n_trials, _streams, corr_threshold=cfg.dsr_cluster_corr)
                         log(f"  Effective trials: {_eff['n_clusters']} distinct return stream(s) among {_eff['n_streams']} leaderboard "
                             f"candidates -> deflating for {_eff['effective_trials']} instead of {n_trials} raw evaluations.")
@@ -3299,6 +3327,13 @@ def run_full_pipeline(
                     min_probabilistic_sharpe=cfg.dsr_min_probabilistic_sharpe,
                     raw_trials=_raw_trials, effective_trials=_effective_trials, trial_clustering=_cluster_note,
                 )
+                try:
+                    _fin = [x for x in _cluster_reps_sharpes if math.isfinite(x)]
+                    if len(_fin) >= 2:
+                        dsr_gate_result.trial_sharpe_std = float(np.std(_fin, ddof=1))
+                        dsr_gate_result.trial_sharpe_n = int(len(_fin))
+                except Exception:  # noqa: BLE001
+                    pass
                 log(f"  {dsr_gate_result.reason}")
                 log(f"  Trial counts (named): raw_trials={_raw_trials:,} (this run + ledger + external + family prior), "
                     f"effective_trials={_effective_trials:,} ({_cluster_note}). Ledger rule: "
@@ -3513,7 +3548,7 @@ def run_full_pipeline(
         _replay_ev, _null_ev, _cost_ev = _replay_and_null_evidence(
             final_strategy, dev_df, risk, prop_rules, final_bt, cfg, log,
             workers=_mc_workers, progress_hook=_progress, run_null=(_can_be_ready or _pre_verdict == "MARGINAL"),
-            median_days_to_pass=getattr(final_mc, "median_days_to_pass", None),
+            median_days_to_pass=getattr(final_mc, "median_days_to_pass", None), instrument=instrument,
         )
         _cost_ev = _attach_unseen_cost_bound(_cost_ev, final_bt, df, dev_df, final_strategy, risk, adaptive_risk, oos_validation, cfg, log)
         _payout_ev = _payout_window_evidence(
@@ -3574,7 +3609,7 @@ def run_full_pipeline(
             transfer=_transfer_ev, transfer_mode=str(getattr(cfg, "transfer_mode", "cap")),
             evidence_required=bool(getattr(cfg, "extra_gates_enabled", True)),
             min_expectancy_lb_r=float(getattr(cfg, "min_expectancy_lb_r", 0.0)),
-            funded_breach_cap_pct=float(getattr(cfg, "funded_breach_cap_pct", 50.0)),
+            funded_breach_cap_pct=float(getattr(cfg, "funded_breach_cap_pct", 35.0)),
         )
 
         verdict_reasons = list(verdict_reasons)
@@ -3617,6 +3652,7 @@ def run_full_pipeline(
             parameters_tuned=bool(refinement_ran), final_trades=list(final_bt.trades),
             oos_fold_r=_oos_fold_r_for_audit(oos_validation), dsr_gate_result=dsr_gate_result,
             null_ev=_null_ev, cost_ev=_cost_ev, transfer_ev=_transfer_ev,
+            hard_failed=bool(risk_of_ruin_hard_fail or lookahead_hard_fail),
         )
         # 2026-11-04 (P0-2): fold the unseen-data DSR into the scorecard as a (low-weight) input
         try:
@@ -3635,9 +3671,23 @@ def run_full_pipeline(
             _audit_ev["gate_vector"] = getattr(scorecard, "gate_vector", None)
             _audit_ev["pooled_status"] = getattr(oos_validation, "pooled_status", None) if oos_validation is not None else None
             _audit_ev["edge_decay"] = edge_decay
+            try:  # Rulebook Stage 2 (binary screen) on the development trades, at the honest number of looks (effective trials)
+                from app.validation.rulebook import binary_screen as _bs
+                _n_looks = int(getattr(dsr_gate_result, "effective_trials", None) or getattr(dsr_gate_result, "n_trials", None) or 1)
+                _rb = _bs(list(getattr(final_bt, "trades", []) or []), n_looks=max(_n_looks, 1))
+                _audit_ev["rulebook_screen"] = _rb
+                log("  Rulebook screen (Stage 2): " + ("PASS" if _rb.get("passed") else ("not testable -- " + _rb["reason"] if not _rb.get("testable") else "does not clear all checks"))
+                    + f" (z bar {_rb['z_bar']} at N = {_rb['n_looks']})")
+            except Exception as exc:  # noqa: BLE001 -- informational; never blocks a run
+                log(f"  Rulebook screen skipped: {exc}")
             from app.orchestration.verdict_ladder import ladder_stage as _ls
+            from app.orchestration.verdict_ladder import is_hard_failed as _ihf
+            _hard = _ihf(verdict, verdict_reasons, ev_label=_ev.label, ruin_hard_fail=risk_of_ruin_hard_fail,
+                         lookahead_hard_fail=lookahead_hard_fail, lookahead_crashed=lookahead_check_crashed)
+            if _hard:
+                _audit_ev["edge_evidence"] = {}
             _audit_ev["ladder"] = _ls(verdict, _ev.label, pooled_status=_audit_ev["pooled_status"],
-                                      hard_failed=(verdict == "NOT READY" and _ev.label == "NOT WORTH A FEE"),
+                                      hard_failed=_hard,
                                       edge_evidence=_audit_ev.get("edge_evidence"),
                                       caps=[r for r in verdict_reasons if isinstance(r, str) and ("CAPPED" in r or "NOT PROVEN" in r.upper())][:4]).to_dict()
             verdict_reasons = list(verdict_reasons) + ["LADDER: " + _audit_ev["ladder"]["stage"] + " | EV: " + str(_ev.label)]
@@ -3862,6 +3912,8 @@ def _finish(
                     "pass_and_paid_probability": round(final_mc.headline_pass_and_paid_probability, 1),
                     "verdict": verdict,
                     "report_html": str(report_paths["html"]),
+                    "instrument": (_fp_instrument or "").upper(),
+                    "prop_preset": str(getattr(prop_rules, "preset_key", "") or ""),
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
                     "t58_tier": t58_tier,
                     "parsimony_score": round(parsimony_score, 1) if parsimony_score is not None else None,
@@ -3915,6 +3967,8 @@ def _finish(
                     "pass_and_paid_probability": round(final_mc.headline_pass_and_paid_probability, 1),
                     "verdict": verdict,
                     "report_html": str(report_paths["html"]),
+                    "instrument": (_fp_instrument or "").upper(),
+                    "prop_preset": str(getattr(prop_rules, "preset_key", "") or ""),
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
                     "t58_tier": t58_tier,
                     "parsimony_score": round(parsimony_score, 1) if parsimony_score is not None else None,
@@ -3990,6 +4044,8 @@ def _finish(
                     "pass_and_paid_probability": round(final_mc.headline_pass_and_paid_probability, 1),
                     "verdict": verdict,
                     "report_html": str(report_paths["html"]),
+                    "instrument": (_fp_instrument or "").upper(),
+                    "prop_preset": str(getattr(prop_rules, "preset_key", "") or ""),
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
                     "t58_tier": t58_tier,
                     "parsimony_score": round(parsimony_score, 1) if parsimony_score is not None else None,
@@ -4053,6 +4109,8 @@ def _finish(
                     "pass_and_paid_probability": round(final_mc.headline_pass_and_paid_probability, 1),
                     "verdict": verdict,
                     "report_html": str(report_paths["html"]),
+                    "instrument": (_fp_instrument or "").upper(),
+                    "prop_preset": str(getattr(prop_rules, "preset_key", "") or ""),
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
                     "t58_tier": t58_tier,
                     "parsimony_score": round(parsimony_score, 1) if parsimony_score is not None else None,

@@ -305,7 +305,10 @@ def after_full_pipeline_parts(verdict: str | None, saved_to_library: bool, resul
 
     if result is not None and getattr(result, "risk_of_ruin_hard_fail", False):
         final_mc = getattr(result, "final_mc", None)
-        ruin_pct = getattr(final_mc, "risk_of_ruin_pct", None)
+        from app.monte_carlo.engine import eval_ruin_gate_pct
+        ruin_pct = eval_ruin_gate_pct(final_mc)
+        if ruin_pct is None:
+            ruin_pct = getattr(final_mc, "risk_of_ruin_pct", None)
         cap = getattr(result, "risk_of_ruin_cap", 20.0)
         ruin_text = f"{ruin_pct:.1f}%" if ruin_pct is not None else "above the cap"
         scorecard = getattr(result, "scorecard", None)
