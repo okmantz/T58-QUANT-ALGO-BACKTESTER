@@ -99,6 +99,7 @@ FITNESS_METRICS: dict[str, str] = {
     # separates candidates when pass odds are tied/near zero; it adds at most 8 points, so it never outranks a real
     # difference in pass odds.
     "pass_gradient": "Pass odds with edge gradient -- eval-pass probability, tie-broken by Sharpe / profit factor so the search always has a slope to climb (default)",
+    "edge_lb_r_dd": "Edge lower bound (R) minus a drawdown-vs-prop-rule penalty -- ranks on the conservative per-trade edge estimate the Discovery gate uses, and docks candidates whose Monte Carlo 95th-percentile drawdown eats into the account's max-drawdown rule",
     "prop_guide_score": "Prop-Oriented Guide Score",
     "composite_prop_score": "Composite Prop Score",
     "first_payout_probability": "First Payout Probability",
@@ -140,7 +141,23 @@ OPTIMIZER_MODES: dict[str, str] = {
     "genetic": "Genetic Algorithm -- tournament selection + crossover/mutation + random immigrants (default, dependency-free)",
     "tpe": "TPE / Bayesian (Optuna) -- models which regions of the parameter space score well and samples more there each trial",
     "cma_es": "CMA-ES -- adapts a search distribution's shape/scale to the space's curvature; strong on continuous, correlated parameters",
+    "auto": "Auto (default) -- picks the search method from the size of the parameter space: TPE for up to 8 parameters, Genetic above that (measured: tools/benchmark_optimizer_modes.py)",
 }
+
+AUTO_TPE_MAX_PARAMS = 8   # 2026-11-05 audit: TPE up to ~8 parameters. The audit proposed CMA-ES above that, but tools/benchmark_optimizer_modes.py
+                          # (equal budget, noisy landscapes) shows the genetic search ahead of CMA-ES at 10 and 16 parameters, so above 8 auto uses genetic.
+
+
+def resolve_optimizer_mode(mode: str, n_genes: int) -> str:
+    """``auto`` -> a concrete mode for a search over ``n_genes`` parameters; any other mode is returned unchanged. The choice only changes HOW the
+    next candidate is picked, never what a candidate is scored on (see OPTIMIZER_MODES). Falls back to genetic when the needed optional package
+    is missing so ``auto`` can never make a run fail."""
+    if mode != "auto":
+        return mode
+    import importlib.util as _iu
+    if int(n_genes) <= AUTO_TPE_MAX_PARAMS and _iu.find_spec("optuna") is not None:
+        return "tpe"
+    return "genetic"
 
 
 @dataclass
@@ -202,6 +219,23 @@ class RefinementConfig:
     # initial population + bred generations) choosing genomes a different
     # way, via the optional `optuna` / `cma` packages respectively.
     optimizer_mode: str = "genetic"
+
+    # 2026-11-05 audit: search budget that follows the size of the problem, and a search that stops spending when it has stopped learning.
+    #   adaptive_budget       True -> after the tunable parameters are counted, raise ``generations`` so the run gets ~``evals_per_param``
+    #                         evaluations per parameter (never below the configured budget, never above ``adaptive_budget_max_factor`` x it).
+    #   early_stop_patience   generations with no new best before the genetic loop stops (0 = never stop early; the old behaviour).
+    #   early_stop_restarts   how many times a stalled search is RESTARTED from a fresh random population (a different seed) instead of
+    #                         stopping, keeping the best-ever; the restart spends the remaining budget somewhere new.
+    # Defaults keep every existing caller byte-identical; Quick Optimize and Full Pipeline switch them on.
+    adaptive_budget: bool = False
+    # Warm starts (2026-11-05 audit): genomes (lists of gene values, same order as the strategy's tunable parameters) from earlier winners of
+    # THIS strategy. They are evaluated like any other candidate (fresh, on this run's data) and seed the initial genetic population, so a
+    # repeat search starts from known-good regions instead of from scratch. Counted in the trial ledger like every other evaluation.
+    warm_start_genomes: list = field(default_factory=list)
+    evals_per_param: int = 25
+    adaptive_budget_max_factor: float = 4.0
+    early_stop_patience: int = 0
+    early_stop_restarts: int = 1
 
     # UPGRADE (GA-searches-what-it's-graded-on): when set, every fitness
     # evaluation this GA runs (see compute_fitness's risk_of_ruin_cap
@@ -673,6 +707,20 @@ def _payout_window_fitness(
     return 0.60 * (n_pay / n_win) + 0.25 * (n_pass / n_win) + 0.15 * mc_pass
 
 
+def edge_drawdown_penalty(p95_dd_pct, limit_pct, free_frac: float = 0.5, weight: float = 0.5) -> float:
+    """R-units docked from the edge objective for drawdown. Free up to ``free_frac`` of the prop rule's max-drawdown limit (the same 'about half
+    the limit' comfort band the prop guide score uses); beyond that it grows linearly, reaching ``weight`` R at the limit and rising past it.
+    Unknown drawdown or limit -> 0 (never invents a penalty)."""
+    try:
+        dd, lim = float(p95_dd_pct), float(limit_pct)
+    except (TypeError, ValueError):
+        return 0.0
+    if not (math.isfinite(dd) and math.isfinite(lim)) or lim <= 0 or dd <= 0:
+        return 0.0
+    used = dd / lim
+    return max(0.0, (used - free_frac) / (1.0 - free_frac)) * weight
+
+
 def compute_fitness(
     stats: dict, prop_summary: dict | None, mc: MonteCarloResult, metric: str,
     risk_of_ruin_cap: float | None = None,
@@ -701,6 +749,11 @@ def compute_fitness(
     if metric == "edge_lb_r":
         from app.optimize.two_stage import edge_fitness_from_trades
         fitness = edge_fitness_from_trades(trades)
+    elif metric == "edge_lb_r_dd":
+        from app.optimize.two_stage import edge_fitness_from_trades
+        fitness = edge_fitness_from_trades(trades)
+        if fitness is not None and math.isfinite(fitness):
+            fitness -= edge_drawdown_penalty(getattr(mc, "p95_drawdown_pct", None), getattr(prop_rules, "max_drawdown_pct", None))
     elif metric == "mean_r":
         # 2026-10-25: mean R per trade (the quantity the edge objective is a lower bound of). -inf with no measurable trades.
         from app.optimize.two_stage import trade_r_and_days
@@ -1149,6 +1202,9 @@ def _run_genetic_search(
     generation_history, best_ever) -- exactly what run_iterative_refinement
     used to build inline."""
     population: list[Candidate] = [baseline]
+    for _wg in list(getattr(cfg, "warm_start_genomes", None) or [])[: max(cfg.population_size // 2, 0)]:
+        if len(_wg) == len(genes) and len(population) < cfg.population_size:
+            population.append(evaluate([min(max(float(v), g.lo), g.hi) for v, g in zip(_wg, genes)], 0))
     while len(population) < cfg.population_size:
         population.append(evaluate([_random_gene_value(g, rng) for g in genes], 0))
 
@@ -1159,7 +1215,23 @@ def _run_genetic_search(
         f"best={generation_history[0].best_fitness:.3f}  mean={generation_history[0].mean_fitness:.3f}"
     )
 
+    _stall = 0
+    _restarts_left = max(int(getattr(cfg, "early_stop_restarts", 0) or 0), 0)
+    _patience = max(int(getattr(cfg, "early_stop_patience", 0) or 0), 0)
     for gen in range(1, cfg.generations + 1):
+        if _patience and _stall >= _patience:
+            if _restarts_left > 0 and gen < cfg.generations:
+                _restarts_left -= 1
+                _stall = 0
+                log(f"Generation {gen}: no new best for {_patience} generations -- restarting from a fresh random population (different seed); best-ever is kept.")
+                population = [evaluate([_random_gene_value(g, rng) for g in genes], gen) for _ in range(cfg.population_size)]
+                gb = max(population, key=lambda c: c.fitness)
+                if gb.fitness > best_ever.fitness:
+                    best_ever = gb
+                generation_history.append(_summarize_generation(gen, population, genes))
+                continue
+            log(f"Generation {gen}: search has plateaued (no new best for {_patience} generations) -- stopping early; the unspent budget is saved.")
+            break
         population.sort(key=lambda c: c.fitness, reverse=True)
         elites = population[: cfg.elite_count]
         next_pop: list[Candidate] = list(elites)
@@ -1182,8 +1254,13 @@ def _run_genetic_search(
         generation_history.append(gen_summary)
 
         gen_best = max(population, key=lambda c: c.fitness)
-        if gen_best.fitness > best_ever.fitness:
+        if gen_best.fitness > best_ever.fitness + 1e-9:
             best_ever = gen_best
+            _stall = 0
+        else:
+            _stall += 1
+            if gen_best.fitness > best_ever.fitness:
+                best_ever = gen_best
 
         log(
             f"Generation {gen}/{cfg.generations}: best={gen_summary.best_fitness:.3f}  "
@@ -1621,7 +1698,16 @@ def run_iterative_refinement(
             )
         log(f"Baseline fitness ({FITNESS_METRICS[cfg.fitness_metric]}): {baseline.fitness:.3f}")
 
-        if cfg.optimizer_mode == "genetic":
+        if cfg.adaptive_budget and genes:
+            _want_gens = int(math.ceil(cfg.evals_per_param * len(genes) / max(cfg.population_size, 1))) - 1
+            _new_gens = int(min(max(cfg.generations, _want_gens), math.ceil(cfg.generations * cfg.adaptive_budget_max_factor)))
+            if _new_gens != cfg.generations:
+                log(f"Search budget scaled to the problem: {len(genes)} parameter(s) -> {_new_gens} generations (was {cfg.generations}); it stops early if the search plateaus.")
+                cfg = replace(cfg, generations=_new_gens, early_stop_patience=cfg.early_stop_patience or max(4, _new_gens // 3))
+        _mode = resolve_optimizer_mode(cfg.optimizer_mode, len(genes))
+        if cfg.optimizer_mode == "auto":
+            log(f"Auto optimizer: {len(genes)} tunable parameter(s) -> {OPTIMIZER_MODES[_mode].split(' -- ')[0]}.")
+        if _mode == "genetic":
             population, generation_history, best_ever = _run_genetic_search(genes, evaluate, cfg, log, rng, baseline)
         else:
             # TPE / CMA-ES -- see OPTIMIZER_MODES and _run_tpe_search /
@@ -1630,10 +1716,10 @@ def run_iterative_refinement(
             # (already evaluated and tracked before this if/else) and every
             # trial they run land in `all_evaluated` in one consistent
             # order regardless of mode.
-            mode_label = OPTIMIZER_MODES[cfg.optimizer_mode].split(" -- ")[0]
+            mode_label = OPTIMIZER_MODES[_mode].split(" -- ")[0]
             planned = cfg.population_size * (cfg.generations + 1)
             log(f"Running {mode_label} search ({planned} evaluations planned)...")
-            if cfg.optimizer_mode == "tpe":
+            if _mode == "tpe":
                 generation_history, last_batch_size = _run_tpe_search(genes, evaluate, cfg, log)
             else:
                 generation_history, last_batch_size = _run_cma_es_search(genes, evaluate, cfg, log)

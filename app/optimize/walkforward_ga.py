@@ -87,6 +87,7 @@ from app.prop.simulator import PropRules, simulate_account, summarize_single_run
 from app.strategy.base import Strategy
 from app.strategy.manual import ManualStrategy
 from app.validation.walk_forward_opt import build_folds
+from app.orchestration.resource_guard import physical_core_count
 
 ProgressCallback = Callable[[str], None]
 
@@ -612,7 +613,7 @@ def run_walkforward_aware_refinement(
         # failure (pickling issue, no spare cores, etc.) so this can never
         # turn a working run into a broken one.
         estimated_evaluations = cfg.population_size * (cfg.generations + 1)
-        cpu_count = os.cpu_count() or 1
+        cpu_count = physical_core_count()
         pool: ProcessPoolExecutor | None = None
         pool_tmp_dir: Path | None = None
         use_parallel = bool(parallel) and estimated_evaluations >= _MIN_EVALUATIONS_FOR_PARALLEL and cpu_count > 1
@@ -809,7 +810,21 @@ def run_walkforward_aware_refinement(
                     warnings.append(auto_shrink_note)
                     cfg = replace(cfg, generations=shrunk_generations)
 
-            if cfg.optimizer_mode == "genetic":
+            from app.optimize.refinement import resolve_optimizer_mode as _resolve_mode
+            # 2026-11-05 audit: budget that follows the number of tunable parameters (never when auto-shrink just cut it for a thin trade
+            # count, which is the opposite signal), with a plateau early stop + one fresh-seed restart in the genetic loop below.
+            if getattr(cfg, "adaptive_budget", False) and genes and not locals().get("auto_shrink_note"):
+                _want_gens = int(math.ceil(cfg.evals_per_param * len(genes) / max(cfg.population_size, 1))) - 1
+                _new_gens = int(min(max(cfg.generations, _want_gens), math.ceil(cfg.generations * cfg.adaptive_budget_max_factor)))
+                if _new_gens != cfg.generations:
+                    log(f"Search budget scaled to the problem: {len(genes)} parameter(s) -> {_new_gens} generations (was {cfg.generations}); it stops early if the search plateaus.")
+                    cfg = replace(cfg, generations=_new_gens, early_stop_patience=cfg.early_stop_patience or max(4, _new_gens // 3))
+            _mode = _resolve_mode(cfg.optimizer_mode, len(genes))
+            if cfg.optimizer_mode == "auto" and ai_suggest_cb is not None:
+                _mode = "genetic"       # AI-suggested genomes are a genetic-mode feature: Auto must not silently drop them
+            _stall = 0
+            _restarts_left = max(int(getattr(cfg, "early_stop_restarts", 0) or 0), 0)
+            if _mode == "genetic":
                 population = [baseline]
                 # Generation 0: nothing evaluated yet, so the population snapshot
                 # a two-argument callback receives is empty -- it has only the
@@ -832,6 +847,20 @@ def run_walkforward_aware_refinement(
                     if cancel_event is not None and cancel_event.is_set():
                         log("Stop requested -- ending the search at the current generation.")
                         raise WalkforwardGACancelled("Walk-forward-aware GA search stopped by user.")
+                    _pat = max(int(getattr(cfg, "early_stop_patience", 0) or 0), 0)
+                    if _pat and _stall >= _pat:
+                        if _restarts_left > 0 and gen < cfg.generations:
+                            _restarts_left -= 1
+                            _stall = 0
+                            log(f"Generation {gen}: no new best for {_pat} generations -- restarting from a fresh random population (different seed); best-ever is kept.")
+                            population = evaluate_batch([[_random_gene_value(g, rng) for g in genes] for _ in range(cfg.population_size)])
+                            _gb = max(population, key=lambda c: c.fitness)
+                            if _gb.fitness > best_ever.fitness:
+                                best_ever = _gb
+                            gen_summaries.append(_summary(gen, population))
+                            continue
+                        log(f"Generation {gen}: search has plateaued (no new best for {_pat} generations) -- stopping early; the unspent budget is saved.")
+                        break
                     population.sort(key=lambda c: c.fitness, reverse=True)
                     elites = population[: cfg.elite_count]
                     next_pop = list(elites)
@@ -880,8 +909,13 @@ def run_walkforward_aware_refinement(
 
                     population = next_pop
                     gen_best = max(population, key=lambda c: c.fitness)
-                    if gen_best.fitness > best_ever.fitness:
+                    if gen_best.fitness > best_ever.fitness + 1e-9:
                         best_ever = gen_best
+                        _stall = 0
+                    else:
+                        _stall += 1
+                        if gen_best.fitness > best_ever.fitness:
+                            best_ever = gen_best
                     gen_summaries.append(_summary(gen, population))
                     log(f"Generation {gen}/{cfg.generations}: best OOS fitness={gen_summaries[-1].best_fitness:.3f} "
                         f"mean={gen_summaries[-1].mean_fitness:.3f}")
@@ -934,12 +968,12 @@ def run_walkforward_aware_refinement(
                 # appended below when both are configured together.
                 if ai_suggest_cb is not None:
                     warnings.append(
-                        f"An AI-suggestion callback was provided, but optimizer_mode='{cfg.optimizer_mode}' "
+                        f"An AI-suggestion callback was provided, but optimizer_mode='{_mode}' "
                         "does not use it -- AI-assisted genome suggestions are currently genetic-mode only."
                     )
-                if cfg.optimizer_mode == "tpe":
+                if _mode == "tpe":
                     population, gen_summaries = _run_tpe_batches(genes, evaluate_batch, cfg, log)
-                elif cfg.optimizer_mode == "cma_es":
+                elif _mode == "cma_es":
                     population, gen_summaries = _run_cma_es_batches(genes, evaluate_batch, cfg, log)
                 else:
                     raise RefinementError(

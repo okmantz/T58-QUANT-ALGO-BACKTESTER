@@ -436,11 +436,13 @@ def run_multi_market_search(
                 gen += 1
             return last_batch, history
 
-        if cfg.optimizer_mode == "genetic":
+        from app.optimize.refinement import resolve_optimizer_mode as _resolve_mode
+        _mode = _resolve_mode(cfg.optimizer_mode, len(genes))
+        if _mode == "genetic":
             population, generation_history = _run_genetic()
-        elif cfg.optimizer_mode == "tpe":
+        elif _mode == "tpe":
             population, generation_history = _run_tpe()
-        elif cfg.optimizer_mode == "cma_es":
+        elif _mode == "cma_es":
             population, generation_history = _run_cma_es()
         else:
             raise RefinementError(f"Unknown optimizer_mode '{cfg.optimizer_mode}'.")
