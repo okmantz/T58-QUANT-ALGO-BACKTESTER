@@ -964,7 +964,8 @@ def conditional_expectancy(trades: list[Trade], df: pd.DataFrame) -> dict:
 
     rows = []
     for t in trades:
-        r = (t.pnl / t.initial_risk) if t.initial_risk else None
+        from app.scoring.edge_bounds import trade_r
+        r = trade_r(t)  # pnl / (stop distance x size); the old pnl / initial_risk ignored size, so it was not R
         rows.append({
             "hour": pd.Timestamp(t.entry_time).hour,
             "dow": pd.Timestamp(t.entry_time).day_name(),
