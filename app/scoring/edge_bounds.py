@@ -83,6 +83,18 @@ def sample_aware_interval(
     return (lo * 100.0, hi * 100.0), n_eff
 
 
+def trade_r(t) -> float | None:
+    """ONE trade's R multiple: pnl / (actual stop distance x size actually taken). Never the configured/intended risk
+    (a size cap or whole-contract floor makes the real stop risk smaller than the target, which inflated or deflated R).
+    None when the trade has no usable stop distance or size."""
+    ir = getattr(t, "initial_risk", None)
+    size = getattr(t, "size", None)
+    pnl = getattr(t, "pnl", None)
+    if pnl is None or not ir or ir <= 0 or not size:
+        return None
+    return float(pnl) / (float(ir) * float(size))
+
+
 def r_multiples(trades) -> list[float]:
     """R multiples exactly as app.backtest.statistics defines them: pnl / (planned initial risk * size),
     for trades that carry a planned risk. Falls back to nothing (empty list) when none do."""

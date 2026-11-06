@@ -653,7 +653,17 @@ def _preferred_pass_ci(mc_result):
     """v6 (2026-10-04): the CI the acceptance verdict gates on -- the
     PER-ATTEMPT pass interval when present, else the legacy chain-level
     interval, else None (caller falls back to the point estimate).
-    Returns the (lo, hi) tuple, never the point estimate."""
+    Returns the (lo, hi) tuple, never the point estimate.
+
+    2026-11 (Problem 3): ONE interval for every consumer. When the result carries the edge-uncertainty interval (outer
+    bootstrap over session days, ``pass_interval_method == "outer_bootstrap"``), that is THE interval -- the READY / HIGH-CONFIDENCE
+    gate, the scorecard, the pass-lower-bound check row and the report all read it. The plain Wilson interval over every simulated
+    attempt measures Monte Carlo sample size (10,000 paths), not how sure we are of the edge, so it is only the fallback for
+    results built without the bootstrap."""
+    if getattr(mc_result, "pass_interval_method", "") == "outer_bootstrap":
+        ci = getattr(mc_result, "per_attempt_pass_ci95_sample", None)
+        if _nonzero_ci(ci):
+            return ci
     ci = getattr(mc_result, "per_attempt_pass_ci95", None)
     if _nonzero_ci(ci):
         return ci
