@@ -160,9 +160,11 @@ def export_pdf(report: dict, path: str | Path) -> Path:
     # ---- verdict hero ------------------------------------------------------------------------
     verdict = report.get("verdict")
     if verdict:
-        tone = {"READY": GOOD, "MARGINAL": WARN}.get(verdict, BAD)
+        from app.orchestration.verdict_labels import headline as _headline
+        _stage = _headline(verdict, (report.get("ladder") or {}).get("stage") if isinstance(report.get("ladder"), dict) else None, report.get("verdict_reasons"))
+        tone = {"FORWARD-TEST CANDIDATE": GOOD, "EVALUATE": GOOD, "FUNDED": GOOD, "LEAD": WARN}.get(_stage, BAD)
         score, comps, blockers, caps, notes = theme.classify_reasons(report.get("verdict_reasons"))
-        head = [[Paragraph(f'<font color="#{tone.hexval()[2:]}" size="22"><b>{_esc(verdict)}</b></font>', base),
+        head = [[Paragraph(f'<font color="#{tone.hexval()[2:]}" size="22"><b>{_esc(_stage)}</b></font>', base),
                  Paragraph((f'<font size="18"><b>{score[0]:.1f}</b></font><font size="8" color="#6b7280"> / 100 &middot; {_esc(score[1])}</font><br/>'
                             f'<font size="7.5" color="#6b7280">{score[2]}/{score[3]} score components measured</font>') if score else "", base)]]
         ht = Table(head, colWidths=[page_w * 0.6, page_w * 0.4])

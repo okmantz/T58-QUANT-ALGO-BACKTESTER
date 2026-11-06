@@ -204,7 +204,9 @@ def kpi_cards(items: list[tuple[str, str, str]]) -> str:
 
 
 def tone_for(verdict: str | None) -> str:
-    return {"READY": "good", "MARGINAL": "warn"}.get(str(verdict or "").upper(), "bad")
+    from app.orchestration.verdict_labels import headline, tone
+    t = tone(headline(verdict))
+    return t if t in ("good", "warn", "bad") else "bad"
 
 
 def score_gauge(score: float | None, tier: str = "", size: int = 150) -> str:
@@ -241,7 +243,7 @@ def bar_row(label: str, value: float, weight: str = "", note: str = "") -> str:
 _SCORE_RE = re.compile(r"T58 Score:\s*([\d.]+)/100\s*--\s*([A-Za-z ]+?)\s*\((\d+)/(\d+) checks available\)")
 _COMP_RE = re.compile(r"^\s{2}([a-z0-9_]+):\s*([\d.]+)/100\s*\(weight\s*([+-]?\d+)\)\s*$")
 _BLOCKER_PAT = re.compile(r"HARD (SAFETY|VALIDATION) GATE FAILED|FAILED:|DID NOT PASS", re.I)
-_CAP_PAT = re.compile(r"CAPPED AT|DATA GATE|UNVERIFIED|UNUSABLE|NOT ALLOWED|not allowed|cannot support READY", re.I)
+_CAP_PAT = re.compile(r"CAPPED AT|DATA GATE|UNVERIFIED|UNUSABLE|NOT ALLOWED|not allowed|cannot support (READY|FORWARD-TEST CANDIDATE)", re.I)
 
 _COMPONENT_LABELS = {
     "pass_probability": "Evaluation pass probability", "first_payout_probability": "First payout probability",
@@ -286,29 +288,36 @@ _PIPE_OUTSIDE_PARENS = re.compile(r"\s\|\s(?![^(]*\))")
 
 def split_reason(text: str) -> list[str]:
     """Split a reason on ' | ' separators, but not on pipes inside parentheses (e.g. '(paid | passed)')."""
-    return [p.strip(" -") for p in _PIPE_OUTSIDE_PARENS.split(str(text)) if p.strip(" -")]
+    from app.orchestration.verdict_labels import relabel_text
+    return [relabel_text(p.strip(" -")) for p in _PIPE_OUTSIDE_PARENS.split(str(text)) if p.strip(" -")]
 
 
 def _reason_html(text: str) -> str:
     """Escape a reason and break ' | ' separated sub-parts onto their own lines (the EV verdict packs several into one string)."""
-    return "<br>".join(_html.escape(p) for p in split_reason(text))
+    from app.orchestration.verdict_labels import relabel_text
+    return "<br>".join(_html.escape(relabel_text(p)) for p in split_reason(text))
 
 
 def _reason_list(items: list[str], cls: str) -> str:
     return f'<ul class="reasons {cls}">' + "".join(f"<li>{_reason_html(i)}</li>" for i in items) + "</ul>"
 
 
-def verdict_hero(verdict: str | None, reasons: list[str] | None, title: str = "Full Pipeline verdict") -> str:
+def verdict_hero(verdict: str | None, reasons: list[str] | None, title: str = "Full Pipeline verdict", stage: str | None = None) -> str:
     """Badge + gauge + component bars + reasons grouped as 'Blocking', 'Capping', 'Notes'. Renders nothing without a verdict."""
     if not verdict:
         return ""
-    tone = tone_for(verdict)
+    from app.orchestration.verdict_labels import headline as _headline
+    stage = _headline(verdict, stage, reasons)
+    verdict = stage
+    tone = tone_for(stage)
     score, comps, blockers, caps, notes = classify_reasons(reasons)
     meaning = {
-        "READY": "Cleared every hard gate and scored in the Strong/Elite tier. Next step: forward-test on a demo, not a purchase.",
-        "MARGINAL": "No hard failure, but the evidence is thinner than READY requires or a cap applied. See the amber items.",
-        "NOT READY": "At least one hard gate failed, or the score is below the passing tiers. See the red items first.",
-    }.get(str(verdict).upper(), "")
+        "FORWARD-TEST CANDIDATE": "Cleared every hard gate on the backtest. Next step: paper-trade it under the forward-test monitor, not a purchase.",
+        "LEAD": "No hard failure, but the evidence is thinner than a forward-test candidate needs or a cap applied. See the amber items.",
+        "REJECT": "At least one hard gate failed, or the score is below the passing tiers. See the red items first.",
+        "EVALUATE": "The forward test accepted the edge. Buy the cheapest evaluation.",
+        "FUNDED": "Evaluation passed and a payout was recorded.",
+    }.get(str(stage).upper(), "")
     gauge = score_gauge(score[0], score[1]) if score else ""
     coverage = f'<div class="muted small">{score[2]}/{score[3]} score components measured</div>' if score else ""
     bars = ""

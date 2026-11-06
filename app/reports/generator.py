@@ -714,22 +714,22 @@ def _verdict_section(verdict: str | None, verdict_reasons: list[str] | None, ev_
     Pipeline report), so this is fully backward compatible."""
     if not verdict:
         return ""
-    css_class = {"READY": "verdict-ready", "MARGINAL": "verdict-marginal"}.get(verdict, "verdict-not-ready")
+    from app.orchestration.verdict_labels import headline as _headline
+    _stage = _headline(verdict, (ladder or {}).get("stage"), verdict_reasons)
+    css_class = {"FORWARD-TEST CANDIDATE": "verdict-ready", "EVALUATE": "verdict-ready", "FUNDED": "verdict-ready", "LEAD": "verdict-marginal"}.get(_stage, "verdict-not-ready")
     _ev_label = (ev_verdict or {}).get("label")
-    _stage = (ladder or {}).get("stage")
     _strip = ""
     if _ev_label or _stage:
         import html as _h
         _strip = (
-            '<div class="verdict-strip"><strong>' + _h.escape(str(verdict)) + "</strong>"
+            '<div class="verdict-strip"><strong>' + _h.escape(str(_stage)) + "</strong>"
             + (" &nbsp;|&nbsp; EV verdict: <strong>" + _h.escape(str(_ev_label)) + "</strong>" if _ev_label else "")
-            + (" &nbsp;|&nbsp; Ladder: <strong>" + _h.escape(str(_stage)) + "</strong>" if _stage else "")
             + "</div>"
         )
     return (
         f'<div class="verdict-banner {css_class}">'
         + _strip
-        + theme.verdict_hero(verdict, verdict_reasons)
+        + theme.verdict_hero(verdict, verdict_reasons, stage=_stage)
         + "</div>"
     )
 
