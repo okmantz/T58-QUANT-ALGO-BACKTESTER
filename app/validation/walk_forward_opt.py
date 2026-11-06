@@ -453,10 +453,40 @@ def _wants_retrain_context(strategy: Strategy) -> bool:
     return getattr(strategy, "source_type", None) == "python" and strategy.module_flag("RETRAIN_PER_FOLD")
 
 
-def _run_fold_test(fold: Fold, test_strategy: Strategy, risk: RiskConfig) -> BacktestResult:
-    """Runs a fold's test-window backtest. For most strategies this is
-    just `run_backtest(fold.test_df, test_strategy, risk)`, unchanged.
-    For a RETRAIN_PER_FOLD python strategy (see _wants_retrain_context),
+# 2026-11-05 audit: bars of history placed ahead of every fold's test window so slow indicators (a 200-bar EMA, ADX, HMM, anchored VWAP...)
+# are already warm when the first out-of-sample bar arrives. Before this, only RETRAIN_PER_FOLD strategies got that context; every
+# fixed-strategy fold started cold, which biased the early trades of each fold.
+FOLD_WARMUP_BARS = 5000
+
+
+def _fold_warmup_frame(fold: Fold, source_df: "pd.DataFrame | None", warmup_bars: int) -> pd.DataFrame:
+    """The ``warmup_bars`` bars immediately BEFORE the fold's first test bar: from the full history when supplied (this includes any
+    embargo gap, so the warm-up really is contiguous with the test window), else the tail of the fold's own train window."""
+    n = max(int(warmup_bars), 0)
+    test_df = fold.test_df
+    if n <= 0 or not len(test_df):
+        return test_df.iloc[0:0]
+    if source_df is not None and len(source_df):
+        try:
+            t0 = test_df["timestamp"].iloc[0]
+            idx = int(source_df["timestamp"].searchsorted(t0))
+            if idx > 0:
+                return source_df.iloc[max(0, idx - n):idx]
+        except Exception:  # noqa: BLE001 -- fall back to the train tail
+            pass
+    return fold.train_df.tail(n)
+
+
+def _run_fold_test(fold: Fold, test_strategy: Strategy, risk: RiskConfig, source_df: "pd.DataFrame | None" = None,
+                   warmup_bars: int | None = None) -> BacktestResult:
+    """Runs a fold's test-window backtest.
+
+    2026-11-05 audit: EVERY mode now gets warm-up context. A fixed-strategy fold runs ``warmup_bars`` (default ``FOLD_WARMUP_BARS``) of
+    preceding history plus the test window in ONE backtest, blocks entries during the warm-up bars (the engine's WARMUP_BARS rule, so no
+    trade is taken on data that belongs to the training window), and reports only trades entered inside the test window, with statistics
+    recomputed from those. Pass ``warmup_bars=0`` to reproduce the old cold start (kept for comparison runs / tests).
+
+    A RETRAIN_PER_FOLD python strategy (see _wants_retrain_context),
     instead concatenates the fold's own train_df ahead of test_df, tells
     the strategy exactly where the real boundary is via
     `df.attrs["wf_train_end_index"]`, runs ONE backtest over the combined
@@ -465,7 +495,32 @@ def _run_fold_test(fold: Fold, test_strategy: Strategy, risk: RiskConfig) -> Bac
     (not a re-split of the test window alone) while this fold's reported
     result still reflects only its own genuine out-of-sample window."""
     if not _wants_retrain_context(test_strategy):
-        return run_backtest(fold.test_df, test_strategy, risk)
+        wu = _fold_warmup_frame(fold, source_df, FOLD_WARMUP_BARS if warmup_bars is None else warmup_bars)
+        if not len(wu):
+            return run_backtest(fold.test_df, test_strategy, risk)
+        combined_w = pd.concat([wu, fold.test_df], ignore_index=True)
+        own_warm = int(getattr(test_strategy, "WARMUP_BARS", 0) or 0)
+        had_attr = "WARMUP_BARS" in getattr(test_strategy, "__dict__", {})
+        try:
+            test_strategy.WARMUP_BARS = len(wu) + own_warm
+        except Exception:  # noqa: BLE001 -- a strategy that refuses the attribute cannot block warm-up entries: fall back to the cold start
+            return run_backtest(fold.test_df, test_strategy, risk)
+        try:
+            full_w = run_backtest(combined_w, test_strategy, risk)
+        finally:
+            try:
+                if had_attr:
+                    test_strategy.WARMUP_BARS = own_warm
+                else:
+                    del test_strategy.WARMUP_BARS
+            except Exception:  # noqa: BLE001
+                pass
+        _t0 = pd.to_datetime(fold.test_df["timestamp"]).iloc[0]
+        kept = [t for t in full_w.trades if t.entry_time >= _t0]
+        eq = _rebuild_equity_curve(kept, risk.initial_balance)
+        st = compute_statistics(kept, eq, initial_balance=risk.initial_balance)
+        return BacktestResult(strategy_name=full_w.strategy_name, trades=kept, equity_curve=eq, statistics=st,
+                              initial_balance=risk.initial_balance, warnings=full_w.warnings)
 
     combined = pd.concat([fold.train_df, fold.test_df], ignore_index=True)
     combined.attrs["wf_train_end_index"] = len(fold.train_df)
@@ -599,7 +654,7 @@ def run_walk_forward_optimization(
                 else:
                     train_fitness = float("-inf")
 
-            test_bt = _run_fold_test(fold, test_strategy, risk)
+            test_bt = _run_fold_test(fold, test_strategy, risk, source_df=df)
             per_fold_fitness.append(train_fitness if math.isfinite(train_fitness) else 0.0)
             test_fitness = _fitness_of_backtest(test_bt, prop_rules, mc_config, refine_cfg)
             per_fold_test_fitness.append(test_fitness)

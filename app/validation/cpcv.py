@@ -57,6 +57,14 @@ import pandas as pd
 from app.backtest.engine import run_backtest
 from app.backtest.risk import RiskConfig, build_run_context
 from app.search.strategy_space import StrategySpaceError, build_strategy_from_spec
+from app.orchestration.resource_guard import physical_core_count
+
+
+CPCV_SCOPE_NOTE = (
+    "CPCV here tests ONE fixed parameter set across many train/test partitions: it measures how stable that set is, "
+    "not whether the optimizer that chose it generalizes (it does not re-fit parameters inside each training split). "
+    "Walk-forward with per-fold re-optimization is the test of the optimizer itself."
+)
 
 
 class CPCVError(Exception):
@@ -148,12 +156,99 @@ class CPCVResult:
     # money out of sample; None = too few trades to say (unproven, never a failure).
     oos_profitable: bool | None = None
     mean_oos_net_profit: float | None = None
+    # 2026-11-05 audit: HOW the paths were scored and WHAT the test does and does not prove.
+    #   method       "trade_assigned" (one continuous run, trades assigned to groups by entry time, overlapping trades purged) or
+    #                "spliced_frames" (legacy: slice + concatenate the groups and re-run -- only as a fallback)
+    #   embargo_*    the purge window actually used (the longer of the 1% rule and the strategy's longest holding time)
+    #   scope_note   CPCV scores ONE fixed parameter set; it does not re-fit inside each training split
+    method: str = "spliced_frames"
+    embargo_hours: float | None = None
+    longest_hold_hours: float | None = None
+    purged_trades: int | None = None
+    scope_note: str = CPCV_SCOPE_NOTE
 
     def to_dict(self) -> dict:
         d = {k: v for k, v in self.__dict__.items() if k != "paths"}
         d["paths"] = [p.__dict__ for p in self.paths]
         return d
 
+
+
+def _stats_from_trades(trades: list) -> dict:
+    """Light per-subset statistics for the non-Monte-Carlo CPCV metrics, computed from a trade list alone (no equity curve is needed
+    to rank paths). ``sharpe_ratio`` here is the PER-TRADE mean/SD of pnl (a comparable ranking value across paths, not an annualized figure)."""
+    pnls = np.array([float(t.pnl) for t in trades], dtype=float)
+    pnls = pnls[np.isfinite(pnls)]
+    n = int(len(pnls))
+    if n == 0:
+        return {"net_profit": 0.0, "total_trades": 0, "profit_factor": 0.0, "win_rate": 0.0, "sharpe_ratio": 0.0, "average_r": 0.0, "expectancy": 0.0}
+    gp = float(pnls[pnls > 0].sum())
+    gl = float(-pnls[pnls < 0].sum())
+    pf = float("inf") if gl == 0 and gp > 0 else (gp / gl if gl > 0 else 0.0)
+    sd = float(pnls.std(ddof=1)) if n > 1 else 0.0
+    sharpe = float(pnls.mean() / sd) if sd > 0 else 0.0
+    rs = [t.pnl / (t.initial_risk * t.size) for t in trades if getattr(t, "initial_risk", None) and t.initial_risk > 0 and t.size]
+    return {"net_profit": float(pnls.sum()), "total_trades": n, "profit_factor": pf, "win_rate": float((pnls > 0).mean() * 100.0),
+            "sharpe_ratio": sharpe, "average_r": float(np.mean(rs)) if rs else 0.0, "expectancy": float(pnls.mean())}
+
+
+def _group_time_edges(df: pd.DataFrame, bounds) -> tuple[np.ndarray, np.ndarray, int]:
+    """(group_start_ns, group_end_ns, bar_ns): the wall-clock span of each contiguous bar group (end is exclusive)."""
+    ts = pd.DatetimeIndex(df["timestamp"]).asi8
+    n = len(ts)
+    diffs = np.diff(ts)
+    bar_ns = int(np.median(diffs[diffs > 0])) if (diffs > 0).any() else 60_000_000_000
+    starts = np.array([ts[lo] for lo, _hi in bounds], dtype=np.int64)
+    ends = np.array([ts[hi] if hi < n else ts[-1] + bar_ns for _lo, hi in bounds], dtype=np.int64)
+    return starts, ends, bar_ns
+
+
+def _trade_assigned_paths(df, trades, bounds, all_combos, embargo_bars, metric, prop_rules, mc_cfg):
+    """Score every CPCV path from ONE continuous run's trade list.
+
+    2026-11-05 audit: the old path slicing joined non-adjacent groups with ``pd.concat`` and re-ran the strategy over the joined frame, so
+    indicators saw jumps that never happened and every group started cold. Here the strategy runs once over the full history (indicators
+    are warm everywhere); each trade belongs to the group it was ENTERED in; and the textbook purge removes every TRAIN trade whose
+    [entry, exit] interval touches a test window or the embargo after it. The embargo is the longer of the legacy 1% rule and the strategy's
+    own longest holding time, so a trade held for a session or more cannot leak across a boundary.
+
+    Returns (paths, meta)."""
+    starts, ends, bar_ns = _group_time_edges(df, bounds)
+    entry_ns = (pd.DatetimeIndex([t.entry_time for t in trades]).asi8 if trades else np.empty(0, dtype=np.int64))
+    exit_ns = (pd.DatetimeIndex([t.exit_time for t in trades]).asi8 if trades else np.empty(0, dtype=np.int64))
+    hold_ns = np.maximum(exit_ns - entry_ns, 0) if len(entry_ns) else np.empty(0, dtype=np.int64)
+    longest_hold = int(hold_ns.max()) if len(hold_ns) else 0
+    embargo_ns = int(max(embargo_bars * bar_ns, longest_hold))
+    # Which group was each trade entered in? (searchsorted on group starts; entries before the first start fall in group 0.)
+    grp = np.clip(np.searchsorted(starts, entry_ns, side="right") - 1, 0, len(bounds) - 1) if len(entry_ns) else np.empty(0, dtype=int)
+    paths = []
+    purged_total = 0
+    for path_idx, test_groups in enumerate(all_combos):
+        tg = set(test_groups)
+        in_test = np.isin(grp, list(tg)) if len(grp) else np.empty(0, dtype=bool)
+        touch = np.zeros(len(grp), dtype=bool)
+        for g in tg:
+            touch |= (exit_ns >= starts[g]) & (entry_ns < ends[g] + embargo_ns)
+        train_mask = (~in_test) & (~touch)
+        purged_total += int(((~in_test) & touch).sum())
+        test_trades = [t for t, m in zip(trades, in_test) if m]
+        train_trades = [t for t, m in zip(trades, train_mask) if m]
+        test_bars = int(sum(bounds[g][1] - bounds[g][0] for g in tg))
+        train_bars = int(sum(hi - lo for g, (lo, hi) in enumerate(bounds) if g not in tg))
+        if test_bars < 5 or train_bars < 10:
+            continue
+        if metric in ("eval_pass_probability", "mean_r"):
+            is_val = _metric_value({}, metric, train_trades, prop_rules, mc_cfg)
+            oos_val = _metric_value({}, metric, test_trades, prop_rules, mc_cfg)
+        else:
+            is_val = _metric_value(_stats_from_trades(train_trades), metric, train_trades, prop_rules, mc_cfg)
+            oos_val = _metric_value(_stats_from_trades(test_trades), metric, test_trades, prop_rules, mc_cfg)
+        oos_net = float(sum(t.pnl for t in test_trades if np.isfinite(t.pnl)))
+        paths.append(CPCVPathResult(path_index=path_idx, test_group_indices=tuple(test_groups), train_bars=train_bars, test_bars=test_bars,
+                                    in_sample_metric=is_val, out_of_sample_metric=oos_val, oos_net_profit=oos_net, oos_trades=len(test_trades)))
+    hour = 3_600_000_000_000
+    meta = {"embargo_hours": embargo_ns / hour, "longest_hold_hours": longest_hold / hour, "purged_trades": purged_total}
+    return paths, meta
 
 def _cpcv_path_frames(df: pd.DataFrame, bounds, embargo: int, test_groups):
     """(train_df, test_df) for one CPCV path -- the exact slicing the
@@ -241,8 +336,14 @@ def run_cpcv(
     strategy_spec=None,
     tmp_dir=None,
     max_workers: int | None = None,
+    trade_assigned: bool = True,
 ) -> CPCVResult:
     """
+    trade_assigned (2026-11-05 audit, default True): run the strategy ONCE over the full history and assign each trade to a group by
+    entry time, purging train trades that overlap a test window or its embargo (embargo >= the strategy's longest holding time). False
+    restores the legacy slice-and-concatenate scoring (indicators cold-start in every group and straddle gaps) -- kept only as the
+    automatic fallback if the single full run cannot be scored.
+
     strategy_builder: zero-argument callable returning a FRESH Strategy
     instance each call (same convention as app.search.robustness.
     run_walk_forward) -- required because some strategy sources cache
@@ -278,6 +379,15 @@ def run_cpcv(
         idx = rng.choice(len(all_combos), size=max_paths, replace=False)
         all_combos = [all_combos[i] for i in sorted(idx)]
 
+    _cpcv_meta = None
+    _trade_paths = None
+    if trade_assigned:
+        try:
+            _full_bt = run_backtest(df, strategy_builder(), risk)
+            _trade_paths, _cpcv_meta = _trade_assigned_paths(df, list(_full_bt.trades), bounds, all_combos, embargo, metric, prop_rules, mc_cfg)
+        except Exception:  # noqa: BLE001 -- the legacy spliced scoring below is the fallback
+            _trade_paths, _cpcv_meta = None, None
+
     # v9.15 (WS-F): spec-driven parallel path evaluation. Indexed
     # collection keeps `paths` in combo order (thin paths omitted,
     # exactly as the serial loop's `continue` omits them); any pool
@@ -285,7 +395,7 @@ def run_cpcv(
     # pool can never change the result, only the speed.
     path_results: list = [None] * len(all_combos)
     _want_cpcv_parallel = (
-        strategy_spec is not None and max_workers is not None
+        _trade_paths is None and strategy_spec is not None and max_workers is not None
         and int(max_workers) > 1 and len(all_combos) > 1
     )
     if _want_cpcv_parallel:
@@ -310,8 +420,8 @@ def run_cpcv(
         except Exception:  # noqa: BLE001 -- serial below is the same math
             path_results = [None] * len(all_combos)
 
-    paths: list[CPCVPathResult] = []
-    for path_idx, test_groups in enumerate(all_combos):
+    paths: list[CPCVPathResult] = list(_trade_paths) if _trade_paths is not None else []
+    for path_idx, test_groups in enumerate(all_combos if _trade_paths is None else []):
         _one = path_results[path_idx]
         if _one is None and not _want_cpcv_parallel:
             _one = _cpcv_one_path(path_idx, test_groups, df, bounds, embargo,
@@ -367,6 +477,10 @@ def run_cpcv(
         robustness_threshold=robustness_threshold,
         oos_profitable=_oos_profitable,
         mean_oos_net_profit=_mean_oos_net if _total_oos_trades else None,
+        method="trade_assigned" if _cpcv_meta else "spliced_frames",
+        embargo_hours=_cpcv_meta["embargo_hours"] if _cpcv_meta else None,
+        longest_hold_hours=_cpcv_meta["longest_hold_hours"] if _cpcv_meta else None,
+        purged_trades=_cpcv_meta["purged_trades"] if _cpcv_meta else None,
     )
 
 
@@ -684,7 +798,7 @@ def compute_pbo(
 
                 from app.orchestration.resource_guard import safe_worker_count
 
-                requested = int(max_workers) if max_workers else (os.cpu_count() or 1)
+                requested = int(max_workers) if max_workers else physical_core_count()
                 workers = safe_worker_count(
                     df, requested=min(requested, len(tasks)),
                     max_candidates_in_flight=len(tasks))

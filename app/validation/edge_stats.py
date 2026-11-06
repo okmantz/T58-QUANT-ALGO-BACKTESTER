@@ -26,7 +26,37 @@ import numpy as np
 Z_ONE_SIDED_95 = 1.6448536269514722
 Z_TWO_SIDED_95 = 1.959963984540054
 Z_POWER_80 = 0.8416212335729143
-DEFAULT_TRADE_SD_R = 1.3          # per-trade standard deviation of R the report's simulations assume
+DEFAULT_TRADE_SD_R = 1.3          # per-trade standard deviation of R the report's simulations assume (a PRIOR, not a measurement)
+MEASURED_SD_MIN_TRADES = 30       # at or above this many trades the strategy's OWN sample SD replaces the prior
+MEASURED_SD_FLOOR_R = 0.25        # a degenerate near-zero sample SD must never turn a t-statistic into infinity
+MEASURED_SD_CEIL_R = 6.0
+
+
+def blended_trade_sd_r(sample_sd: float | None, n_trades: int, prior: float = DEFAULT_TRADE_SD_R) -> float:
+    """Per-trade SD of R to use in a t-statistic / power calculation.
+
+    2026-11-05 audit: the fixed 1.3R prior under-credits a tight, high-hit-rate strategy (true SD ~0.8R) and over-credits a
+    lottery-style one (SD above 2R). With ``MEASURED_SD_MIN_TRADES`` or more trades the sample SD is used directly; below that it is
+    shrunk linearly toward the prior (weight n/30 on the sample), so a handful of trades cannot swing the statistic. An unmeasurable
+    sample (None / non-finite / non-positive) returns the prior. Always clamped to [MEASURED_SD_FLOOR_R, MEASURED_SD_CEIL_R]."""
+    try:
+        n = int(n_trades or 0)
+        sd = float(sample_sd) if sample_sd is not None else float("nan")
+    except (TypeError, ValueError):
+        return float(prior)
+    if n < 2 or not math.isfinite(sd) or sd <= 0:
+        return float(prior)
+    w = 1.0 if n >= MEASURED_SD_MIN_TRADES else n / float(MEASURED_SD_MIN_TRADES)
+    out = w * sd + (1.0 - w) * float(prior)
+    return float(min(max(out, MEASURED_SD_FLOOR_R), MEASURED_SD_CEIL_R))
+
+
+def sd_basis_label(n_trades: int) -> str:
+    """Plain-language note on where the SD in a t-statistic came from (for reports)."""
+    n = int(n_trades or 0)
+    if n >= MEASURED_SD_MIN_TRADES:
+        return f"measured from this strategy's own {n} trades"
+    return f"blended toward the {DEFAULT_TRADE_SD_R:g}R prior ({n} trades is under {MEASURED_SD_MIN_TRADES})"
 
 
 def _norm_ppf(p: float) -> float:
@@ -155,6 +185,81 @@ def day_block_bootstrap_mean(r, days=None, conf: float = 0.95, n_boot: int = 200
 
 
 # ---------------------------------------------------------------------------------------------------------
+# Stationary bootstrap: does the verdict depend on the "one trading day = one independent block" assumption?
+# ---------------------------------------------------------------------------------------------------------
+
+def stationary_bootstrap_means(day_sum: np.ndarray, day_cnt: np.ndarray, mean_block_days: float = 4.0,
+                               n_boot: int = 2000, seed: int = 11) -> np.ndarray:
+    """Politis-Romano stationary bootstrap of the pooled mean R over the TRADING-DAY sequence.
+
+    ``day_sum`` / ``day_cnt`` are per-day sums and trade counts in chronological order. Blocks of consecutive days are glued together with
+    geometrically distributed length (mean ``mean_block_days``, circular), so a volatility regime that lasts a week stays together in each
+    resample. Returns one bootstrap mean per replicate. ``mean_block_days <= 1`` reduces to the ordinary day-block bootstrap."""
+    day_sum = np.asarray(day_sum, dtype=float)
+    day_cnt = np.asarray(day_cnt, dtype=float)
+    m = int(day_sum.size)
+    rng = np.random.default_rng(seed)
+    if m == 0:
+        return np.zeros(int(n_boot))
+    p_new = 1.0 / max(float(mean_block_days), 1.0)
+    restart = rng.random((int(n_boot), m)) < p_new
+    restart[:, 0] = True
+    starts = rng.integers(0, m, size=(int(n_boot), m))
+    t = np.arange(m)[None, :]
+    last_t = np.maximum.accumulate(np.where(restart, t, 0), axis=1)
+    base = np.take_along_axis(starts, last_t, axis=1)
+    idx = (base + (t - last_t)) % m
+    return day_sum[idx].sum(axis=1) / np.maximum(day_cnt[idx].sum(axis=1), 1.0)
+
+
+def block_sensitivity(r, days, mean_blocks=(3.0, 5.0), conf: float = 0.95, n_boot: int = 2000, seed: int = 11,
+                      shift_tol: float = 0.10) -> dict | None:
+    """Re-test the pooled mean R under stationary bootstraps with a mean block of 3-5 days and report how far the answer moves.
+
+    ``p_positive`` is the share of resamples whose mean R is above zero (the bootstrap pass probability). The one-day-block figure is the
+    baseline the gates already use. ``sensitive`` is True when the pass probability moves by more than ``shift_tol`` (default 10 points)
+    or when the lower bound flips from above zero to at/below zero -- in which case the verdict should say the result leans on the
+    one-day-block assumption. None when there are fewer than 5 trades or fewer than 5 distinct trading days."""
+    a_all = np.asarray([x if x is not None else np.nan for x in (r if r is not None else [])], dtype=float)
+    keep = np.isfinite(a_all)
+    a = a_all[keep]
+    if a.size < 5 or days is None:
+        return None
+    d = [x for x, k in zip(list(days), keep) if k]
+    codes, n_days = _day_codes(d)
+    if n_days < 5:
+        return None
+    day_sum = np.bincount(codes, weights=a, minlength=n_days)
+    day_cnt = np.bincount(codes, minlength=n_days).astype(float)
+    pct = (1.0 - conf) * 100.0
+    out: dict = {"n_days": int(n_days), "p_positive": {}, "lb": {}}
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, n_days, size=(int(n_boot), n_days))
+    base = day_sum[idx].sum(axis=1) / np.maximum(day_cnt[idx].sum(axis=1), 1.0)
+    out["p_positive"]["1d"] = float((base > 0).mean())
+    out["lb"]["1d"] = float(np.percentile(base, pct))
+    for L in mean_blocks:
+        means = stationary_bootstrap_means(day_sum, day_cnt, float(L), n_boot=n_boot, seed=seed + int(L))
+        key = f"{int(L)}d"
+        out["p_positive"][key] = float((means > 0).mean())
+        out["lb"][key] = float(np.percentile(means, pct))
+    base_p = out["p_positive"]["1d"]
+    shifts = [abs(v - base_p) for k, v in out["p_positive"].items() if k != "1d"]
+    out["max_shift"] = float(max(shifts)) if shifts else 0.0
+    out["lb_flips"] = bool(out["lb"]["1d"] > 0 and any(v <= 0 for k, v in out["lb"].items() if k != "1d"))
+    out["sensitive"] = bool(out["max_shift"] > shift_tol or out["lb_flips"])
+    worst = min(out["p_positive"].values())
+    if out["sensitive"]:
+        out["note"] = (f"block-length sensitivity: the chance the edge is positive moves from {base_p * 100:.0f}% (one-day blocks) to as low as "
+                       f"{worst * 100:.0f}% when a week-long volatility regime is kept together"
+                       + ("; the lower bound drops to zero or below" if out["lb_flips"] else "") + " -- treat this result as leaning on the one-day-block assumption")
+    else:
+        out["note"] = (f"block-length check: pass probability stays within {out['max_shift'] * 100:.0f} points "
+                       f"({base_p * 100:.0f}% with one-day blocks) when blocks of 3-5 days are used")
+    return out
+
+
+# ---------------------------------------------------------------------------------------------------------
 # Pooled out-of-sample edge (the walk-forward / CPCV gate)
 # ---------------------------------------------------------------------------------------------------------
 
@@ -202,6 +307,7 @@ class PooledEdge:
     group_trades: list = field(default_factory=list)
     trades_needed_more: int | None = None
     note: str = ""
+    block_sensitivity: dict | None = None   # stationary-bootstrap (3-5 day blocks) sensitivity of the pass probability
 
     @property
     def passed(self) -> bool:

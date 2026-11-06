@@ -43,6 +43,7 @@ class PooledEdgeResult:
     per_market: list = field(default_factory=list)
     trades_still_needed: int | None = None
     notes: list = field(default_factory=list)
+    block_sensitivity: dict | None = None         # stationary-bootstrap (3-5 day blocks) check of the pass probability (2026-11-05)
 
     @property
     def passed(self) -> bool:
@@ -138,6 +139,13 @@ def pooled_edge_test(per_market: dict, *, cost_multiplier: float = DEFAULT_COST_
     res.lb_r = float(np.percentile(means, (1.0 - conf) * 100.0))
     res.ub_r = float(np.percentile(means, conf * 100.0))
     res.p_value = float((1 + (means <= 0).sum()) / (int(n_boot) + 1))
+    try:
+        from app.validation.edge_stats import block_sensitivity
+        res.block_sensitivity = block_sensitivity(list(r), days, conf=conf, n_boot=min(int(n_boot), 1500), seed=seed)
+        if res.block_sensitivity and res.block_sensitivity.get("sensitive"):
+            res.notes.append(res.block_sensitivity["note"])
+    except Exception:  # noqa: BLE001 -- a sensitivity check must never break the gate
+        pass
     if r.size < min_trades:
         res.status = "INSUFFICIENT"
         res.notes.append(f"{int(r.size)} pooled trades < the {min_trades}-trade floor")
