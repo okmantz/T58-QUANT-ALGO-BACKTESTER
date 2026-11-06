@@ -97,7 +97,7 @@ class PipelinesMixin:
             "Enable adaptive, limit-aware position sizing (throttles risk as the account "
             "nears its daily-loss/max-drawdown limits; same engine as 05 Run & Report's "
             "Adaptive Risk section, applied automatically to every backtest this pipeline runs)",
-            False,
+            True,
         )
         self.fp_reset_on_breach = LabeledCheckbox(
             settings,
@@ -308,7 +308,7 @@ class PipelinesMixin:
         self.qopt_n_folds = LabeledEntry(settings, "Walk-forward folds", 4)
         self.qopt_final_mc_sims = LabeledEntry(settings, "Final Monte Carlo sims", 1000)
         self.qopt_reset_on_breach = LabeledCheckbox(settings, "Reset-on-breach (prop-firm realistic) search basis", True)
-        self.qopt_adaptive_risk = LabeledCheckbox(settings, "Enable adaptive, limit-aware position sizing", False)
+        self.qopt_adaptive_risk = LabeledCheckbox(settings, "Enable adaptive, limit-aware position sizing", True)
         self.qopt_reserve_holdout = LabeledCheckbox(settings, "Reserve a holdout slice (required; unchecking makes Quick Optimize refuse to rank)", True)
         self.qopt_save_to_library = LabeledCheckbox(settings, "Save the result to the Strategy Library (tagged \"draft\")", True)
 

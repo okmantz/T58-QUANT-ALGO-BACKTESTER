@@ -205,7 +205,7 @@ class EvolutionLabMixin:
             cfg_section,
             "Enable adaptive, limit-aware position sizing for every candidate this run "
             "evaluates (same engine as 05 Run & Report's Adaptive Risk section)",
-            False,
+            True,
         )
         self.evo_reset_on_breach = LabeledCheckbox(
             cfg_section,

@@ -269,7 +269,7 @@ class PropRiskMixin:
             "rules stack multiplicatively (e.g. two active 0.5x rules together size at "
             "0.25x, not 0.5x).",
         )
-        self.adaptive_risk_enabled = LabeledCheckbox(adaptive_section, "Enable adaptive risk for Run & Report (Step 5)", False)
+        self.adaptive_risk_enabled = LabeledCheckbox(adaptive_section, "Enable adaptive risk for Run & Report (Step 5)", True)
         self.adaptive_profit_target_pct = LabeledEntry(
             adaptive_section, "Profit target (% of balance, for 'progress to target' rules)", 8.0,
         )

@@ -203,7 +203,7 @@ class StrategyConfigMixin:
             library_section,
             "OPTIMIZE SELECTED: enable adaptive, limit-aware position sizing on the search "
             "(same engine as 05 Run & Report's Adaptive Risk section)",
-            False,
+            True,
         )
 
         # 2026-09-17 fix, point (5): mirrors the web app's "Reserve a
