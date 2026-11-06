@@ -68,10 +68,11 @@ def test_no_winner_skips_forward_test_and_reports_guidance(tmp_path, monkeypatch
 
     assert result.winner_verdict is None
     assert not result.forward_test_started
-    assert "no winner" in result.forward_test_message.lower() or "no winner" in result.forward_test_message.lower()
+    assert "no candidate cleared" in result.forward_test_message.lower()
     assert result.report_path.exists()
     text = result.report_path.read_text()
-    assert "No winner produced" in text
+    assert "FORWARD-TEST CANDIDATE stage of the verdict ladder" in text
+    assert "winner" not in text.lower()
     assert "Try a different family" in text
 
 
