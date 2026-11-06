@@ -169,15 +169,23 @@ def deflated_step(observed_daily: np.ndarray, pool_matrix: np.ndarray | None, n_
 
 def pooled_step(per_market: dict, cfg: PromotionConfig) -> StepResult:
     """Step 4 (poolable families). Needs >= ``pooled_min_markets`` markets WITH trades; fewer is an honest INSUFFICIENT, not a pass."""
+    from app.data.market_pool import dedupe_r_series
     from app.validation.pooled_edge import pooled_edge_test
+    # 2026-11-05 audit: count INDEPENDENT markets. A micro and its full-size contract (ES / MES, NQ / MNQ), or two files of one market, are
+    # the same bars and produce the same trades, so they are one observation. Collapse them before counting and before pooling.
+    per_market, _dups = dedupe_r_series(per_market)
     with_trades = [m for m, (rs, _d) in per_market.items() if rs]
+    dup_note = ("; not counted as separate markets: " + "; ".join(f"{k} ({v})" for k, v in _dups.items())) if _dups else ""
     if len(with_trades) < cfg.pooled_min_markets:
         return StepResult("pooled_edge", False, detail=(
-            f"only {len(with_trades)} market(s) with trades (< {cfg.pooled_min_markets}); run scripts/bootstrap_data.py to see which "
+            f"only {len(with_trades)} independent market(s) with trades (< {cfg.pooled_min_markets}){dup_note}; run scripts/bootstrap_data.py to see which "
             f"target markets are missing -- a pooled test on fewer markets is not the pooled test"),
-            data={"markets": sorted(with_trades), "status": "INSUFFICIENT"})
+            data={"markets": sorted(with_trades), "status": "INSUFFICIENT", "duplicates": dict(_dups), "n_independent": len(with_trades),
+                  "floor": int(cfg.pooled_min_markets)})
     res = pooled_edge_test(per_market, cost_multiplier=cfg.cost_multiplier, min_trades=cfg.pooled_min_trades, conf=cfg.pooled_conf)
-    return StepResult("pooled_edge", res.passed, detail=res.render(), data=res.to_dict())
+    data = res.to_dict()
+    data.update({"duplicates": dict(_dups), "n_independent": len(with_trades), "floor": int(cfg.pooled_min_markets)})
+    return StepResult("pooled_edge", res.passed, detail=res.render() + dup_note, data=data)
 
 
 def sealed_step(rs: list, days: list, *, tied: bool, cfg: PromotionConfig, looks: int = 1) -> StepResult:

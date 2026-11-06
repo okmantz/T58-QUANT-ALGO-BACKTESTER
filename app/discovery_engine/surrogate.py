@@ -22,6 +22,7 @@ runs per planted-edge size (GATE_MIN_NULL_RUNS / GATE_MIN_PLANT_RUNS), whatever 
 """
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import time
@@ -33,9 +34,15 @@ import pandas as pd
 
 GATE_SCHEMA = 1
 MAX_REPORT_AGE_DAYS = 90.0
-CODE_GLOBS = ("app/discovery_engine/*.py", "app/search/families_v13.py", "app/search/batch_runner.py", "app/evolution/engine.py",
-              "app/evolution/edge_fitness.py", "app/validation/trial_ledger.py", "app/validation/pooled_edge.py",
-              "app/validation/null_edge_gate.py", "app/strategy/indicators_v13*.py")
+# 2026-11-05 audit: the report used to be bound to a hash of EVERY discovery-engine file plus the evolution engine, so any edit -- a log
+# message, a UI label, an unrelated refactor -- closed the gate and left the v13 families idle until a multi-hour study was re-run.
+# The hash now covers only the files that decide WHAT the search finds and WHAT it promotes: the objective and entry floor, the
+# promotion sequence, the Stage-1 screener, the null-gate, the pooled-edge test and the edge statistics they share, the family
+# definitions and their indicators, and the trial ledger that deflates every verdict. It is a hash of each file's SYNTAX TREE with
+# docstrings removed, so comments, formatting and docstring edits never invalidate a study; a real change to any of these files does.
+CODE_GLOBS = ("app/discovery_engine/objective.py", "app/discovery_engine/promotion.py", "app/search/numba_screener.py",
+              "app/validation/null_edge_gate.py", "app/validation/pooled_edge.py", "app/validation/edge_stats.py",
+              "app/validation/trial_ledger.py", "app/search/families_v13.py", "app/strategy/indicators_v13*.py")
 _ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -150,14 +157,55 @@ class SurrogateReport:
         return dict(self.__dict__)
 
 
+def _strip_docstrings(tree: ast.AST) -> ast.AST:
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            body = getattr(node, "body", None)
+            if body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], "value", None), ast.Constant) and isinstance(body[0].value.value, str):
+                node.body = body[1:] or [ast.Pass()]
+    return tree
+
+
+def _behavior_fingerprint(path: Path) -> bytes:
+    """Bytes that change when the file's BEHAVIOUR changes: the AST dump with docstrings removed (raw bytes when it cannot be parsed)."""
+    raw = path.read_bytes()
+    try:
+        return ast.dump(_strip_docstrings(ast.parse(raw)), include_attributes=False).encode()
+    except (SyntaxError, ValueError):
+        return raw
+
+
 def code_hash(root: Path | None = None) -> str:
     root = Path(root) if root else _ROOT
     h = hashlib.sha256()
     files = sorted({p for g in CODE_GLOBS for p in root.glob(g) if p.is_file() and p.name != "__pycache__"})
     for p in files:
         h.update(str(p.relative_to(root)).encode())
-        h.update(p.read_bytes())
+        h.update(_behavior_fingerprint(p))
     return h.hexdigest()[:20]
+
+
+def combined_false_positive(path: Path | None = None, *, now: float | None = None, current_hash: str | None = None) -> dict:
+    """ONE combined false-positive estimate for the whole promotion chain (null gate + pooled test + deflated Sharpe + sealed slice).
+
+    2026-11-05 audit: those gates all draw on overlapping data, so multiplying their individual p-values is wrong in both directions. The
+    surrogate study feeds the REAL chain with data that has no edge and counts how often it still hands out a forward-test candidate;
+    that share is the chain's empirical false-discovery rate. Returns {"available", "rate", "upper95", "n_null", "fresh", "text"}.
+    ``fresh`` is False when the report predates a behaviour change or is older than MAX_REPORT_AGE_DAYS (the figure is then still
+    shown, labelled stale, never silently dropped)."""
+    rep = load_report(path)
+    if not rep or not int(rep.get("n_null", 0)):
+        return {"available": False, "rate": None, "upper95": None, "n_null": 0, "fresh": False,
+                "text": "Combined false-positive rate: not measured yet (the surrogate study has not run on this install)."}
+    now = time.time() if now is None else now
+    age_days = (now - float(rep.get("created_at", 0))) / 86400.0
+    fresh = bool(age_days <= MAX_REPORT_AGE_DAYS and rep.get("code_hash") == (current_hash or code_hash()))
+    rate, upper, n = float(rep.get("null_rate", 0.0)), float(rep.get("null_rate_upper95", 1.0)), int(rep.get("n_null", 0))
+    k = int(rep.get("null_candidates", round(rate * n)))
+    text = (f"Combined false-positive rate of the whole chain: {k} of {n} no-edge runs produced a forward-test candidate "
+            f"({rate:.1%}; true rate is below {upper:.1%} at 95% confidence)."
+            + ("" if fresh else " This was measured before the latest change to the search/promotion code or more than 90 days ago, so treat it as an estimate."))
+    return {"available": True, "rate": rate, "upper95": upper, "n_null": n, "null_candidates": k, "fresh": fresh, "text": text}
 
 
 def run_surrogate_study(pipeline, *, n_null: int = 60, planted_targets=(0.10, 0.20, 0.30), n_planted: int = 10, n_markets: int = 8, days: int = 80,

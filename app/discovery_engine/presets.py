@@ -34,12 +34,13 @@ class Preset:
     loop: bool = False                # loop mode: stop at the target, then the MANDATORY sequence runs and a failed step fails the run
     prop_floor_mode: str = "sizing_only"
     overrides: dict = field(default_factory=dict)
+    convergence: bool = False         # search backend only: keep drawing fresh batches while they still add new distinct signal sets
 
 
 PRESETS: dict[str, Preset] = {p.name: p for p in (
     Preset("search_lab", "Search Lab", "search",
            "Finite family-grid sweep: every enabled family's grid is evaluated once and ranked by edge_lb_r.",
-           families="all", max_candidates=2000, top_n_promote=3),
+           families="all", max_candidates=2000, top_n_promote=3, convergence=True),
     Preset("evolution_lab", "Evolution Lab", "evolution",
            "Population evolution (family immigrants + grammar, elites, mutation) on the same objective, floor and trial ledger.",
            families="all", top_n_promote=3),

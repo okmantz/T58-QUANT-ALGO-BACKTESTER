@@ -340,6 +340,9 @@ def _search_backend(req: EngineRequest, preset: Preset, families: list, df) -> B
     try:
         summary = run_search(df, req.risk, req.prop_rules, space, cfg, db_path=str(wd / "search.db"), instrument=req.instrument,
                              timeframe=req.timeframe, progress_cb=req.progress_cb, cancel_event=req.cancel_event)
+        extra_champs, extra_evals = [], 0
+        if getattr(preset, "convergence", False) and not (req.cancel_event and req.cancel_event.is_set()):
+            extra_champs, extra_evals = _converge(req, preset, families, df, cfg, wd, summary, led, scope, notes)
     finally:
         if led is not None:
             try:
@@ -356,8 +359,52 @@ def _search_backend(req: EngineRequest, preset: Preset, families: list, df) -> B
                 led.finish_run(tested=n)
             except Exception:  # noqa: BLE001
                 pass
-    return BackendOutput(native=summary, champions=_champions_from_db(wd / "search.db", summary.run_id), evaluations=int(summary.total_candidates),
-                         notes=notes)
+    champs = _champions_from_db(wd / "search.db", summary.run_id)
+    seen_ids = {c.get("candidate_id") for c in champs}
+    champs += [c for c in extra_champs if c.get("candidate_id") not in seen_ids]
+    return BackendOutput(native=summary, champions=champs, evaluations=int(summary.total_candidates) + int(extra_evals), notes=notes)
+
+
+def _converge(req, preset, families, df, cfg, wd, first_summary, led, scope, notes):
+    """Convergence-driven budget (see app.discovery_engine.convergence): after the first batch, keep drawing fresh batches while each still adds
+    new distinct signal sets. Returns (extra champions, extra evaluations). Never raises -- a failure here leaves the first batch's result."""
+    from app.discovery_engine.convergence import ConvergenceTracker
+    from app.search.batch_runner import run_search
+    from app.search.results_db import ResultsDB
+    from app.search.strategy_space import generate_search_space
+    tracker = ConvergenceTracker()
+    extra_champs: list = []
+    extra_evals = 0
+    try:
+        def rows_of(db_path, run_id):
+            with ResultsDB(db_path) as db:
+                return db.leaderboard(run_id, stage="stage1", top_n=200000, only_passed=False)
+        tracker.add_round(rows_of(wd / "search.db", first_summary.run_id), int(first_summary.total_candidates))
+        want = int(req.max_candidates or preset.max_candidates)
+        k = 1
+        while tracker.should_continue() and not (req.cancel_event and req.cancel_event.is_set()):
+            k += 1
+            seed = int(req.seed) + 104729 * k + (7919 * led.run_count(scope) if led is not None else 0)
+            space = generate_search_space(mode="family", family="all", only_families=list(families), max_candidates=want, seed=seed,
+                                          has_pair_data=bool(req.overrides.get("has_pair_data")), has_calendar_data=bool(req.overrides.get("has_calendar_data")))
+            if led is not None:
+                from app.search.ledger_search import fresh_space
+                fresh_space(space, led, scope, req.timeframe, want)
+            if not space.candidates:
+                notes.append("Convergence: no unseen variants were left to draw -- the grid is exhausted.")
+                break
+            if req.progress_cb:
+                req.progress_cb(f"Convergence round {k}: the last batch still found new signal sets; drawing {len(space.candidates):,} more...")
+            db_path = wd / f"search_r{k}.db"
+            summ = run_search(df, req.risk, req.prop_rules, space, cfg, db_path=str(db_path), instrument=req.instrument,
+                              timeframe=req.timeframe, progress_cb=req.progress_cb, cancel_event=req.cancel_event)
+            extra_evals += int(summ.total_candidates)
+            extra_champs += _champions_from_db(db_path, summ.run_id)
+            tracker.add_round(rows_of(db_path, summ.run_id), int(summ.total_candidates))
+        notes.append(tracker.note())
+    except Exception as exc:  # noqa: BLE001
+        notes.append(f"Convergence check stopped early ({type(exc).__name__}: {exc}); the first batch's result stands.")
+    return extra_champs, extra_evals
 
 
 def _champions_from_db(db_path, run_id, top_n: int = 25) -> list:

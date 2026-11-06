@@ -60,17 +60,23 @@ LEGACY_FLOOR = EntryFloor(min_trades=20, min_t_stat=0.0, max_cost_in_r=0.0, min_
 
 
 def mean_r_t_stat(stats: dict) -> float:
-    """Approximate t-stat of mean R from summary statistics: ``average_r * sqrt(n) / sd_r`` with sd_r the report's 1.3R.
+    """t-stat of mean R from summary statistics: ``average_r * sqrt(n) / sd_r``.
+
+    2026-11-05 audit: ``sd_r`` is the strategy's OWN measured per-trade SD (``stats["std_r"]``) once it has 30+ trades, shrunk toward the
+    1.3R prior below that (``app.validation.edge_stats.blended_trade_sd_r``). A tight high-hit-rate strategy is no longer under-credited
+    and a lottery-style one is no longer over-credited. Stats dicts that carry no ``std_r`` (old saved results) fall back to the 1.3R prior.
 
     -inf when it cannot be measured (fewer than 2 trades / non-finite average); +inf on an unexpected stats shape so a
     surprise can never silently reject a candidate (same convention as Search Lab's original helper)."""
     try:
-        from app.validation.edge_stats import DEFAULT_TRADE_SD_R
+        from app.validation.edge_stats import blended_trade_sd_r
         n = float(stats.get("total_trades", 0) or 0)
         ar = float(stats.get("average_r", 0.0) or 0.0)
         if n < 2 or not math.isfinite(ar):
             return float("-inf")
-        return ar * math.sqrt(n) / DEFAULT_TRADE_SD_R
+        n_sd = int(stats.get("n_r_trades", 0) or 0) or int(n)
+        sd = blended_trade_sd_r(stats.get("std_r"), n_sd)
+        return ar * math.sqrt(n) / sd
     except Exception:  # noqa: BLE001
         return float("inf")
 
