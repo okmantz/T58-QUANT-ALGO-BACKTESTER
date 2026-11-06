@@ -300,9 +300,14 @@ def apply_instrument_spec(risk: RiskConfig, symbol: str) -> RiskConfig:
             "contract_size directly for anything not in this list, or add a new "
             "InstrumentSpec to app.data.instrument_specs.KNOWN_INSTRUMENTS."
         )
+    from app.backtest.risk import UntouchedDefault, is_untouched
     updates = {"pip_size": spec.pip_size, "contract_size": spec.contract_size}
     if risk.commission_per_contract == 0.0:
         updates["commission_per_contract"] = spec.default_commission_round_turn
+        # The stock flat $3/trade would be charged ON TOP of the per-contract rate we just filled (double commission).
+        # Only the untouched default is removed; a flat fee the user typed is theirs and stays.
+        if isinstance(risk.commission_per_trade, UntouchedDefault):
+            updates["commission_per_trade"] = 0.0
     # C5 + ACCURACY FIX (2026-10-07): the spec's spread/slippage defaults
     # are TICKS; RiskConfig's fields are PIPS. Convert through the tick
     # size (see InstrumentSpec.ticks_to_pips) instead of copying the tick
@@ -310,9 +315,9 @@ def apply_instrument_spec(risk: RiskConfig, symbol: str) -> RiskConfig:
     # Same only-when-still-0.0 rule as the commission fill above: an
     # explicit nonzero value the user already typed in is never
     # overwritten.
-    if risk.spread_pips == 0.0:
+    if is_untouched(risk.spread_pips):
         updates["spread_pips"] = spec.default_spread_pips
-    if risk.slippage_pips == 0.0:
+    if is_untouched(risk.slippage_pips):
         updates["slippage_pips"] = spec.default_slippage_pips
     # micro_fallback sizing reads micro_contract_size /
     # micro_commission_per_contract off the config, but nothing ever
