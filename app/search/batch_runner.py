@@ -86,6 +86,7 @@ from app.search.strategy_space import SearchSpace, build_strategy_from_spec
 from app.strategy.library import StrategyAlreadyExists, save_strategy_metadata, save_strategy_text, set_strategy_status
 from app.strategy.lookahead_check import check_for_lookahead
 from app.validation.trial_ledger import TrialLedgerError as _TrialLedgerError
+from app.orchestration.resource_guard import physical_core_count
 
 ProgressCallback = Callable[[str], None]
 
@@ -1536,7 +1537,7 @@ def run_search(
 
     run_id = uuid.uuid4().hex[:12]
     t0 = time.time()
-    workers = stage_cfg.workers or max(os.cpu_count() or 2, 1)
+    workers = stage_cfg.workers or physical_core_count()
     workers = max(1, min(workers, len(space.candidates)))
     # Each worker process below loads its OWN full copy of `dev_df` (see
     # _init_worker) -- on a large dataset (e.g. years of 1-minute bars),
