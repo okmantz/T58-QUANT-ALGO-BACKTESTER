@@ -98,8 +98,8 @@ STEPS = [
         "fullpipeline",
         "6 \u00B7 Full Pipeline: the deep test",
         "One button does everything: baseline backtest, lookahead-bias check, a search for a "
-        "version that holds up out-of-sample, Monte Carlo, then a plain verdict: READY, MARGINAL "
-        "or NOT READY, with reasons.\n\n"
+        "version that holds up out-of-sample, Monte Carlo, then a plain verdict: FORWARD-TEST CANDIDATE, LEAD "
+        "or REJECT, with reasons.\n\n"
         "It is the slowest tool in the app, so try Run & Report first. Winners save to your "
         "Strategy Library automatically.",
     ),
