@@ -39,6 +39,11 @@ class RiskSweepPoint:
     probability_first_payout: float
     median_days_to_first_payout: float | None
     never_recovered_pct: float        # % of simulated lives whose worst drawdown was never reclaimed
+    # Problem 4 frontier (filled only when a payout-time budget is given): Monte Carlo pass / bust / pass-within-budget at this risk level.
+    pass_pct: float | None = None
+    bust_pct: float | None = None
+    within_budget_pct: float | None = None
+    median_calendar_days_to_pass: float | None = None
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -48,8 +53,10 @@ class RiskSweepPoint:
 class RiskSweepResult:
     points: list                # list[RiskSweepPoint], one per risk_value tested, in the order tested
     best_point: "RiskSweepPoint | None"   # highest prop_survival_score; None if every level failed to trade
-    metric: str                 # what "best" was chosen by -- always "prop_survival_score" today
+    metric: str                 # "prop_survival_score", or "pass_within_budget" when a payout-time budget was given
     notes: list = field(default_factory=list)
+    payout_time_budget_days: float | None = None
+    bust_cap_pct: float | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -86,6 +93,8 @@ def run_risk_sweep(
     prop_rules: PropRules,
     risk_values: list[float] | None = None,
     survival_cfg: PropSurvivalConfig | None = None,
+    payout_time_budget_days: float | None = None,
+    bust_cap_pct: float = 20.0,
 ) -> RiskSweepResult:
     """
     strategy_builder: zero-arg callable returning a FRESH Strategy
@@ -137,10 +146,31 @@ def run_risk_sweep(
             median_days_to_first_payout=survival.funded.median_days_to_first_payout,
             never_recovered_pct=survival.evaluation.never_recovered_pct,
         ))
+        if payout_time_budget_days:
+            try:
+                from app.monte_carlo.engine import MonteCarloConfig, run_monte_carlo
+                from app.prop.payout_time import frontier_point
+                mc = run_monte_carlo(bt.trades, prop_rules, MonteCarloConfig(n_simulations=800, random_seed=7, reset_on_breach=False))
+                fp = frontier_point(mc, payout_time_budget_days)
+                pt = points[-1]
+                pt.pass_pct, pt.bust_pct, pt.within_budget_pct = fp['pass_pct'], fp['bust_pct'], fp['within_budget_pct']
+                pt.median_calendar_days_to_pass = fp['median_calendar_days_to_pass']
+            except Exception as exc:  # noqa: BLE001 -- the frontier is additive; the survival score stands without it
+                notes.append(f"Risk {value:.2f}%: time-budget frontier failed ({exc}).")
 
     if not points:
         notes.append("No risk level produced a scoreable result -- every level was skipped.")
         return RiskSweepResult(points=[], best_point=None, metric="prop_survival_score", notes=notes)
 
+    if payout_time_budget_days:
+        from app.prop.payout_time import choose_for_budget
+        picked, why = choose_for_budget([p.to_dict() for p in points], bust_cap_pct=bust_cap_pct)
+        if picked is not None:
+            best = next(p for p in points if p.risk_value == picked['risk_value'])
+            return RiskSweepResult(points=points, best_point=best, metric="pass_within_budget", notes=notes,
+                                   payout_time_budget_days=float(payout_time_budget_days), bust_cap_pct=float(bust_cap_pct))
+        notes.append(f"Payout-time budget {payout_time_budget_days:g} days: {why}; falling back to the survival-score winner.")
     best_point = max(points, key=lambda p: p.prop_survival_score)
-    return RiskSweepResult(points=points, best_point=best_point, metric="prop_survival_score", notes=notes)
+    return RiskSweepResult(points=points, best_point=best_point, metric="prop_survival_score", notes=notes,
+                           payout_time_budget_days=(float(payout_time_budget_days) if payout_time_budget_days else None),
+                           bust_cap_pct=(float(bust_cap_pct) if payout_time_budget_days else None))
