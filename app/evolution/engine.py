@@ -947,6 +947,10 @@ class EvolutionRunner(DiscoveryMixin):
             self.risk, df, (cfg.instrument if cfg else None))
         for _v7_note in _v7_risk_notes:
             self._log(f"  {_v7_note}")
+        from app.search.instrument_risk import resolve_run_costs
+        self.risk, _cost_notes = resolve_run_costs(self.risk, (cfg.instrument if cfg else None))
+        for _cn in _cost_notes:
+            self._log(f"  {_cn}")
         self.prop_rules = prop_rules
         self.cfg = cfg or EvolutionConfig()
         # P1-4: locked OOS holdout, reserved BEFORE generation 0 (Forge
