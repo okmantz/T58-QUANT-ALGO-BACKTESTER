@@ -41,6 +41,8 @@ _RULES: tuple[tuple[str, str, str, str], ...] = (
     ("PASS-AND-PAID TOO LOW", "gate", "Too few accounts pass AND get paid", "Raise the pass odds (see the next lines) or reduce risk so fewer accounts breach before the first payout."),
     ("RANDOM-ENTRY NULL NOT BEATEN", "gate", "Random entries do about as well",
      "The exits may be doing the work: strengthen the entry signal or test the exits on their own."),
+    ("EXECUTION REALISM", "gate", "Profit exists only with perfect fills",
+     "The trades lose money once fills arrive one bar late, stops slip in thin sessions and targets must trade through. Use a market/bar size where the stop is wide next to a tick, or exits that do not rely on a limit touch."),
     ("COST STRESS", "gate", "Profit does not survive doubled costs", "Trade a larger bar size or a more liquid market; costs matter less when the stop is wide."),
     ("REPLAY DISAGREES", "gate", "Simulation and real start dates disagree", "Re-run with more history; the resampled odds are not reproducing on real calendars."),
     ("SEED INSTABILITY", "gate", "Pass odds swing between runs", "Increase the Monte Carlo simulations and the trade count; the estimate is still noisy."),
