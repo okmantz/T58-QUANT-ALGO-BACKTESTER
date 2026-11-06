@@ -269,7 +269,9 @@ def run_execution(
 
     open_trade: dict | None = None
     fallback_stop_count = 0
-    zero_size_contract_floor_count = 0  # see RiskConfig.sizing_floored_to_zero_contracts
+    zero_size_contract_floor_count = 0  # BAR count of floor-skips (diagnostic; one unaffordable signal that persists N bars adds N)
+    zero_size_skip_episodes = 0         # EPISODE count: consecutive skipped bars are ONE signal (this is what the skip ratio uses)
+    _last_floor_skip_bar = -10
     pip_scale_mismatch_count = 0
     pip_scale_mismatch_worst_ratio = None  # smallest (stop_distance / entry_price) seen, for the warning
     atr_scale_mismatch_count = 0
@@ -1533,6 +1535,9 @@ def run_execution(
                         blocked_adaptive_zero_count += 1
                     if plan.skip_is_floor:
                         zero_size_contract_floor_count += 1
+                        if i - _last_floor_skip_bar > 1:
+                            zero_size_skip_episodes += 1
+                        _last_floor_skip_bar = i
                         sizing_skip_reasons[plan.skip_reason] = sizing_skip_reasons.get(plan.skip_reason, 0) + 1
                     elif plan.skip_reason is not None:
                         sizing_skip_reasons[plan.skip_reason] = sizing_skip_reasons.get(plan.skip_reason, 0) + 1
@@ -1632,8 +1637,9 @@ def run_execution(
         "mode": risk.sizing_mode,
         "entries_considered": sizing_considered_count,
         "entries_taken": len([t for t in trades if t.exit_reason != "partial_take_profit"]),
-        "skipped_for_sizing": zero_size_contract_floor_count,
-        "skip_rate": (zero_size_contract_floor_count / sizing_considered_count) if sizing_considered_count else 0.0,
+        "skipped_for_sizing": zero_size_skip_episodes,
+        "skipped_for_sizing_bars": zero_size_contract_floor_count,
+        "skip_rate": (zero_size_skip_episodes / sizing_considered_count) if sizing_considered_count else 0.0,
         "skip_reasons": dict(sizing_skip_reasons),
         "stop_capped": stop_capped_count,
         "micro_fallback": micro_fallback_count,
@@ -1830,11 +1836,13 @@ def run_execution(
     # warning line. Flag it machine-readably so the report generator can
     # banner it unmissably. Always present (not just when skips happened)
     # so downstream code never has to guard on the key.
-    total_signals = len(trades) + zero_size_contract_floor_count
-    halt_ratio = (zero_size_contract_floor_count / total_signals) if total_signals else 0.0
+    # Skips are counted per signal EPISODE, not per bar: a signal that persists for 10 unaffordable bars is one missed trade.
+    total_signals = len(trades) + zero_size_skip_episodes
+    halt_ratio = (zero_size_skip_episodes / total_signals) if total_signals else 0.0
     equity_df.attrs["sizing_halt"] = {
         "halted": halt_ratio > 0.5,
-        "skipped": zero_size_contract_floor_count,
+        "skipped": zero_size_skip_episodes,
+        "skipped_bars": zero_size_contract_floor_count,
         "skip_ratio": halt_ratio,
         "last_trade_exit": trades[-1].exit_time if trades else None,
         "risk_value": risk.risk_value,

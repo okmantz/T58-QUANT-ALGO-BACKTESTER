@@ -158,7 +158,7 @@ class _Leg:
         "sl_vals", "tp_vals", "trail_vals", "stop_loss_pips", "take_profit_pips", "breakeven_r", "partial_cfg",
         "partial_r", "partial_frac", "partial_be", "atr", "vol_pct", "fill_lag", "open", "last_close_bar_idx",
         "last_entry_bar_idx", "trades_today", "leg_equity", "ib_on", "ib_ts", "ib_hi", "ib_lo", "bar_span",
-        "considered", "floor_skips", "skip_reasons", "stop_capped", "micro", "fallback_stops", "pip_mismatch",
+        "considered", "floor_skips", "floor_episodes", "last_floor_bar", "skip_reasons", "stop_capped", "micro", "fallback_stops", "pip_mismatch",
         "pip_worst", "atr_mismatch", "atr_worst", "rescue", "probe", "adaptive_zero", "blocked_cap", "clipped_cap",
         "blocked_daily", "blocked_cooldown", "blocked_maxtrades", "blocked_news", "blocked_weekend", "blocked_halt",
         "impact", "gap_losses", "net", "n_trades", "wins", "step", "bar_at", "last_bar", "warn",
@@ -415,11 +415,12 @@ class _PortfolioEngine:
                 if lg.n > 1:
                     d = np.diff(lg.ts.astype("datetime64[ns]"))
                     lg.bar_span = np.median(d) if len(d) else None
-            for a in ("considered", "floor_skips", "stop_capped", "micro", "fallback_stops", "pip_mismatch", "atr_mismatch",
+            for a in ("considered", "floor_skips", "floor_episodes", "stop_capped", "micro", "fallback_stops", "pip_mismatch", "atr_mismatch",
                       "rescue", "probe", "adaptive_zero", "blocked_cap", "clipped_cap", "blocked_daily", "blocked_cooldown",
                       "blocked_maxtrades", "blocked_news", "blocked_weekend", "blocked_halt", "gap_losses", "n_trades", "wins"):
                 setattr(lg, a, 0)
             lg.net = 0.0
+            lg.last_floor_bar = -10
             lg.skip_reasons = {}
             lg.pip_worst = lg.atr_worst = None
             lg.impact = []
@@ -1168,6 +1169,9 @@ class _PortfolioEngine:
                                 lg.adaptive_zero += 1
                             if plan.skip_is_floor:
                                 lg.floor_skips += 1
+                                if i_ - lg.last_floor_bar > 1:
+                                    lg.floor_episodes += 1
+                                lg.last_floor_bar = i_
                                 lg.skip_reasons[plan.skip_reason] = lg.skip_reasons.get(plan.skip_reason, 0) + 1
                             elif plan.skip_reason is not None:
                                 lg.skip_reasons[plan.skip_reason] = lg.skip_reasons.get(plan.skip_reason, 0) + 1
@@ -1252,7 +1256,8 @@ class _PortfolioEngine:
             equity_df["attempt_id"] = attempt_arr
             equity_df.attrs["prop_attempts"] = prop_attempts
             equity_df.attrs["prop_rules"] = prop_rules
-        floor_total = sum(lg.floor_skips for lg in L)
+        floor_total = sum(lg.floor_skips for lg in L)            # bars (diagnostic)
+        floor_episodes_total = sum(lg.floor_episodes for lg in L)  # signal episodes (used for the ratio)
         considered_total = sum(lg.considered for lg in L)
         skip_reasons_total: dict = {}
         for lg in L:
@@ -1266,7 +1271,8 @@ class _PortfolioEngine:
         equity_df.attrs["sizing_summary"] = {
             "mode": L[0].risk.sizing_mode, "entries_considered": considered_total,
             "entries_taken": len([t for t in trades if t.exit_reason != "partial_take_profit"]),
-            "skipped_for_sizing": floor_total, "skip_rate": (floor_total / considered_total) if considered_total else 0.0,
+            "skipped_for_sizing": floor_episodes_total, "skipped_for_sizing_bars": floor_total,
+            "skip_rate": (floor_episodes_total / considered_total) if considered_total else 0.0,
             "skip_reasons": dict(skip_reasons_total), "stop_capped": sum(lg.stop_capped for lg in L),
             "micro_fallback": sum(lg.micro for lg in L),
         }
@@ -1281,10 +1287,10 @@ class _PortfolioEngine:
         equity_df.attrs["weekend_hold_close_count"] = weekend_close_count
         equity_df.attrs["session_flatten_close_count"] = flatten_close_count
         equity_df.attrs["account_reset_log"] = [ev["message"] for ev in reset_events if ev.get("message")]
-        halt_total = len(trades) + floor_total
-        halt_ratio = (floor_total / halt_total) if halt_total else 0.0
+        halt_total = len(trades) + floor_episodes_total
+        halt_ratio = (floor_episodes_total / halt_total) if halt_total else 0.0
         equity_df.attrs["sizing_halt"] = {
-            "halted": halt_ratio > 0.5, "skipped": floor_total, "skip_ratio": halt_ratio,
+            "halted": halt_ratio > 0.5, "skipped": floor_episodes_total, "skipped_bars": floor_total, "skip_ratio": halt_ratio,
             "last_trade_exit": trades[-1].exit_time if trades else None, "risk_value": L[0].risk.risk_value,
             "contract_size": L[0].risk.contract_size, "sizing_mode": L[0].risk.sizing_mode,
             "skip_reasons": dict(skip_reasons_total),
@@ -1348,7 +1354,7 @@ class _PortfolioEngine:
             leg_summaries.append(LegSummary(
                 name=lg.name, trades=lg.n_trades, net_profit=float(lg.net),
                 win_rate=(lg.wins / lg.n_trades) if lg.n_trades else None, entries_considered=lg.considered,
-                entries_skipped_for_sizing=lg.floor_skips, blocked_by_portfolio_caps=lg.blocked_cap,
+                entries_skipped_for_sizing=lg.floor_episodes, blocked_by_portfolio_caps=lg.blocked_cap,
                 clipped_by_portfolio_caps=lg.clipped_cap, bars=lg.n, coverage=cov.coverage, warnings=list(lg.warn)))
         leg_curves = None
         if leg_pnl_arr is not None:

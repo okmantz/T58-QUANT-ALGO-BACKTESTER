@@ -78,9 +78,27 @@ class SizingDecision:
 # flatters every strategy (the first thing a prop-firm account pays for is the spread), so the out-of-the-box numbers are
 # deliberately a little conservative. They are starting assumptions: set your broker's actual spread/commission per run.
 DEFAULT_ACCOUNT_SIZE = 100_000.0
-DEFAULT_COMMISSION_PER_TRADE = 3.0   # $ per round-turn trade
-DEFAULT_SPREAD_PIPS = 1.0
-DEFAULT_SLIPPAGE_PIPS = 0.3
+
+
+class UntouchedDefault(float):
+    """A float that BEHAVES as its value but remembers it is the stock default, not something the user typed.
+
+    RiskConfig's friction fields used to be indistinguishable from a deliberate 1.0 / 0.3 / $3, so every code path that
+    wanted to fill "costs the user did not set" from the instrument registry had to guess (most guessed ``== 0.0`` and
+    therefore never fired, leaving ES on FX-style friction). ``dataclasses.replace`` keeps the same object for fields it
+    does not change, so the marker survives copies; arithmetic returns plain floats; an explicit user value is a plain
+    float and is therefore never overridden."""
+    __slots__ = ()
+
+
+def is_untouched(value) -> bool:
+    """True when `value` is 0.0 (the historical 'unset') or the stock default marker."""
+    return isinstance(value, UntouchedDefault) or float(value or 0.0) == 0.0
+
+
+DEFAULT_COMMISSION_PER_TRADE = UntouchedDefault(3.0)   # $ per round-turn trade
+DEFAULT_SPREAD_PIPS = UntouchedDefault(1.0)
+DEFAULT_SLIPPAGE_PIPS = UntouchedDefault(0.3)
 
 
 def commission_from_mapping(form) -> float:
@@ -870,6 +888,20 @@ def _costs_source(risk: "RiskConfig") -> str:
     return "as configured"
 
 
+def _round_turn_text(risk: "RiskConfig") -> str:
+    """' Round-turn cost: X price points (Y per contract in dollars).' -- the one number that decides whether a small edge survives."""
+    try:
+        pts = 2.0 * (float(risk.spread_pips) + float(risk.slippage_pips)) * float(risk.pip_size)
+        usd_fixed = float(risk.commission_per_trade) + float(risk.commission_per_contract)
+        cs = float(risk.contract_size) if risk.contract_size else 0.0
+        if cs > 0:
+            pts_total = pts + usd_fixed / cs
+            return f" Round-turn cost: {pts_total:.3f} price points (${pts_total * cs:,.2f} per contract)."
+        return f" Round-turn cost: {pts:.4g} price units plus ${usd_fixed:,.2f} commission."
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def describe_simulation(risk: "RiskConfig", prop_rules=None) -> str:
     """Plain-English lines describing how a run was simulated (v9.6).
 
@@ -934,6 +966,7 @@ def describe_simulation(risk: "RiskConfig", prop_rules=None) -> str:
             f"Costs (source: {_costs_source(risk)}): commission ${float(risk.commission_per_trade):,.2f} per trade "
             f"plus ${float(risk.commission_per_contract):,.2f} per contract, "
             f"spread {float(risk.spread_pips):g} pips, slippage {float(risk.slippage_pips):g} pips."
+            f"{_round_turn_text(risk)}"
         ),
         f"Intrabar replay: {'on' if risk.intrabar_replay else 'off'}"
         + (" -- stop/target order inside a bar is resolved on finer-timeframe bars where available."
