@@ -328,6 +328,26 @@ class JobManager:
         self.update(job_id, **{"finished_at": time.time(), **fields, "done": True})
         self._freeze_tracker(job_id)
         self._persist(job_id)
+        self._record_duration(job_id)
+
+    def _record_duration(self, job_id: str) -> None:
+        """Feeds the time-to-answer estimate (app.web.workflow_support): measured seconds per workflow. Best-effort, never raises."""
+        try:
+            import os as _os
+            if _os.environ.get("PYTEST_CURRENT_TEST"):
+                return          # tests must not write timing files into the working tree
+            job = self.get(job_id)
+            if not job or job.get("error") or job.get("cancelled"):
+                return
+            page = str(job.get("page_url") or "")
+            parts = [p for p in page.split("/") if p]
+            if not parts or "job" not in parts:
+                return
+            secs = float(job.get("finished_at", 0) or 0) - float(job.get("started_at", 0) or 0)
+            from app.web.workflow_support import record_duration
+            record_duration(parts[0].replace("-", "_"), job.get("n_bars"), secs)
+        except Exception:  # noqa: BLE001
+            pass
 
     def fail(self, job_id: str, error: str) -> None:
         """update() plus done=True, error=<message> -- the single call

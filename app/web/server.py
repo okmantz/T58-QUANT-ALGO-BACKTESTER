@@ -1100,6 +1100,9 @@ app.register_blueprint(pine_indicator_bp)
 # the sidebar link added in _sidebar.html.
 app.register_blueprint(ai_assistant_bp)
 app.register_blueprint(global_events_bp)
+# Trader profile, per-workflow memory, pre-flight checks, time-to-answer and run comparison (2026-11-05 audit).
+from app.web.workflow_support import workflow_bp  # noqa: E402
+app.register_blueprint(workflow_bp)
 # Options Outlook (daily/weekly calls & puts, Black-Scholes-computed) --
 # see app/web/options_outlook_routes.py.
 app.register_blueprint(options_outlook_bp)
@@ -3052,7 +3055,7 @@ def _run_optimize_simple_job(job_id: str, df, strategy, risk, rules, engines, fo
                             # ends a flat search sooner. Raise it for a wider search.
                             ga_population=_bounded_int(form, "ga_population", 24, 4, 200),
                             ga_generations=_bounded_int(form, "ga_generations", 8, 2, 60),
-                            fitness_metric=form.get("fitness_metric", "pass_gradient") or "pass_gradient",
+                            fitness_metric=form.get("fitness_metric", "edge_lb_r_dd") or "edge_lb_r_dd",
                             # One strategy, one record: a library strategy is
                             # updated in place (never overwritten by a result
                             # that did not improve it); a copy only on request.
@@ -6201,7 +6204,7 @@ def refine_start():
             # step (plateau-robust selection, cost-stress penalty, the
             # final full-fidelity re-run, the holdout check) runs
             # identically regardless of which one is picked.
-            optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
+            optimizer_mode=form.get("optimizer_mode", "auto") or "auto",
         )
 
         initial_log = [f"Loaded {len(df)} bars from {active_label}."]
@@ -6394,7 +6397,7 @@ def multi_market_start():
         cfg = RefinementConfig(
             enabled=True,
             fitness_metric=form.get("fitness_metric", DEFAULT_FITNESS),
-            optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
+            optimizer_mode=form.get("optimizer_mode", "auto") or "auto",
             population_size=int(form.get("population_size", 10) or 10),
             generations=int(form.get("generations", 5) or 5),
             elite_count=int(form.get("elite_count", 2) or 2),
@@ -6819,7 +6822,7 @@ def full_pipeline_start_batch():
             ga_population=int(form.get("ga_population", 12) or 12),
             ga_generations=int(form.get("ga_generations", 6) or 6),
             ga_search_mc_sims=int(form.get("ga_search_mc_sims", 200) or 200),
-            optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
+            optimizer_mode=form.get("optimizer_mode", "auto") or "auto",
             adaptive_risk_enabled=form.get("adaptive_risk_enabled") == "on",
             fitness_metric=form.get("fitness_metric", DEFAULT_FITNESS),
             final_mc_sims=int(form.get("final_mc_sims", 10000) or 10000),
@@ -7027,7 +7030,7 @@ def full_pipeline_schedule_batch():
             ga_population=int(form.get("ga_population", 12) or 12),
             ga_generations=int(form.get("ga_generations", 6) or 6),
             ga_search_mc_sims=int(form.get("ga_search_mc_sims", 200) or 200),
-            optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
+            optimizer_mode=form.get("optimizer_mode", "auto") or "auto",
             adaptive_risk_enabled=form.get("adaptive_risk_enabled") == "on",
             fitness_metric=form.get("fitness_metric", DEFAULT_FITNESS),
             final_mc_sims=int(form.get("final_mc_sims", 10000) or 10000),
@@ -7270,7 +7273,7 @@ def full_pipeline_start():
             ga_population=int(form.get("ga_population", 12) or 12),
             ga_generations=int(form.get("ga_generations", 6) or 6),
             ga_search_mc_sims=int(form.get("ga_search_mc_sims", 200) or 200),
-            optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
+            optimizer_mode=form.get("optimizer_mode", "auto") or "auto",
             adaptive_risk_enabled=form.get("adaptive_risk_enabled") == "on",
             fitness_metric=form.get("fitness_metric", DEFAULT_FITNESS),
             final_mc_sims=int(form.get("final_mc_sims", 10000) or 10000),
@@ -9559,7 +9562,7 @@ def quickopt_start():
             ga_population=int(form.get("ga_population", 32) or 32),
             ga_generations=int(form.get("ga_generations", 12) or 12),
             fitness_metric=form.get("fitness_metric", DEFAULT_FITNESS),
-            optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
+            optimizer_mode=form.get("optimizer_mode", "auto") or "auto",
             n_folds=int(form.get("n_folds", 4) or 4),
             save_to_library=form.get("save_to_library", "on") == "on",
             adaptive_risk_enabled=form.get("adaptive_risk_enabled") == "on",
@@ -10063,7 +10066,7 @@ def evolution_start():
             ),
             target_metric=form.get("target_metric", "cpcv_oos_eval_pass_probability") or "cpcv_oos_eval_pass_probability",
             reset_on_breach=form.get("reset_on_breach", "on") == "on",
-            optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
+            optimizer_mode=form.get("optimizer_mode", "auto") or "auto",
             sealed_final_frac=max(0.0, min(float(form.get("sealed_final_frac", 0.10) or 0.0), 0.4)),
         )
         _EVOLUTION_LOG.clear()
@@ -10548,7 +10551,7 @@ def evolution_multi_instrument_start():
             ),
             target_metric=form.get("target_metric", "cpcv_oos_eval_pass_probability") or "cpcv_oos_eval_pass_probability",
             reset_on_breach=form.get("reset_on_breach", "on") == "on",
-            optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
+            optimizer_mode=form.get("optimizer_mode", "auto") or "auto",
         )
 
         # UPGRADE (budget field): app.search.budget_allocator was wired
@@ -11697,7 +11700,7 @@ def search_start():
             workers=int(workers_raw) if workers_raw else None,
             random_seed=seed,
             reset_on_breach=form.get("reset_on_breach") == "on",
-            optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
+            optimizer_mode=form.get("optimizer_mode", "auto") or "auto",
         )
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000) or 100000),
@@ -13339,7 +13342,7 @@ def search_multi_instrument_start():
             min_eval_pass_probability=float(form.get("min_eval_pass_probability", 70.0) or 70.0),
             min_first_payout_probability=float(form.get("min_first_payout_probability", 50.0) or 50.0),
             workers=None, random_seed=int(form.get("seed", 42) or 42),
-            optimizer_mode=form.get("optimizer_mode", "genetic") or "genetic",
+            optimizer_mode=form.get("optimizer_mode", "auto") or "auto",
         )
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000) or 100000),

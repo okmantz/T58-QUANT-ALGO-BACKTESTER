@@ -103,40 +103,30 @@ def _family_title(name: str) -> str:
     return str(name or "?").replace("_", " ").strip().capitalize()
 
 
-def _pool_frames(label: str, df, limit: int = 6, bars: int = 12000):
-    """Other stored markets at the SAME bar size, for the 'works on other markets too' check. Best-effort and bounded."""
-    frames, risks = {}, {}
+def _pool_build(label: str, df):
+    """The independent-market pool for the pooled cross-market test (app.data.market_pool): any stored file type at this bar size (finer
+    files are resampled exactly), one file per market, identical / near-identical markets (ES and MES, NQ and its CFD twin) counted once."""
+    from app.data.market_pool import PoolBuild, build_market_pool
     try:
-        from app.data.importer import import_csv
-        from app.data.storage import list_datasets_grouped_for_picker, resolve_stored_dataset
-        m = re.search(r"(\d+)\.csv$", str(label), re.I)
-        suffix = m.group(1) if m else None
-        if not suffix:
-            return frames, risks
-        mine = _symbol_for(label)
-        seen = {mine}
-        for g in list_datasets_grouped_for_picker():
-            for f in g["files"]:
-                if len(frames) >= limit:
-                    break
-                fm = re.search(r"(\d+)\.csv$", f["name"], re.I)
-                if not fm or fm.group(1) != suffix or f.get("empty"):
-                    continue
-                sym = _symbol_for(f["full_name"])
-                if sym in seen:
-                    continue
-                path = resolve_stored_dataset(f["full_name"])
-                if path is None:
-                    continue
-                res = import_csv(path)
-                if not res.is_valid:
-                    continue
-                seen.add(sym)
-                frames[sym] = res.dataframe.tail(bars).reset_index(drop=True)
-                risks[sym] = _risk_for(f["full_name"], 100000.0, 0.5)
-    except Exception:  # noqa: BLE001 -- the pooled check degrades to whatever markets were found; it never blocks a run
-        pass
-    return frames, risks
+        return build_market_pool(label, df, risk_factory=lambda sym: _risk_for(sym, 100000.0, 0.5))
+    except Exception as exc:  # noqa: BLE001 -- the pooled check degrades to whatever markets were found; it never blocks a run
+        pb = PoolBuild(primary=_symbol_for(label))
+        pb.skipped["(pool)"] = f"{type(exc).__name__}: {exc}"
+        return pb
+
+
+def _pool_frames(label: str, df, limit: int | None = None, bars: int | None = None):
+    """Other independent stored markets at the SAME bar size, for the 'works on other markets too' check. Best-effort and bounded.
+
+    2026-11-05 audit: this used to take only ``<digits>.csv`` files, 6 of them, so with the primary market the maximum was 7 against the
+    promotion floor of 8 -- and the shipped parquet files gave 0 -- which meant nothing launched from the web could pass the pooled step.
+    The floor of 8 is unchanged; the pool now finds every distinct market that exists."""
+    from app.data.market_pool import build_market_pool
+    try:
+        pb = build_market_pool(label, df, bars=bars, limit=limit, risk_factory=lambda sym: _risk_for(sym, 100000.0, 0.5))
+        return pb.frames, pb.risks
+    except Exception:  # noqa: BLE001
+        return {}, {}
 
 
 def _symbol_for(label: str) -> str:
@@ -211,11 +201,27 @@ def page():
     return render_template("discovery_engine.html", **_page_context(form={"effort": request.args.get("effort", "standard")}))
 
 
-def _run_engine_job(job_id, req, held_guard: str):
+def _run_engine_job(job_id, req, held_guard: str, pool_for=None):
     from app.orchestration.resource_guard import HEAVY_JOB_GUARD
     from app.reports.crash_log import log_crash
     from app.web.job_manager import JOB_MANAGER
     try:
+        if pool_for is not None:
+            # 2026-11-05 audit: the market pool is built HERE (in the job thread), not in the request that starts the job -- reading every
+            # stored market takes a while, and the person should land on the progress page straight away.
+            _label, _df, _risk = pool_for
+            JOB_MANAGER.log(job_id, "Looking for other independent markets at this bar size for the 'works on other markets' check...")
+            pb = _pool_build(_label, _df)
+            _sym = _symbol_for(_label)
+            _frames, _risks = dict(pb.frames), dict(pb.risks)
+            _frames[_sym], _risks[_sym] = _df, _risk
+            req.frames, req.risks = _frames, _risks
+            JOB_MANAGER.log(job_id, pb.summary())
+            for _k, _why in list(pb.duplicates.items())[:6]:
+                JOB_MANAGER.log(job_id, f"  not counted as a separate market: {_k} ({_why})")
+            if pb.n_independent < 8:
+                JOB_MANAGER.log(job_id, "  Only " + str(pb.n_independent) + " distinct market(s) at this bar size: the pooled check cannot reach its floor of 8, so a candidate cannot be promoted past it. "
+                                        "Add distinct market data at this bar size (Data section) rather than expecting the floor to be lowered.")
         from app.discovery_engine.engine import DiscoveryEngine
         result = DiscoveryEngine().run(req)
         JOB_MANAGER.finish(job_id, engine_result=result, cancelled=bool(req.cancel_event and req.cancel_event.is_set()))
@@ -303,21 +309,17 @@ def start():
     try:
         preregister_v13_families()      # the engine refuses families without a written kill condition; do it for the person
         tf = infer_timeframe_label(df)
-        frames, risks = _pool_frames(label, df)
-        sym = _symbol_for(label)
-        frames[sym], risks[sym] = df, risk
         cancel = threading.Event()
-        pool_note = (f"Also checking the best ideas on {len(frames) - 1} other market(s) at the same bar size." if len(frames) > 1
-                     else "No other markets at this bar size are stored, so the 'works on other markets' check will be limited.")
+        pool_note = "Also checking the best ideas on other independent markets at the same bar size (the pool is gathered when the job starts)."
         job_id = JOB_MANAGER.create(
             page_template="/discovery-engine/job/{job_id}", tool="Strategy Discovery Engine", instrument=label, cancel_event=cancel,
             log=[f"Loaded {len(df):,} bars of {label} ({tf}).", f"Looking: {EFFORT[effort][1]} ({METHODS.get(preset_name, preset_name)}).", pool_note],
             engine_result=None, cancelled=False, settings={"dataset": label, "timeframe": tf, "effort": effort, "prop": prop_label, "risk_pct": risk_pct})
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         req = EngineRequest(preset=preset_name, df=df, risk=risk, prop_rules=rules, instrument=label, timeframe=tf, families=families, seed=seed,
-                            frames=frames, risks=risks, progress_cb=lambda m: JOB_MANAGER.log(job_id, str(m)), cancel_event=cancel,
+                            frames=None, risks=None, progress_cb=lambda m: JOB_MANAGER.log(job_id, str(m)), cancel_event=cancel,
                             use_memory=(request.form.get("fresh_start") != "on"))
-        threading.Thread(target=_run_engine_job, args=(job_id, req, JOB_DISCOVERY_ENGINE), daemon=True).start()
+        threading.Thread(target=_run_engine_job, args=(job_id, req, JOB_DISCOVERY_ENGINE, (label, df, risk)), daemon=True).start()
         return redirect(f"/discovery-engine/job/{job_id}")
     except Exception as exc:  # noqa: BLE001
         HEAVY_JOB_GUARD.release(JOB_DISCOVERY_ENGINE)

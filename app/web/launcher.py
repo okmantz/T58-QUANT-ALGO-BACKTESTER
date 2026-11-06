@@ -124,6 +124,16 @@ def main() -> None:
 
     print(data_dir_status(), flush=True)
 
+    # 2026-11-05 audit: keep the surrogate-study report fresh in the background (low priority, one at a time, at most weekly) so the
+    # new discovery families are not left locked just because nobody remembered to run the study. Never raises; never opens the gate.
+    try:
+        from app.discovery_engine.surrogate_schedule import maybe_start_background_study  # noqa: WPS433
+        _sg = maybe_start_background_study()
+        if _sg.get("started"):
+            print("Surrogate study started in the background (low priority): " + _sg.get("why", ""), flush=True)
+    except Exception:  # noqa: BLE001
+        pass
+
     # Port 5000 may be taken (macOS 12+ runs AirPlay Receiver on it by default, or a
     # previous copy is still running) -- use the next free port instead of failing.
     port = find_free_port(PORT)
