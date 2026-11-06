@@ -137,7 +137,7 @@ def _pooled_oos(r_oos: list[float], days_oos: list) -> str:
 
 def run_gate_stack(edge_r: float, seed: int, *, n_years: float = 5.0, rules=None, mc_sims: int = 1500, outer_reps: int = 16, outer_sims: int = 300,
                    holdout_frac: float = 0.20, oos_frac: float = 0.35, pass_lb_bar: float = 70.0, n_trials: int = 3000,
-                   cost_r: float = DEFAULT_COST_R) -> GateStackResult:
+                   cost_r: float = DEFAULT_COST_R, effective_trials: int | None = None) -> GateStackResult:
     """Statistical gate stack on one planted stream (see module docstring). ``detected`` is the redesigned stack's READY-equivalent: the edge
     evidence (pooled OOS not FAIL, holdout confirms, unseen expectancy LB > 0 at 2x costs) AND the business evidence (outer-bootstrap pass LB
     clears ``pass_lb_bar``). ``legacy_would_pass`` re-computes the OLD stack (Wilson interval over median-days-to-pass windows, DSR on all
@@ -182,7 +182,9 @@ def run_gate_stack(edge_r: float, seed: int, *, n_years: float = 5.0, rules=None
     res._dev_trades = None
     # DSR on unseen data: the PRODUCTION function the pipeline calls (audit_layers.unseen_dsr), at the stack's effective trial count.
     from app.orchestration.audit_layers import unseen_dsr
-    _du = unseen_dsr(unseen, max(2, int(n_trials // 10)))
+    # effective_trials was a hard-coded n_trials // 10 (=300); it is now a parameter so the sweep can be run at the count a real search
+    # measured (ONC report). Default keeps the old 10:1 ratio.
+    _du = unseen_dsr(unseen, max(2, int(effective_trials if effective_trials is not None else n_trials // 10)))
     res.dsr_unseen_ok = bool(_du["passed"]) if _du is not None else False
     res.detail_dsr = None if _du is None else {"psr": _du["psr"], "basis": _du.get("spread_basis")}
     kills = []

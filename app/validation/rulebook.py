@@ -155,11 +155,11 @@ def binary_screen(trades, n_looks: int = 1, cost_r: float = DEFAULT_COST_R, payo
         try:
             d = int(getattr(t, "direction"))
             moved_up = float(t.exit_price) > float(t.entry_price)
-            risk = getattr(t, "initial_risk", None)
-            size = float(getattr(t, "size", 0.0) or 0.0)
-            risk_usd = getattr(t, "intended_risk_dollars", None)
+            # R = pnl / ACTUAL stop risk (stop distance x size taken) -- the same definition the core pipeline uses.
+            # (It used to divide by the intended/configured risk, which misstates R whenever sizing floors or caps the position.)
+            from app.scoring.edge_bounds import trade_r
             pnl = float(t.pnl)
-            r = pnl / float(risk_usd) if risk_usd else None
+            r = trade_r(t)
             rows.append((d, moved_up, r, pnl))
         except Exception:  # noqa: BLE001 -- a malformed trade is skipped, never fatal
             continue
@@ -323,7 +323,7 @@ STAGES = (
      "where": "Optimize: the payoff grid is a search dimension; every cell counts in N (Discovery trial ledger).", "automatic": True},
     {"stage": 4, "name": "Certification", "rule": "Mean >= +0.15R on a sealed holdout read once; day-block 5th percentile > 0; PSR >= 0.95; still > 0 after +0.05R cost; no year (50+ trades) with PF < 0.9.",
      "where": "Test (holdout confirmation, unseen DSR, 2x-cost ladder, edge by year) and Discovery's sealed slice (lifetime-booked looks).", "automatic": True},
-    {"stage": 5, "name": "Prop lifecycle", "rule": "Evaluation bust <= 20%; Wilson lower bound of pass >= 70%; EV per attempt > 0; record payout within 63 days.",
+    {"stage": 5, "name": "Prop lifecycle", "rule": "Evaluation bust <= 20%; lower bound of pass >= the READY bar (10th percentile of an outer bootstrap over session days -- the same interval the gate, score and report use); EV per attempt > 0; record payout within 63 days.",
      "where": "Test: Monte Carlo + attempt replay + EV verdict (evaluation breach gate 20%, per-attempt pass lower bound 70%).", "automatic": True},
     {"stage": 6, "name": "Forward test", "rule": "At least 250 trades with a positive lower bound on mean R; kill line not hit. Only then pay for an attempt.",
      "where": "Deploy: Forward test + sequential monitor (SPRT) + the LLR kill line.", "automatic": True},
@@ -331,7 +331,7 @@ STAGES = (
 
 GATE_NAME_MAP = {
     "Evaluation breach (ruin)": "Stage 5 -- evaluation bust <= 20%",
-    "Per-attempt pass": "Stage 5 -- Wilson lower bound of pass >= 70%",
+    "Per-attempt pass": "Stage 5 -- bootstrap lower bound of pass >= the READY bar",
     "Holdout confirmation": "Stage 4 -- sealed holdout read once",
     "Edge after 2x costs": "Stage 4 -- still positive after further cost",
     "Unseen DSR": "Stage 4 -- PSR >= 0.95 at the honest N",
