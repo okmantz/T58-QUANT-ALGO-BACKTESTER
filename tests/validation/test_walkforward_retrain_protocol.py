@@ -65,10 +65,9 @@ def test_wants_retrain_context_true_only_for_flagged_python_strategy(tmp_path):
 
 
 def test_run_fold_test_matches_plain_run_backtest_for_a_non_retrain_strategy(tmp_path):
-    """No RETRAIN_PER_FOLD flag -- _run_fold_test must be byte-for-byte
-    the same as calling run_backtest(fold.test_df, ...) directly, i.e.
-    zero behavior change for the ~1400 other strategies/tests that never
-    touch this protocol."""
+    """No RETRAIN_PER_FOLD flag and ``warmup_bars=0`` (the old cold start) -- _run_fold_test must be byte-for-byte
+    the same as calling run_backtest(fold.test_df, ...) directly. (2026-11-05 audit: the DEFAULT now supplies warm-up
+    bars in every mode; see test_fold_warmup_*.)"""
     path = tmp_path / "always_flat.py"
     path.write_text(
         "import pandas as pd\n"
@@ -84,7 +83,7 @@ def test_run_fold_test_matches_plain_run_backtest_for_a_non_retrain_strategy(tmp
     risk = _risk()
     for fold in folds:
         expected = run_backtest(fold.test_df, strat, risk)
-        actual = _run_fold_test(fold, strat, risk)
+        actual = _run_fold_test(fold, strat, risk, warmup_bars=0)
         assert len(actual.trades) == len(expected.trades)
         assert actual.statistics.net_profit == pytest.approx(expected.statistics.net_profit)
 
