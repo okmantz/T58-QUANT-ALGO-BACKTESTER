@@ -117,7 +117,9 @@ def test_verdict_and_final_parameters_appear_in_report(tmp_path):
         final_parameters={"stop_loss_pips": "22", "take_profit_pips": "48"},
     )
     html = paths["html"].read_text(encoding="utf-8")
-    assert '<div class="verdict-banner verdict-not-ready">' in html
+    # NOT READY is internal; users see the ladder stage (no hard-failure reason here, so LEAD).
+    assert '<div class="verdict-banner verdict-marginal">' in html
+    assert "<strong>LEAD</strong>" in html          # the visible headline; the embedded report JSON keeps the internal verdict string
     assert "Did not clear the eval pass threshold." in html
     assert "Final Parameters" in html
     assert "stop_loss_pips" in html and "22" in html
