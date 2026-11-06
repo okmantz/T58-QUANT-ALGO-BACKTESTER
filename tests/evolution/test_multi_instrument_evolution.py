@@ -178,6 +178,7 @@ def test_worker_pool_is_divided_across_concurrent_instruments(tmp_path, two_inst
     the number of concurrent jobs, never left at the un-split value."""
     monkeypatch.setattr("app.evolution.multi_instrument.get_app_base_dir", lambda: tmp_path)
     monkeypatch.setattr("app.evolution.multi_instrument.os.cpu_count", lambda: 8)
+    monkeypatch.setattr("app.evolution.multi_instrument.physical_core_count", lambda: 8)   # default pool is sized by PHYSICAL cores (2026-11-05)
     group = MultiInstrumentEvolutionGroup(
         "testgroup8", two_instrument_jobs, RiskConfig(), PropRules(),
         _fast_cfg(parallel_workers=None),

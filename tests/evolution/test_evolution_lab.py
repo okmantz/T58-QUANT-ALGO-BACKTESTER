@@ -400,10 +400,13 @@ def test_evolution_runner_smoke_with_adaptive_risk_enabled(tmp_path):
     assert (tmp_path / "checkpoint.json").exists()
 
 
-def test_evolution_runner_adaptive_risk_disabled_by_default(tmp_path):
+def test_evolution_runner_adaptive_risk_enabled_by_default(tmp_path):
+    """2026-11-05: adaptive risk is ON by default everywhere; it can still be switched off explicitly."""
     cfg = EvolutionConfig(knowledge_graph_path=str(tmp_path / "kg.jsonl"))
     runner = EvolutionRunner(_trending_df(n=500), RiskConfig(), PropRules(), cfg)
-    assert runner.adaptive_risk is None
+    assert runner.adaptive_risk is not None
+    off = EvolutionRunner(_trending_df(n=500), RiskConfig(), PropRules(), EvolutionConfig(knowledge_graph_path=str(tmp_path / "kg2.jsonl"), adaptive_risk_enabled=False))
+    assert off.adaptive_risk is None
 
 
 def test_drain_futures_stops_promptly_on_a_hung_future(tmp_path):
