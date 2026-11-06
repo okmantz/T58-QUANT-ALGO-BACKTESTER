@@ -400,22 +400,21 @@ app = Flask(__name__, static_folder="static", template_folder="templates")
 # imply more than FORWARD-TEST CANDIDATE -- EVALUATE / FUNDED come only from recorded forward-test facts).
 @app.template_filter("ladder")
 def _ladder_filter(verdict, stored=None):
-    from app.orchestration.verdict_ladder import STAGES
-    if stored and str(stored).upper() in STAGES:
-        return str(stored).upper()
-    v = str(verdict or "").upper()
-    if v == "READY":
-        return "FORWARD-TEST CANDIDATE"
-    if v in ("MARGINAL", "NOT READY"):
-        return "LEAD"
-    if v in STAGES:
-        return v
-    return v or "UNTESTED"
+    from app.orchestration.verdict_labels import headline
+    return headline(verdict, stored)
+
+
+@app.template_filter("relabel")
+def _relabel_filter(text):
+    """Free text -> ladder names (READY / MARGINAL / NOT READY are retired as user-facing words)."""
+    from app.orchestration.verdict_labels import relabel_text
+    return relabel_text(text)
 
 
 @app.template_filter("ladder_class")
 def _ladder_class_filter(stage):
-    return {"REJECT": "red", "LEAD": "amber", "FORWARD-TEST CANDIDATE": "green", "EVALUATE": "green", "FUNDED": "green"}.get(str(stage), "grey")
+    from app.orchestration.verdict_labels import headline
+    return {"REJECT": "red", "LEAD": "amber", "FORWARD-TEST CANDIDATE": "green", "EVALUATE": "green", "FUNDED": "green"}.get(headline(stage), "grey")
 
 # P0 (report 2026-10-20): archive search memory (family health, graveyard, pre-registered results) that was built under the
 # misaligned session clock. Idempotent; a marker in reports/clock_epoch.json records that it ran.
@@ -11292,6 +11291,27 @@ def deploy_live_preflight():
     return jsonify(connect_flow.preflight_checklist(acct, strategy_meta=meta, preset_key=body.get("preset_key") or ""))
 
 
+@app.route("/deploy-live/copier/preflight", methods=["POST"])
+def deploy_live_copier_preflight():
+    """Pre-start checks for a copier group (pure: nothing connects). Body: {account_id (leader), symbol, followers: [...]}."""
+    guard = _web_live_deploy_guard()
+    if guard:
+        return guard
+    from app.live_deploy.broker_registry import adapter_class_for
+    from app.live_deploy.live_settings import load_accounts
+    from app.live_deploy.trade_copier import parse_follower_specs, validate_group
+    body = request.get_json(silent=True) or {}
+    accounts = {a.id: a for a in load_accounts()}
+    try:
+        specs = parse_follower_specs(body.get("followers"))
+    except ValueError as exc:
+        return jsonify({"items": [{"key": "followers", "level": "block", "title": "Follower settings are invalid", "detail": str(exc)}],
+                        "can_start": False, "needs_ack": False, "feed_account_id": None})
+    symbol = (body.get("symbol") or "").strip() or "EURUSD"
+    return jsonify(validate_group(accounts.get(body.get("account_id") or ""), specs, accounts,
+                                  leader_symbol=symbol, adapter_class_for=adapter_class_for))
+
+
 @app.route("/deploy-live/start", methods=["POST"])
 def deploy_live_start():
     """UPGRADE (MT5/prop-firm web deploy): this connects to a REAL,
@@ -11357,11 +11377,19 @@ def deploy_live_start():
         except Exception as exc:  # noqa: BLE001
             return jsonify({"ok": False, "error": f"Could not build a broker connection: {exc}"}), 400
 
+        # The Deploy page has no contract-size / pip-size inputs, so a futures symbol used to reach the engine with
+        # contract_size=None (Tradovate then refused every entry). Resolve both from the instrument registry when
+        # the form leaves them blank; an unknown symbol stays None (never guessed).
+        from app.live_deploy.guardrails import instrument_sizing_for_symbol
+        symbol = form.get("symbol", "").strip() or "EURUSD"
+        _spec_cs, _spec_pip = instrument_sizing_for_symbol(symbol)
+        _pip_form, _cs_form = form.get("pip_size"), form.get("contract_size")
         risk = RiskConfig(
             initial_balance=float(form.get("initial_balance", 100000) or 100000),
             risk_mode=form.get("risk_mode", "percent"),
             risk_value=float(form.get("risk_value", 1.0) or 1.0),
-            pip_size=float(form.get("pip_size", 0.0001) or 0.0001), contract_size=(float(form.get("contract_size")) if form.get("contract_size") else None),
+            pip_size=(float(_pip_form) if _pip_form else (_spec_pip or 0.0001)),
+            contract_size=(float(_cs_form) if _cs_form else _spec_cs),
             commission_per_trade=_commission_from_form(form),
             # v7 P0-2: the live engine reads the daily-loss halt from
             # `risk`, not from prop_rules -- the old code set it only on
@@ -11388,7 +11416,7 @@ def deploy_live_start():
         # pass), but keep honoring the form field rather than dropping it.
         rules.evaluation_profit_target_pct = float(form.get("profit_target", 8) or 8)
         cfg = LiveExecutionConfig(
-            symbol=form.get("symbol", "").strip() or "EURUSD",
+            symbol=symbol,
             timeframe_minutes=int(form.get("timeframe_minutes", 5) or 5),
             risk=risk, prop_rules=rules,
             poll_seconds=int(form.get("poll_seconds", 20) or 20),
@@ -11398,17 +11426,60 @@ def deploy_live_start():
         log.append(f"[warn] {enforced_guardrails_summary(rules)}")
         log.append(f"[info] Sizing conversion for {broker.platform_name}: "
                    f"contract_size={contract_size}, units_per_lot={units_per_lot}.")
+
+        # -- trade copier (optional): one strategy, the leader account trades it, followers mirror it ----------
+        from app.live_deploy.broker_registry import adapter_class_for
+        from app.live_deploy.trade_copier import build_copier, parse_follower_specs, validate_group
+        journal = ForwardTestJournal()
+        copier = bar_source = bar_symbol = feed_leg = None
+        try:
+            specs = parse_follower_specs(json.loads((form.get("copier_json") or "").strip() or "[]"))
+        except (ValueError, TypeError) as exc:
+            return jsonify({"ok": False, "error": f"Copier settings are invalid: {exc}"}), 400
+        if specs:
+            chk = validate_group(account, specs, accounts, leader_symbol=symbol, adapter_class_for=adapter_class_for)
+            if not chk["can_start"]:
+                return jsonify({"ok": False, "error": "; ".join(f"{i['title']}: {i['detail']}" for i in chk["items"] if i["level"] == "block")}), 400
+            if chk["needs_ack"] and form.get("ack_copy_trading") != "1":
+                return jsonify({"ok": False, "error": "Tick the box confirming each firm allows copying trades across these accounts before starting."}), 400
+            try:
+                copier = build_copier(
+                    specs=specs, accounts_by_id=accounts, adapter_factory=build_adapter, leader_symbol=symbol,
+                    timeframe_minutes=cfg.timeframe_minutes, leader_risk=risk, leader_rules=rules, journal=journal,
+                    strategy_type=form.get("strategy_mode", "manual"), strategy_filename=form.get("strategy_mode", "manual"),
+                    on_log=lambda level, msg: log.append(f"[{level}] {msg}"),
+                    halt_group_on_leader_halt=(form.get("halt_group_on_leader_halt", "1") != "0"),
+                )
+            except Exception as exc:  # noqa: BLE001 -- a bad follower credential set is a form error, not a crash
+                return jsonify({"ok": False, "error": f"Could not build a follower connection: {exc}"}), 400
+            feed_id = chk.get("feed_account_id")
+            if feed_id and feed_id != account.id:
+                feed_leg = next((l for l in copier.legs if l.account.id == feed_id), None)
+                if feed_leg is not None:
+                    bar_source, bar_symbol = feed_leg.broker, feed_leg.symbol
+            cfg.journal_login = account.id
+            log.append(f"[info] Trade copier: leader {account.nickname or account.login} -> "
+                       f"{', '.join(l.status.nickname for l in copier.legs)}"
+                       + (f"; price bars from {feed_leg.status.nickname}" if feed_leg is not None else "") + ".")
+        elif not getattr(adapter_class_for(account.platform), "supports_bars", True):
+            # Without a copier a barless platform would connect, fail three polls and emergency-halt. Say so up front.
+            return jsonify({"ok": False, "error": (
+                f"{account.platform} has no price-bar feed in this app, so a session on it alone cannot read the market. "
+                "Add an account on MT5, cTrader, TradeLocker or DXtrade as a follower in the copier; it supplies the price feed.")}), 400
+
         session = LiveExecutionSession(
             strategy=strategy, strategy_type=form.get("strategy_mode", "manual"),
             strategy_filename=form.get("strategy_mode", "manual"),
-            broker=broker, journal=ForwardTestJournal(), config=cfg,
+            broker=broker, journal=journal, config=cfg,
             on_log=lambda level, msg: log.append(f"[{level}] {msg}"),
+            copier=copier, bar_source=bar_source, bar_symbol=bar_symbol,
         )
         ok, message = session.start()
         if not ok:
             return jsonify({"ok": False, "error": message}), 400
         _LIVE_DEPLOY_SESSION["session"] = session
         _LIVE_DEPLOY_SESSION["login"] = str(getattr(account, "login", "") or "")
+        _LIVE_DEPLOY_SESSION["account_id"] = account.id
         _LIVE_DEPLOY_SESSION["log"] = log
         # Pipeline-progress: actually typing "DEPLOY LIVE" and successfully
         # starting a session is itself the meaningful milestone for this
@@ -11472,7 +11543,8 @@ def deploy_live_status():
             "running": s.running, "connected": s.connected, "platform": s.platform,
             "balance": s.balance, "equity": s.equity, "n_trades_closed": s.n_trades_closed,
             "win_rate": s.win_rate, "net_pnl": s.net_pnl, "halted_reason": s.halted_reason,
-            "drift_flag": s.drift_flag, "alert": s.alert, "log": _LIVE_DEPLOY_SESSION["log"][-100:],
+            "drift_flag": s.drift_flag, "alert": s.alert, "followers": list(getattr(s, "followers", []) or []),
+            "log": _LIVE_DEPLOY_SESSION["log"][-100:],
         })
 
 
@@ -11499,6 +11571,15 @@ def api_live_pnl():
             sess = _LIVE_DEPLOY_SESSION["session"]
             if sess is not None and (sess.status.running or sess.status.halted_reason or getattr(sess.status, "alert", None)):
                 rows.append(_pnl_row("live", f"Live \u00b7 {sess.status.platform or 'broker'}", sess.status))
+                for f in (getattr(sess.status, "followers", None) or []):
+                    bal, eq = f.get("balance"), f.get("equity")
+                    rows.append({
+                        "kind": "live", "label": f"Copy \u00b7 {f.get('nickname') or 'follower'}", "running": bool(f.get("running")),
+                        "connected": bool(f.get("connected")), "balance": bal, "equity": eq,
+                        "floating": (eq - bal) if (bal is not None and eq is not None) else None,
+                        "net_pnl": f.get("net_pnl", 0.0), "n_trades_closed": f.get("n_trades_closed", 0), "win_rate": None,
+                        "halted_reason": f.get("halted_reason"), "alert": f.get("alert"), "drift_flag": None,
+                    })
     with _FORWARD_TEST_LOCK:
         sess = _FORWARD_TEST_SESSION["session"]
         if sess is not None and (sess.status.running or sess.status.halted_reason):
@@ -11525,6 +11606,7 @@ def api_portfolio():
     from app.forward_test.journal import ForwardTestJournal
     status = None
     login = ""
+    extra_statuses: dict = {}
     if _web_live_deploy_guard() is None:
         with _LIVE_DEPLOY_LOCK:
             sess = _LIVE_DEPLOY_SESSION["session"]
@@ -11533,6 +11615,13 @@ def api_portfolio():
                 status = {"running": s.running, "connected": s.connected, "balance": s.balance, "equity": s.equity,
                           "halted_reason": s.halted_reason, "alert": s.alert, "drift_flag": s.drift_flag}
                 login = str(_LIVE_DEPLOY_SESSION.get("login", "") or "")
+                if _LIVE_DEPLOY_SESSION.get("account_id"):
+                    extra_statuses[str(_LIVE_DEPLOY_SESSION["account_id"])] = status
+                for f in (getattr(s, "followers", None) or []):
+                    extra_statuses[str(f.get("account_id"))] = {
+                        "running": f.get("running"), "connected": f.get("connected"), "balance": f.get("balance"),
+                        "equity": f.get("equity"), "halted_reason": f.get("halted_reason"), "alert": f.get("alert"),
+                        "drift_flag": None}
     try:
         accounts = load_accounts()
     except Exception:  # noqa: BLE001
@@ -11540,7 +11629,7 @@ def api_portfolio():
     journal = None
     try:
         journal = ForwardTestJournal()
-        return jsonify(_pf.build_portfolio(accounts, journal, status, login))
+        return jsonify(_pf.build_portfolio(accounts, journal, status, login, extra_statuses=extra_statuses))
     except Exception as exc:  # noqa: BLE001
         return jsonify({"accounts": [], "eligible": False, "eligible_reason": "", "error": str(exc)})
     finally:
