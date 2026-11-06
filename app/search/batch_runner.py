@@ -1480,6 +1480,12 @@ def run_search(
     _, _v7_risk_notes = resolve_leg_risk(risk, df, instrument)
     for _v7_note in _v7_risk_notes:
         log(_v7_note)
+    # Problem 6: friction (not pip/contract) comes from the same registry rule every other path uses, so a batch on ES does
+    # not run on the FX-style 1.0/0.3 pips while the web path charges ~1 tick.
+    from app.search.instrument_risk import resolve_run_costs
+    risk, _cost_notes = resolve_run_costs(risk, instrument)
+    for _cn in _cost_notes:
+        log(_cn)
 
     # B1-2 (w4-forge): thread floating_drawdown_mode through to every
     # simulator call below -- simulate_account and run_monte_carlo both

@@ -110,13 +110,16 @@ def resolve_leg_risk(
         if base_risk.contract_size is None:
             updates["contract_size"] = spec.contract_size
             filled.append(f"contract ${spec.contract_size:g}/point")
+        from app.backtest.risk import UntouchedDefault, is_untouched
         if base_risk.commission_per_contract == 0.0:
             updates["commission_per_contract"] = spec.default_commission_round_turn
             filled.append(f"commission ${spec.default_commission_round_turn:g}/contract")
-        if base_risk.spread_pips == 0.0:
+            if isinstance(base_risk.commission_per_trade, UntouchedDefault):
+                updates["commission_per_trade"] = 0.0   # no double commission on top of the per-contract rate
+        if is_untouched(base_risk.spread_pips):
             updates["spread_pips"] = spec.default_spread_pips  # ticks -> pips via tick_size (2026-10-07 cost-unit fix)
             filled.append(f"spread {spec.default_spread_ticks} tick(s)")
-        if base_risk.slippage_pips == 0.0:
+        if is_untouched(base_risk.slippage_pips):
             updates["slippage_pips"] = spec.default_slippage_pips  # ticks -> pips via tick_size (2026-10-07 cost-unit fix)
             filled.append(f"slippage {spec.default_slippage_ticks} tick(s)")
         resolved = replace(base_risk, **updates) if updates else base_risk
@@ -133,3 +136,41 @@ def resolve_leg_risk(
             f"({exc}); kept the shared risk settings unchanged."
         )
         return base_risk, notes
+
+
+def resolve_run_costs(base_risk: RiskConfig, instrument_label: str | None) -> tuple[RiskConfig, list[str]]:
+    """Fill ONLY the friction fields (spread, slippage, commission) from the instrument registry, for single-instrument
+    entry points (search batch runner, evolution) that deliberately do not rewrite pip_size / contract_size.
+
+    Same rule as every other path (``resolve_leg_risk``, ``apply_instrument_spec``, the web form): a field the user left
+    at its stock default (or 0) takes the registry value; anything the user typed is kept verbatim. If pip_size is still
+    the untouched FX default, or disagrees with the registry's, the tick->pips conversion would be wrong, so nothing is
+    filled and the pip warning from ``resolve_leg_risk`` stays the loud signal.
+    """
+    notes: list[str] = []
+    try:
+        from app.data.instrument_specs import get_instrument_spec, guess_instrument_symbol
+        from app.backtest.risk import UntouchedDefault, is_untouched
+        symbol = guess_instrument_symbol(instrument_label or "")
+        spec = get_instrument_spec(symbol) if symbol else None
+        if spec is None:
+            return base_risk, notes
+        if abs(float(base_risk.pip_size) - float(spec.pip_size)) > 1e-12:
+            return base_risk, notes
+        updates: dict = {}
+        if is_untouched(base_risk.spread_pips):
+            updates["spread_pips"] = spec.default_spread_pips
+        if is_untouched(base_risk.slippage_pips):
+            updates["slippage_pips"] = spec.default_slippage_pips
+        if base_risk.commission_per_contract == 0.0:
+            updates["commission_per_contract"] = spec.default_commission_round_turn
+            if isinstance(base_risk.commission_per_trade, UntouchedDefault):
+                updates["commission_per_trade"] = 0.0
+        if updates:
+            notes.append(f"[costs] {spec.symbol}: untouched friction replaced by the registry costs "
+                         f"({spec.default_spread_ticks:g} tick spread + {spec.default_slippage_ticks:g} tick slippage per side, "
+                         f"${spec.default_commission_round_turn:g}/contract round-turn).")
+            return replace(base_risk, **updates), notes
+    except Exception as exc:  # noqa: BLE001 -- never sink a run on cost resolution
+        notes.append(f"[costs] cost resolution failed ({exc}); kept the shared settings.")
+    return base_risk, notes
