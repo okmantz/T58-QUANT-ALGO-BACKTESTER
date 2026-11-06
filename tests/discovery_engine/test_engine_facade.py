@@ -245,10 +245,26 @@ def test_save_and_load_report_round_trip(tmp_path):
 
 def test_code_hash_changes_when_engine_code_changes(tmp_path):
     (tmp_path / "app" / "discovery_engine").mkdir(parents=True)
-    f = tmp_path / "app" / "discovery_engine" / "a.py"
+    f = tmp_path / "app" / "discovery_engine" / "objective.py"
     f.write_text("x=1")
     h1 = sg.code_hash(tmp_path)
     f.write_text("x=2")
+    assert sg.code_hash(tmp_path) != h1
+
+
+def test_code_hash_ignores_comments_docstrings_and_unrelated_files(tmp_path):
+    """2026-11-05 audit: only behaviour changes in the search/promotion files close the gate."""
+    d = tmp_path / "app" / "discovery_engine"
+    d.mkdir(parents=True)
+    f = d / "objective.py"
+    f.write_text('"""doc"""\ndef f(a):\n    """why"""\n    return a + 1\n')
+    h1 = sg.code_hash(tmp_path)
+    f.write_text('"""a different module docstring"""\n# a new comment\ndef f(a):\n    """other words"""\n    return a   +   1\n')
+    assert sg.code_hash(tmp_path) == h1
+    (d / "engine.py").write_text("UI_LABEL = 'changed'")
+    (d / "presets.py").write_text("x = 1")
+    assert sg.code_hash(tmp_path) == h1
+    f.write_text("def f(a):\n    return a + 2\n")
     assert sg.code_hash(tmp_path) != h1
 
 
@@ -396,6 +412,9 @@ def test_engine_job_flow_with_a_stub_engine(monkeypatch):
                                     n_evaluations=10, trial_inputs={"n_tests": 3}, champions=champs, promotions=promos, provenance={}, notes=[], elapsed_seconds=1.0)
 
     monkeypatch.setattr("app.discovery_engine.engine.DiscoveryEngine", Stub)
+    # the job flow is under test, not the market-pool build (which reads every stored market and has its own tests)
+    from app.data.market_pool import PoolBuild
+    monkeypatch.setattr("app.web.discovery_engine_routes._pool_build", lambda label, df: PoolBuild(primary="EURUSD"))
     c = app.test_client()
     r = c.post("/discovery-engine/start", data={"dataset": "EURUSD/EURUSD240.csv", "method": "gauntlet", "effort": "quick", "max_bars": "3000"})   # the default method is the Fast Lab; "gauntlet" is the engine
     assert r.status_code == 302, r.get_data(as_text=True)[:400]
