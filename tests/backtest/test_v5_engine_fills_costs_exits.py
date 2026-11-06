@@ -38,7 +38,8 @@ def test_sizing_halt_attrs_flag_silent_halt():
     assert trades == []
     halt = equity_df.attrs["sizing_halt"]
     assert halt["halted"] is True
-    assert halt["skipped"] > 30
+    assert halt["skipped"] == 1            # one unbroken signal run = ONE missed trade (episode count)
+    assert halt["skipped_bars"] > 30       # bar count kept as a diagnostic
     assert halt["skip_ratio"] == pytest.approx(1.0)
     assert halt["last_trade_exit"] is None
     assert halt["risk_value"] == 0.25
