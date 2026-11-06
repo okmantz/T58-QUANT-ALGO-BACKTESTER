@@ -41,6 +41,7 @@ from app.search.budget_allocator import (
     normalize_evolution_record,
     pooled_cross_instrument_leaderboard,
 )
+from app.orchestration.resource_guard import physical_core_count
 
 
 def _resolved_workers_per_job(base_cfg: EvolutionConfig, n_concurrent: int) -> int:
@@ -62,7 +63,7 @@ def _resolved_workers_per_job(base_cfg: EvolutionConfig, n_concurrent: int) -> i
     worker budget across however many instruments will actually run
     concurrently, so N runners together stay within one CPU/memory
     budget instead of each claiming a whole one. Never goes below 1."""
-    total = base_cfg.parallel_workers or (os.cpu_count() or 2)
+    total = base_cfg.parallel_workers or physical_core_count()
     return max(1, total // max(1, n_concurrent))
 
 

@@ -107,6 +107,7 @@ from app.strategy.library import (
 from app.strategy.lookahead_check import check_for_lookahead
 from app.validation.trial_ledger import TrialLedgerError as _TrialLedgerError
 from app.validation.cpcv import CPCVError, compute_pbo, run_cpcv
+from app.orchestration.resource_guard import physical_core_count
 
 def evolution_stats_metadata(record: dict, generation: int | None = None) -> dict:
     """Builds the \"evolution\" metadata block attached to a strategy's
@@ -640,7 +641,7 @@ class EvolutionConfig:
     # SAME throttled sizing that would actually be deployed, so a
     # candidate's fitness reflects survivability under throttling rather
     # than nominal unthrottled sizing.
-    adaptive_risk_enabled: bool = False
+    adaptive_risk_enabled: bool = True
     adaptive_risk_daily_profit_lock_pct: float | None = 80.0
 
     # Parallelism for PRE-FILTER and the ROBUSTNESS/OOS/MONTE CARLO/PROP
@@ -1054,7 +1055,7 @@ class EvolutionRunner(DiscoveryMixin):
         # (not gated by surrogate_guided_search, which is specifically the
         # GP-surrogate toggle) -- raises immediately, before generation 0,
         # if the optional optuna/cma package isn't installed.
-        if self.cfg.optimizer_mode == "genetic":
+        if self.cfg.optimizer_mode in ("genetic", "auto"):
             self._surrogate = (
                 FamilySurrogateBank(
                     min_observations=self.cfg.surrogate_min_observations,
@@ -1145,7 +1146,7 @@ class EvolutionRunner(DiscoveryMixin):
             return self._pool
         workers = self.cfg.parallel_workers
         if workers is None:
-            workers = os.cpu_count() or 1
+            workers = physical_core_count()
         # Each worker below loads its OWN full copy of self.df (see
         # _evo_init_worker) -- on a large dataset this pool can, on its
         # own or stacked with another heavy job (Full Pipeline, Speed Run)
@@ -1707,7 +1708,7 @@ class EvolutionRunner(DiscoveryMixin):
                     )
                     log_crash("Evolution Lab", exc=MemoryError(f"generation={gen}"), extra="auto-recovered: pool recycled, workers halved")
                     self._shutdown_pool()
-                    current_workers = self.cfg.parallel_workers or (os.cpu_count() or 1)
+                    current_workers = self.cfg.parallel_workers or physical_core_count()
                     self.cfg.parallel_workers = max(1, current_workers // 2)
                     self._save_checkpoint(next_generation=gen + 1)
                     gen += 1
