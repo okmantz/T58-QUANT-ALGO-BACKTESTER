@@ -78,6 +78,7 @@ reason, never allowed to take down a run that otherwise succeeded.
 """
 from __future__ import annotations
 
+from app.orchestration.verdict_labels import relabel_list  # noqa: E402  (user-facing verdict names; see verdict_labels)
 import json
 import math
 import os
@@ -496,7 +497,13 @@ class FullPipelineConfig:
     # no per-attempt information at all (legacy results predating the
     # v6 MC fields) -- a gate that can't measure can't convict, the
     # same couldn't-run/UNPROVEN distinction the ICIR gate makes.
+    # Kept at 70 on purpose (owner decision 2026-11-06): the planted-edge sweep showed a lower bar would admit more 0.15-0.20R edges, but the
+    # gates are not loosened to get more detections. The lower bound is now the outer-bootstrap interval (stricter than the old Wilson one).
     min_per_attempt_pass_pct: float = 70.0
+    # Problem 4: the user's payout-time budget. None (default) = no time gate. When set, READY needs at least ``min_pass_within_budget_pct``
+    # of simulated purchased attempts to PASS within this many calendar days (the evaluation bust cap is the existing risk_of_ruin_cap).
+    payout_time_budget_days: float | None = None
+    min_pass_within_budget_pct: float = 50.0
     # 2026-10-20 (report section 4): "cap" = per-attempt pass odds below the bar CAP the verdict at MARGINAL (70% stays the
     # HIGH CONFIDENCE label); the rejecting bar is the EV test in apply_audit_layers. "hard" restores the legacy rejection.
     per_attempt_pass_mode: str = "cap"
@@ -1203,7 +1210,7 @@ def _make_verdict_core(
         _pass_lo = final_mc.per_attempt_pass_probability
     if _pass_lo is not None and _pass_lo < min_per_attempt_pass_pct:
         _ci_txt = (
-            f" (Wilson-95% CI {_pass_ci[0]:.1f}%–{_pass_ci[1]:.1f}%)"
+            f" ({'outer-bootstrap' if getattr(final_mc, 'pass_interval_method', '') == 'outer_bootstrap' else 'Wilson-95%'} interval {_pass_ci[0]:.1f}%–{_pass_ci[1]:.1f}%)"
             if _pass_ci is not None
             else " (per-attempt point estimate; no CI recorded)"
         )
@@ -1396,7 +1403,7 @@ _VERDICT_TO_LIBRARY_STATUS = {
 def _make_verdict_inner(*args, attempt_replay=None, replay_disagreement_pts: float = 25.0, replay_min_gap_pts: float = 10.0, null_result=None, null_p_max: float = 0.10, cost_stress=None, cost_stress_min_retained: float = 0.25, mc_dispersion_pts=None, payout30=None, payout30_min_pct: float = 25.0, payout30_mode: str = 'soft', payout30_max_score_penalty: float = 5.0, payout30_hard_floor_pct: float = 0.0, payout30_min_windows: float = 3.0, paid_min_pct: float = 35.0,
                   transfer=None, transfer_mode: str = "cap",
                   evidence_required: bool = False, min_expectancy_lb_r: float = 0.0, min_trades_for_expectancy_gate: int = 30,
-                  funded_breach_cap_pct: float = 35.0, **kwargs):
+                  funded_breach_cap_pct: float = 35.0, payout_time_budget_days: float | None = None, min_pass_within_budget_pct: float = 50.0, **kwargs):
     """Accuracy-overhaul wrapper around the original verdict logic.
 
     Adds two honesty gates that can only DEMOTE a READY verdict to MARGINAL
@@ -1490,6 +1497,16 @@ def _make_verdict_inner(*args, attempt_replay=None, replay_disagreement_pts: flo
             + " -- capped at MARGINAL."
         )
         return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
+    if payout_time_budget_days and final_mc is not None:
+        from app.prop.payout_time import pass_within_budget_pct as _pwb
+        _within = _pwb(final_mc, float(payout_time_budget_days))
+        if _within is not None and _within < float(min_pass_within_budget_pct):
+            reasons.append(
+                f"TOO SLOW FOR YOUR PAYOUT-TIME BUDGET: only {_within:.1f}% of simulated purchased attempts pass within "
+                f"{float(payout_time_budget_days):g} calendar days (READY needs >= {float(min_pass_within_budget_pct):.0f}%; "
+                f"median {getattr(final_mc, 'median_calendar_days_to_pass', None)} days to pass) -- capped at MARGINAL."
+            )
+            return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
     if final_mc is not None and getattr(final_mc, "sample_ok", True) is False:
         notes = " ".join(getattr(final_mc, "sample_notes", []) or [])
         reasons.append(
@@ -2323,7 +2340,8 @@ def run_full_pipeline(
     """
     def log(msg: str) -> None:
         if progress_cb:
-            progress_cb(msg)
+            from app.orchestration.verdict_labels import relabel_text as _rl
+            progress_cb(_rl(msg))
 
     def _progress(step: int, fraction: float, label: str = "") -> None:
         if progress_hook is None:
@@ -3293,6 +3311,7 @@ def run_full_pipeline(
                 _raw_trials = int(n_trials)
                 _effective_trials = int(n_trials)
                 _cluster_note = "no clustering (fewer than 3 leaderboard return streams)"
+                _trial_sensitivity = None
                 if _family_prior:
                     log(f"  Trial ledger: {_family_prior:,} earlier Search/Evolution candidate(s) booked under "
                         f"family:{_ledger_family_name(cfg, strategy)} are added to the raw trial count.")
@@ -3351,13 +3370,21 @@ def run_full_pipeline(
                                                      if _i < len(_dsr_sink_keys) and _dsr_sink_keys[_i] < len(trial_sharpes)]
                         except Exception:  # noqa: BLE001
                             _cluster_reps_sharpes = []
-                        _eff = scale_trial_count(n_trials, _streams, corr_threshold=cfg.dsr_cluster_corr)
-                        log(f"  Effective trials: {_eff['n_clusters']} distinct return stream(s) among {_eff['n_streams']} leaderboard "
-                            f"candidates -> deflating for {_eff['effective_trials']} instead of {n_trials} raw evaluations.")
+                        # Problem 2: ONC (no hand-picked threshold) primary, average-linkage cuts as sensitivity; streams are the
+                        # leaderboard PLUS any sampled across the whole search (ga_result.sampled_streams, when the search kept them).
+                        from app.validation.effective_trials import effective_trials_report
+                        _streams = _streams + [x for x in (getattr(ga_result, "sampled_streams", None) or []) if x is not None and len(x)]
+                        _eff = effective_trials_report(n_trials, _streams, primary_corr=cfg.dsr_cluster_corr)
+                        _sens_txt = ", ".join(f"{k}: {v['effective_trials']:,}" for k, v in _eff["sensitivity"].items())
+                        log(f"  Effective trials: ONC found {_eff['onc_clusters']} distinct return stream(s) among {_eff['n_streams']} sampled "
+                            f"candidates ({_eff['linkage_clusters']} at |corr| >= {cfg.dsr_cluster_corr:g}) -> deflating for "
+                            f"{_eff['effective_trials']:,} of {n_trials:,} raw evaluations. Sensitivity by correlation cut: {_sens_txt}.")
                         n_trials = _eff["effective_trials"]
                         _effective_trials = int(n_trials)
-                        _cluster_note = (f"average-linkage clustering of {_eff['n_streams']} leaderboard daily-P&L streams at "
-                                         f"|corr| >= {cfg.dsr_cluster_corr:g} -> {_eff['n_clusters']} cluster(s)")
+                        _cluster_note = (f"ONC over {_eff['n_streams']} sampled daily-P&L streams -> {_eff['onc_clusters']} cluster(s); "
+                                         f"average-linkage at |corr| >= {cfg.dsr_cluster_corr:g} -> {_eff['linkage_clusters']}; "
+                                         f"used the larger; sensitivity {_sens_txt}")
+                        _trial_sensitivity = _eff
                         # The same effective count corrects the ICIR gate's Bonferroni n_tests (it only saw this run's own GA
                         # evaluations). Never loosens; can only turn an ICIR pass into a fail.
                         if icir_gate is not None and _family_prior:
@@ -3385,6 +3412,10 @@ def run_full_pipeline(
                     min_probabilistic_sharpe=cfg.dsr_min_probabilistic_sharpe,
                     raw_trials=_raw_trials, effective_trials=_effective_trials, trial_clustering=_cluster_note,
                 )
+                try:
+                    dsr_gate_result.trial_sensitivity = _trial_sensitivity
+                except Exception:  # noqa: BLE001 -- frozen/slotted result: the log line above already carries it
+                    pass
                 try:
                     _fin = [x for x in _cluster_reps_sharpes if math.isfinite(x)]
                     if len(_fin) >= 2:
@@ -3579,6 +3610,8 @@ def run_full_pipeline(
                 min_per_attempt_pass_pct=cfg.min_per_attempt_pass_pct,
                 per_attempt_pass_mode=cfg.per_attempt_pass_mode, decay_flag=_decay_text,
                 paid_min_pct=getattr(cfg, "min_per_attempt_paid_pct", 35.0),
+                payout_time_budget_days=getattr(cfg, "payout_time_budget_days", None),
+                min_pass_within_budget_pct=getattr(cfg, "min_pass_within_budget_pct", 50.0),
                 dsr_gate_result=dsr_gate_result, pbo_gate_result=pbo_gate_result,
                 dsr_hard_gate=bool(getattr(cfg, "dsr_hard_gate", False)),
                 primary_robustness_method=cfg.primary_robustness_method,
@@ -3931,7 +3964,7 @@ def _finish(
         risk_config=risk,
         price_df=df,
         verdict=verdict,
-        verdict_reasons=verdict_reasons,
+        verdict_reasons=relabel_list(verdict_reasons),
         ev_verdict=ev_verdict,
         ladder=(audit_evidence or {}).get("ladder") if isinstance(audit_evidence, dict) else None,
         data_stamp=_pipeline_data_stamp(df, instrument),
@@ -4258,7 +4291,7 @@ def _finish(
         icir_gate=icir_gate,
         icir_gate_skip_reason=icir_gate_skip_reason,
         verdict=verdict,
-        verdict_reasons=verdict_reasons,
+        verdict_reasons=relabel_list(verdict_reasons),
         scorecard=scorecard,
         risk_of_ruin_hard_fail=risk_of_ruin_hard_fail,
         lookahead_hard_fail=lookahead_hard_fail,
@@ -4488,7 +4521,8 @@ def run_full_pipeline_sweep(
 
     def log(msg: str) -> None:
         if progress_cb:
-            progress_cb(msg)
+            from app.orchestration.verdict_labels import relabel_text as _rl
+            progress_cb(_rl(msg))
 
     results: dict = {}
     errors: dict = {}
@@ -4597,7 +4631,8 @@ def run_full_pipeline_batch(
     you need the detailed step-by-step console output for every strategy."""
     def log(msg: str) -> None:
         if progress_cb:
-            progress_cb(msg)
+            from app.orchestration.verdict_labels import relabel_text as _rl
+            progress_cb(_rl(msg))
 
     cfg = cfg or FullPipelineConfig()
     t0 = time.time()
@@ -4837,3 +4872,15 @@ def run_full_pipeline_batch(
         f"{sum(1 for o in outcomes if o.ok)} produced a report."
     )
     return FullPipelineBatchSummary(outcomes=outcomes, elapsed_seconds=elapsed)
+
+
+def _result_headline(self) -> str:
+    """The verdict name users see: the ladder stage (REJECT / LEAD / FORWARD-TEST CANDIDATE / EVALUATE / FUNDED). ``verdict`` keeps the internal
+    READY / MARGINAL / NOT READY string that gates and routing still use."""
+    from app.orchestration.verdict_labels import headline
+    ae = getattr(self, "audit_evidence", None) or {}
+    stage = (ae.get("ladder") or {}).get("stage") if isinstance(ae, dict) else None
+    return headline(self.verdict, stage, self.verdict_reasons)
+
+
+FullPipelineResult.headline = property(_result_headline)

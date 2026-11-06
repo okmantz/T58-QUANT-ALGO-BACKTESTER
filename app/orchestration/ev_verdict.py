@@ -1,6 +1,6 @@
 """Expected-value verdict that sits beside READY (2026-10 audit, build item 1).
 
-READY asks "is the pass probability above 70%?". That is a confidence statement, not an
+READY asks "is the pass probability lower bound above the 70% bar?". That is a confidence statement, not an
 economic one. A challenge fee is a bet, so the question that decides whether to spend it is
 
         EV per attempt  =  p x q x V  -  p x A  -  c
@@ -26,7 +26,7 @@ with C_pass / C_fail the mean fee paid by attempts that did / did not pass. Brea
 so it reflects that failures are cheap-and-fast and passes are slow-and-costly (or the reverse) instead of one blended number.
 
 Labels (``EVVerdict.label``):
-    HIGH CONFIDENCE       the legacy 70% gate (verdict == "READY") passed and the EV is positive
+    HIGH CONFIDENCE       the legacy READY gate (verdict == "READY") passed and the EV is positive
     FORWARD-TEST CANDIDATE clean-holdout pass rate is above break-even WITH A MARGIN, EV > 0,
                           bankroll ruin is under the cap, rules are verified, no lookahead problem
     NOT WORTH A FEE       evidence is complete and EV <= 0 or the margin/ruin conditions fail
@@ -389,5 +389,5 @@ def evaluate_ev(
         + (f" EV per calendar month of attempt time: ${v.ev_per_month:,.2f}." if v.ev_per_month is not None else "")
     )
     if v.label == FORWARD_TEST_CANDIDATE:
-        reasons.append("This is NOT the 70% READY gate: it is permission to forward-test on a demo / the cheapest account, not proof of an edge.")
+        reasons.append("This is NOT the READY gate: it is permission to forward-test on a demo / the cheapest account, not proof of an edge.")
     return v

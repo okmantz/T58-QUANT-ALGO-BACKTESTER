@@ -60,7 +60,7 @@ def ladder_stage(verdict: str, ev_label: str | None, *, pooled_status: str | Non
     ``holdout_confirmed``, ``null_ok``, ``cost_ok`` (unseen expectancy lower bound > 0 at 2x costs) and ``ev_mean`` (EV per attempt).
     When all four hold, and nothing is a hard failure, the strategy is a forward-test candidate even though the legacy verdict is capped at
     MARGINAL by the pass-odds bar, pooled-OOS-unproven, DSR, stale rules or data length: paper trading costs nothing, so the bar for permission
-    to paper-trade is 'evidence the edge exists', not 'proof it will pass 70% of evaluations'. ``caps`` lists what still stands between the
+    to paper-trade is 'evidence the edge exists', not proof it will pass most evaluations.. ``caps`` lists what still stands between the
     strategy and the higher stages; it is shown, never hidden. EVALUATE / FUNDED stay gated by the forward-test SPRT."""
     v = str(verdict or "").upper()
     ev = str(ev_label or "").upper()
