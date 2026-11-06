@@ -53,6 +53,7 @@ from app.data.importer import import_csv
 from app.prop.simulator import PropRules
 from app.search.batch_runner import SearchStageConfig, SearchSummary, run_search
 from app.search.strategy_space import SearchSpace
+from app.orchestration.resource_guard import physical_core_count
 
 if TYPE_CHECKING:
     from app.orchestration.loop_runner import SearchLoopResult
@@ -87,7 +88,7 @@ def _resolved_workers_per_job(stage_cfg: SearchStageConfig, n_concurrent: int) -
     """Splits the configured worker budget across however many instrument
     jobs will actually run at once, so N concurrent instruments don't each
     independently claim os.cpu_count() workers. Never goes below 1."""
-    total = stage_cfg.workers or (os.cpu_count() or 2)
+    total = stage_cfg.workers or physical_core_count()
     return max(1, total // max(1, n_concurrent))
 
 

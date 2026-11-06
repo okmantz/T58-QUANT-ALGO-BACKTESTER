@@ -99,12 +99,12 @@ def _find_winner_stored_strategy(saved_library_path):
 
 def _start_forward_test(stored, cfg: AutopilotConfig, baseline_win_rate: float | None, log) -> tuple[bool, str, ForwardTestSession | None]:
     if stored is None:
-        return False, "Skipped -- couldn't find the winner's saved library entry to load a Strategy object from.", None
+        return False, "Skipped -- couldn't find the candidate's saved library entry to load a Strategy object from.", None
     if stored.strategy_type not in FORWARD_TESTABLE_TYPES:
         return False, (
-            f"Skipped -- the winner is a '{stored.strategy_type}' strategy; only "
+            f"Skipped -- the candidate is a '{stored.strategy_type}' strategy; only "
             f"{sorted(FORWARD_TESTABLE_TYPES)} strategies can be forward-tested on MT5 "
-            "(same restriction as the Forward Test tab). The winner is still saved to your "
+            "(same restriction as the Forward Test tab). The candidate is still saved to your "
             "library and ready to trade or refine by hand."
         ), None
     if not mt5_is_available():
@@ -117,7 +117,7 @@ def _start_forward_test(stored, cfg: AutopilotConfig, baseline_win_rate: float |
     try:
         strategy = load_strategy_object(stored)
     except Exception as exc:  # noqa: BLE001
-        return False, f"Skipped -- could not load the winner as a Strategy object: {exc}", None
+        return False, f"Skipped -- could not load the candidate as a Strategy object: {exc}", None
 
     probe = MT5Connector(mt5_settings.login, mt5_settings.password, mt5_settings.server, mt5_settings.terminal_path)
     conn = probe.connect()
@@ -164,7 +164,7 @@ def _write_report(path: Path, speed_run: SpeedRunResult | None, verdict, fwd_sta
     if speed_run is None:
         lines.append("Discovery did not run.")
     elif speed_run.winner is None:
-        lines.append(f"No winner produced. Reason: {speed_run.winner_reason}")
+        lines.append(f"No candidate reached the FORWARD-TEST CANDIDATE stage of the verdict ladder. Reason: {speed_run.winner_reason}")
         if speed_run.guidance:
             lines.append("")
             lines.append("Suggestions for the next run:")
@@ -172,7 +172,7 @@ def _write_report(path: Path, speed_run: SpeedRunResult | None, verdict, fwd_sta
     else:
         w = speed_run.winner
         pr = w.pipeline_result
-        lines.append(f"Winner: candidate `{w.candidate_id}` (family: {w.family or 'n/a'}) -- verdict **{pr.verdict if pr else 'N/A'}**.")
+        lines.append(f"Best candidate: `{w.candidate_id}` (family: {w.family or 'n/a'}) -- verdict **{pr.verdict if pr else 'N/A'}**.")
         if pr is not None:
             lines.append(f"- Eval-pass probability (final): {pr.final_mc.evaluation_pass_probability:.1f}%")
             lines.append(f"- First-payout probability: {pr.final_mc.first_payout_probability:.1f}%")
@@ -232,8 +232,8 @@ def run_overnight_autopilot(
     fwd_started, fwd_message, fwd_session = False, "Not attempted.", None
     if verdict not in cfg.acceptable_verdicts:
         fwd_message = (
-            f"Skipped -- winner verdict was {verdict!r}, not in the acceptable set {sorted(cfg.acceptable_verdicts)}."
-            if verdict else "Skipped -- no winner was produced by discovery."
+            f"Skipped -- best candidate's verdict was {verdict!r}, not in the acceptable set {sorted(cfg.acceptable_verdicts)}."
+            if verdict else "Skipped -- no candidate cleared the discovery gate."
         )
         log(f"Step 2/2: {fwd_message}")
     elif not cfg.auto_forward_test:
@@ -242,7 +242,7 @@ def run_overnight_autopilot(
     elif cancel_event is not None and cancel_event.is_set():
         fwd_message = "Skipped -- cancelled before forward-test start."
     else:
-        log("Step 2/2: winner is READY/MARGINAL -- starting a live MT5 demo forward test...")
+        log("Step 2/2: best candidate is READY/MARGINAL -- starting a live MT5 demo forward test...")
         pr = speed_run.winner.pipeline_result
         stored = _find_winner_stored_strategy(pr.saved_library_path)
         baseline_win_rate = pr.final_bt.statistics.win_rate if pr.final_bt else None

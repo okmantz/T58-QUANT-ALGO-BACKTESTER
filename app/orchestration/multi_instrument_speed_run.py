@@ -49,6 +49,7 @@ from app.data.importer import import_csv
 from app.orchestration.multi_instrument_search import InstrumentJob
 from app.orchestration.speed_run import SpeedRunConfig, SpeedRunResult, run_speed_run
 from app.prop.simulator import PropRules
+from app.orchestration.resource_guard import physical_core_count
 
 ProgressCallback = Callable[[str, str], None]   # (job_label, message)
 
@@ -74,7 +75,7 @@ def _resolved_concurrency_per_job(cfg: SpeedRunConfig, n_concurrent: int) -> tup
     jobs will actually run at once -- same reasoning as
     multi_instrument_search._resolved_workers_per_job. Never goes below 1
     for either."""
-    total_workers = cfg.discovery_workers or (os.cpu_count() or 2)
+    total_workers = cfg.discovery_workers or physical_core_count()
     per_job_workers = max(1, total_workers // max(1, n_concurrent))
     per_job_validations = max(1, cfg.max_concurrent_validations // max(1, n_concurrent))
     return per_job_workers, per_job_validations

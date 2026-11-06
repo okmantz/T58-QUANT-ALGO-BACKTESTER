@@ -93,6 +93,7 @@ from app.orchestration.full_pipeline import (
 from app.prop.simulator import PropRules
 from app.search.batch_runner import SearchCancelled, SearchStageConfig, SearchSummary, _spec_from_record, run_search
 from app.search.strategy_space import build_strategy_from_spec, generate_search_space
+from app.orchestration.resource_guard import physical_core_count
 
 ProgressCallback = Callable[[str], None]
 
@@ -428,7 +429,7 @@ def run_speed_run(
     )
 
     n_concurrent = max(1, min(cfg.max_concurrent_validations, len(top)))
-    total_workers = stage_cfg.workers or (os.cpu_count() or 2)
+    total_workers = stage_cfg.workers or physical_core_count()
     per_job_workers = max(1, total_workers // n_concurrent)
 
     fp_cfg = FullPipelineConfig(

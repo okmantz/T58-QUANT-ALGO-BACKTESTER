@@ -280,7 +280,7 @@ class FullPipelineConfig:
     ga_search_mc_sims: int = 200
     # UPGRADE (optimizer core): see QuickOptimizeConfig.optimizer_mode's
     # identical field/docstring -- same default, same downstream effect.
-    optimizer_mode: str = "genetic"
+    optimizer_mode: str = "auto"
     # 2026-10 audit: 2026-10-19: default is the blended prop guide score (pass odds + first payout + ruin); the 30-day window is tracked, not the objective. payout_30d remains selectable and scores the
     # Monte Carlo first-payout-within-window rate (app.optimize.refinement._payout_window_fitness).
     fitness_metric: str = "edge_lb_r"          # 2026-11-04 (P2-3): the search selects on the edge lower bound; pass odds size the edge later
@@ -1548,6 +1548,16 @@ def _make_verdict_inner(*args, attempt_replay=None, replay_disagreement_pts: flo
             "the edge does not survive realistic cost slippage; capped at MARGINAL."
         )
         return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
+    # 2026-11-05 audit: the realistic scenario (one-bar-late fill, session-aware stop slippage, TP trade-through). Demote-only and
+    # deliberately narrow: only a strategy that was profitable at 1x and LOSES money under realistic execution is capped.
+    if cost_stress is not None and cost_stress.get("realistic_net_profit") is not None and \
+            float(cost_stress.get("base_net_profit", 0.0)) > 0 and float(cost_stress["realistic_net_profit"]) <= 0:
+        reasons.append(
+            f"EXECUTION REALISM: with fills one bar late, session-aware extra stop slippage and a take-profit that must trade a tick through "
+            f"its limit, the same trades net ${float(cost_stress['realistic_net_profit']):,.0f} (vs ${float(cost_stress.get('base_net_profit', 0.0)):,.0f} "
+            "in the ideal run) -- the profit exists only under perfect fills; capped at MARGINAL."
+        )
+        return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
     # v9.16 (audit P0-1): the objective itself -- paid within the window, measured on fresh
     # accounts through the real engine. Demote-only like every other gate here.
     if payout30 and payout30.get("rate") is not None and float(payout30.get("n_effective", 0.0)) >= payout30_min_windows:
@@ -2032,6 +2042,52 @@ def _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt
             f"  Cost stress ({_mult:g}x): net ${cost_stress['net_profit']:,.0f} "
             f"vs ${cost_stress['base_net_profit']:,.0f} at 1x ({cost_stress['trades']} trades)."
         )
+        # 2026-11-05 audit: THREE-scenario stress. (1) 1x = the base run, (2) 2x flat = the run above (the one READY must stay positive
+        # in), (3) realistic = 1x costs but a one-bar-late fill, session-aware extra stop slippage, and a take-profit that must trade
+        # one tick THROUGH its limit. Also reports how many exits sat on a bar that touched BOTH stop and target (the engine books the
+        # stop on those -- pessimistic -- and intrabar_replay is off by default, so the reader sees how much that matters).
+        try:
+            _pip = float(risk.pip_size or 0.0)
+            _lag = max(int(getattr(risk, "entry_fill_lag_bars", 0) or 0), 0) + 1
+            _tick_pips = 1.0
+            try:
+                from app.data.instrument_specs import get_any_instrument_spec as _gspec, guess_any_instrument_symbol as _gsym
+                _sp = _gspec(_gsym(instrument or getattr(final_strategy, "name", None) or "") or "")
+                if _sp is not None and _pip > 0 and float(getattr(_sp, "tick_size", 0.0) or 0.0) > 0:
+                    _tick_pips = float(_sp.tick_size) / _pip
+            except Exception:  # noqa: BLE001
+                pass
+            _rrisk = _replace_risk(
+                risk,
+                entry_fill_lag_bars=_lag,
+                tp_trade_through_pips=_tick_pips,
+                stop_slippage_extra_pips=max(float(risk.slippage_pips or 0.0), _tick_pips),
+                stop_slippage_session_aware=True,
+            )
+            _rbt = run_backtest(dev_df, final_strategy, _rrisk)
+            _rnp = float(_rbt.statistics.net_profit)
+            _base_np = float(final_bt.statistics.net_profit)
+            _both = None
+            try:
+                _both = int(getattr(final_bt.equity_curve, "attrs", {}).get("same_bar_both_touch", 0))
+            except Exception:  # noqa: BLE001
+                _both = None
+            cost_stress["scenarios"] = {
+                "base_1x": {"net_profit": _base_np, "trades": len(final_bt.trades)},
+                "flat_2x": {"net_profit": cost_stress["net_profit"], "trades": cost_stress["trades"], "multiplier": _mult},
+                "realistic": {
+                    "net_profit": _rnp, "trades": len(_rbt.trades), "fill_lag_bars": _lag,
+                    "tp_trade_through_ticks": 1, "session_aware_stop_slippage": True,
+                },
+            }
+            cost_stress["realistic_net_profit"] = _rnp
+            cost_stress["same_bar_both_touch"] = _both
+            cost_stress["same_bar_both_touch_pct"] = (100.0 * _both / len(final_bt.trades)) if (_both is not None and final_bt.trades) else None
+            log(f"  Realism stress: {_lag}-bar-late fills + session-aware stop slippage + 1-tick TP trade-through: net ${_rnp:,.0f} "
+                f"vs ${_base_np:,.0f} at 1x ({len(_rbt.trades)} trades)."
+                + (f" {_both} of {len(final_bt.trades)} trades sat on a bar that touched both stop and target (booked as stops)." if _both is not None else ""))
+        except Exception as _exc:  # noqa: BLE001
+            log(f"  Realism stress skipped: {_exc}")
         # 2026-11 audit: futures costs are fixed ticks and dollars per contract -> a ladder in price POINTS (2/4/8/12 ticks = NQ's 0.5/1/2/3).
         try:
             from app.backtest.statistics import compute_point_cost_ladder, point_ladder_summary
@@ -2850,6 +2906,7 @@ def run_full_pipeline(
                 search_monte_carlo_sims=cfg.ga_search_mc_sims,
                 random_seed=cfg.random_seed,
                 optimizer_mode=cfg.optimizer_mode,
+                adaptive_budget=True, early_stop_patience=0,
                 # UPGRADE (GA-searches-what-it's-graded-on): the search
                 # itself is now penalized for elevated Monte Carlo risk of
                 # ruin using the SAME cap _make_verdict hard-vetoes on

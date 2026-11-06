@@ -220,7 +220,7 @@ class QuickOptimizeConfig:
     # of the "actually optimizes" bar.
     ga_population: int = 40
     ga_generations: int = 14
-    fitness_metric: str = "pass_gradient"
+    fitness_metric: str = "edge_lb_r_dd"
     # UPGRADE (optimizer core): explicit optimizer mode -- "genetic"
     # (default, byte-identical to every run before this field existed),
     # or the optional TPE/CMA-ES samplers (see
@@ -229,7 +229,7 @@ class QuickOptimizeConfig:
     # every downstream step (cost-stress penalty, the chained-OOS fitness,
     # the final re-validation) runs identically regardless of which mode
     # is picked.
-    optimizer_mode: str = "genetic"
+    optimizer_mode: str = "auto"
     ga_search_mc_sims: int = 200
     final_mc_sims: int = 1000
     n_folds: int = 4
@@ -246,7 +246,7 @@ class QuickOptimizeConfig:
     # app.backtest.adaptive_risk.build_limit_aware_preset) -- off by
     # default; applies to the baseline run, the GA search itself, and
     # the final re-validated run alike.
-    adaptive_risk_enabled: bool = False
+    adaptive_risk_enabled: bool = True
     adaptive_risk_daily_profit_lock_pct: float | None = 80.0
     # Must be one of app.strategy.library's STATUS_LABELS_ORDERED. "draft" is
     # deliberately conservative -- Quick Optimize only re-runs the GA + one
@@ -822,6 +822,7 @@ def run_quick_optimize(
         search_monte_carlo_sims=cfg.ga_search_mc_sims,
         random_seed=cfg.random_seed,
         optimizer_mode=cfg.optimizer_mode,
+        adaptive_budget=True,
     )
     ga_result = run_walkforward_aware_refinement(
         dev_df, strategy, risk, prop_rules,

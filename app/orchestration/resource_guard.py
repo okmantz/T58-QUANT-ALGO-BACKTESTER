@@ -107,6 +107,18 @@ def _available_memory_bytes() -> int:
     return _FALLBACK_AVAILABLE_BYTES
 
 
+def physical_core_count() -> int:
+    """Physical CPU cores (hyper-threads excluded); falls back to the logical count, then 2, if the platform will not say."""
+    try:
+        import psutil
+        n = psutil.cpu_count(logical=False)
+        if n:
+            return max(1, int(n))
+    except Exception:  # noqa: BLE001
+        pass
+    return max(1, os.cpu_count() or 2)
+
+
 def safe_worker_count(
     df: Optional[pd.DataFrame],
     requested: Optional[int] = None,
@@ -156,7 +168,10 @@ def safe_worker_count_for_bytes(
 
     Always returns at least 1.
     """
-    cpu_cap = requested if requested is not None else (os.cpu_count() or 2)
+    # 2026-11-05 audit: cap by PHYSICAL cores, not logical threads -- hyper-threads share an FPU, so a backtest pool sized to the thread count
+    # slows every worker without finishing sooner. An explicit ``requested`` is still honoured exactly (it is the caller's upper bound).
+    physical = physical_core_count()
+    cpu_cap = int(requested) if requested is not None else physical
     cpu_cap = max(1, int(cpu_cap))
     if max_candidates_in_flight is not None:
         cpu_cap = max(1, min(cpu_cap, int(max_candidates_in_flight)))
@@ -256,6 +271,11 @@ class HeavyJobGuard:
                 return False
             self._active_name = name
             return True
+
+    def active_names(self) -> list[str]:
+        """Name of the job holding the slot right now (empty when free) -- read-only, for pre-flight checks."""
+        with self._lock:
+            return [self._active_name] if self._active_name else []
 
     def release(self, name: str) -> None:
         released = False
