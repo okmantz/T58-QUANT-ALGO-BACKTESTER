@@ -119,6 +119,8 @@ class LiveExecutionStatus:
     # surface this prominently -- it means "a human must look at the
     # broker account before restarting".
     alert: Optional[str] = None
+    # Trade copier: one dict per follower account (see trade_copier.LegStatus). Empty without a copier.
+    followers: list = field(default_factory=list)
 
 
 @dataclass
@@ -144,6 +146,9 @@ class LiveExecutionConfig:
     drift_tolerance_pts: float = 20.0
     baseline_win_rate: Optional[float] = None
     weekend_flatten_time: dt_time = dt_time(20, 45)  # Friday server-time cutoff when weekend_hold_allowed=False
+    # Journal key for this session's trades. None = the broker's own account login (the long-standing behaviour).
+    # The trade copier sets it to the saved-account id so several accounts under one login stay separate.
+    journal_login: Optional[str] = None
 
 
 class LiveExecutionSession:
@@ -157,7 +162,16 @@ class LiveExecutionSession:
         config: LiveExecutionConfig,
         on_log: Optional[LogCallback] = None,
         on_status: Optional[Callable[[LiveExecutionStatus], None]] = None,
+        copier=None,
+        bar_source: Optional[BrokerAdapter] = None,
+        bar_symbol: Optional[str] = None,
     ):
+        # copier: an app.live_deploy.trade_copier.TradeCopier (duck-typed; None = single-account, byte-identical to before).
+        # bar_source / bar_symbol: take price bars from a different adapter/symbol than the one that trades (needed when the
+        # leader's platform has no bar feed, e.g. Tradovate). None = the leader's own broker and symbol.
+        self.copier = copier
+        self.bar_source = bar_source
+        self.bar_symbol = bar_symbol
         self.strategy = strategy
         self.strategy_type = strategy_type
         self.strategy_filename = strategy_filename
@@ -203,12 +217,26 @@ class LiveExecutionSession:
 
         self._session_id = self.journal.start_session(
             self.strategy_type, self.strategy_filename, self.cfg.symbol,
-            self.cfg.timeframe_minutes, conn.account_login or "", conn.account_server or self.broker.platform_name,
+            self.cfg.timeframe_minutes, self.cfg.journal_login or conn.account_login or "",
+            conn.account_server or self.broker.platform_name,
         )
         self.status.baseline_win_rate = self.cfg.baseline_win_rate
         # v7 P0-2: anchor the trailing max-drawdown peak at session start.
         self._dd_peak = conn.equity or conn.balance or self.cfg.risk.initial_balance
         self._reconcile_existing_position()
+
+        if self.copier is not None:
+            # All-or-nothing: every follower must connect, or nothing trades.
+            leader_dir = self.status.last_signal if self.status.open_position_ticket else 0
+            ok, msg = self.copier.start(leader_direction=leader_dir)
+            if not ok:
+                self._log("error", msg)
+                if self._session_id is not None:
+                    self.journal.end_session(self._session_id)
+                self.broker.disconnect()
+                self.status.connected = False
+                return False, msg
+            self._sync_followers()
 
         self._stop_flag.clear()
         self.status.running = True
@@ -225,6 +253,9 @@ class LiveExecutionSession:
         if self._thread is not None:
             self._thread.join(timeout=self.cfg.poll_seconds + 10)
         self.status.running = False
+        if self.copier is not None:
+            self.copier.stop()      # graceful: follower positions stay open, connections close
+            self._sync_followers()
         if self._session_id is not None:
             self.journal.end_session(self._session_id)
         self.broker.disconnect()
@@ -238,6 +269,8 @@ class LiveExecutionSession:
                 self._log("info" if r.ok else "error", r.message)
         except Exception as exc:  # noqa: BLE001
             self._log("error", f"Error while flattening positions: {exc}")
+        if self.copier is not None:
+            self.copier.flatten_all("kill switch")
         self.stop()
 
     # -- internals --------------------------------------------------------
@@ -353,6 +386,7 @@ class LiveExecutionSession:
                     # v7 P0-5: an exception escaping the poll is a poll
                     # failure too -- it counts toward the N-strikes halt.
                     self._note_poll_failure(f"Poll error: {exc}\n{traceback.format_exc(limit=3)}")
+                self._sync_followers()
                 self._on_status(self.status)
                 self._stop_flag.wait(self.cfg.poll_seconds)
         finally:
@@ -402,6 +436,12 @@ class LiveExecutionSession:
             results = []
         for r in results or []:
             self._log("info" if r.ok else "error", f"Emergency flatten: {r.message}")
+        if self.copier is not None:
+            try:
+                self.copier.on_leader_emergency(reason)
+            except Exception as exc:  # noqa: BLE001
+                self._log("error", f"Follower flatten failed: {exc}")
+            self._sync_followers()
         self.status.alert = reason
         self.status.halted_reason = reason
         self.status.open_position_ticket = None
@@ -464,8 +504,13 @@ class LiveExecutionSession:
         if self._check_max_drawdown():
             return
 
-        df = self.broker.fetch_completed_bars(self.cfg.symbol, self.cfg.timeframe_minutes, self.cfg.history_bars)
-        if df.empty:
+        # Followers: health, drawdown and broker-side closes, and any close still owed after the leader went flat.
+        if self.copier is not None:
+            self.copier.poll()
+            self._sync_followers()
+
+        df = self._fetch_bars()
+        if df is None or df.empty:
             return
         self._note_poll_success()
         latest_bar_time = df["timestamp"].iloc[-1]
@@ -526,11 +571,46 @@ class LiveExecutionSession:
 
         self._check_drift()
 
+    def _fetch_bars(self):
+        """Bars for signal generation: the leader's own broker by default, or the configured bar source
+        (a follower's adapter, for leaders whose platform has no bar feed). A feed that cannot be
+        reached counts as a poll failure, exactly like the leader's own link."""
+        src = self.bar_source or self.broker
+        symbol = self.bar_symbol or self.cfg.symbol
+        if src is not self.broker:
+            re = src.ensure_connected()
+            if not re.ok:
+                self._note_poll_failure(f"Price-feed account connection lost, reconnect failed: {re.message}")
+                return None
+        return src.fetch_completed_bars(symbol, self.cfg.timeframe_minutes, self.cfg.history_bars)
+
+    def _leader_reference_price(self, fallback: float) -> float:
+        """When bars come from another account, anchor the leader's own stop/target on the leader broker's
+        own latest price (basis between two brokers' feeds would otherwise shift the stop). Falls back to the
+        feed price when the leader's platform serves no bars."""
+        if self.bar_source is None or self.bar_source is self.broker or not self.broker.supports_bars:
+            return fallback
+        try:
+            df = self.broker.fetch_completed_bars(self.cfg.symbol, self.cfg.timeframe_minutes, 2)
+            if df is not None and not df.empty and float(df["close"].iloc[-1]) > 0:
+                return float(df["close"].iloc[-1])
+        except Exception:  # noqa: BLE001
+            pass
+        return fallback
+
+    def _sync_followers(self) -> None:
+        if self.copier is not None:
+            try:
+                self.status.followers = self.copier.statuses()
+            except Exception:  # noqa: BLE001
+                pass
+
     def _last_trade_direction(self) -> int:
         open_trades = self.journal.open_trades(self._session_id)
         return open_trades[0].direction if open_trades else 0
 
     def _open_new_trade(self, signal: int, result, price: float) -> None:
+        price = self._leader_reference_price(price)
         stop_distance = self._resolve_stop_distance(result, price)
         target_distance = self._resolve_target_distance(result, price)
         stop_pips = stop_distance / self.cfg.risk.pip_size if self.cfg.risk.pip_size else 0
@@ -593,6 +673,16 @@ class LiveExecutionSession:
                            f"{self.broker.platform_name} units of {self.cfg.symbol} @ {order.price or price:.5f} "
                            f"(ticket {order.ticket}).")
 
+        # Trade copier: followers copy only what the leader actually placed, sized on their own accounts.
+        if self.copier is not None:
+            self.copier.mirror_open(
+                signal=signal, stop_distance=stop_distance, target_distance=target_distance,
+                leader_units=broker_qty * (self.cfg.units_per_lot or self.cfg.contract_size or 0.0),
+                leader_price=float(order.price or price), leader_symbol=self.cfg.symbol,
+                ts=self.status.last_bar_time if self.status.last_bar_time is not None else pd.Timestamp.now(tz="UTC"),
+            )
+            self._sync_followers()
+
     def _close_current_trade(self, reason: str) -> None:
         ticket = self.status.open_position_ticket
         if ticket is None:
@@ -603,6 +693,9 @@ class LiveExecutionSession:
             return
         self._finalize_closed_trade(result.price)
         self._log("info", f"Closed position (ticket {ticket}) -- {reason}.")
+        if self.copier is not None:
+            self.copier.mirror_close(f"leader closed: {reason}")
+            self._sync_followers()
 
     def _reconcile_closed_trade(self) -> None:
         ticket = self.status.open_position_ticket
@@ -613,6 +706,9 @@ class LiveExecutionSession:
             return
         self._finalize_closed_trade(exit_price=None)
         self._log("info", f"Position (ticket {ticket}) closed on the broker side (SL/TP hit) since last check.")
+        if self.copier is not None:
+            self.copier.mirror_close("leader position closed at the broker (stop/target)")
+            self._sync_followers()
 
     def _finalize_closed_trade(self, exit_price: Optional[float]) -> None:
         if self._open_trade_row_id is None:

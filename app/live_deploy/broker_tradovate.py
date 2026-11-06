@@ -54,9 +54,15 @@ def is_available() -> bool:
 
 class TradovateBrokerAdapter(BrokerAdapter):
     platform_name = "Tradovate"
+    # Chart history is WebSocket-only (see fetch_completed_bars) and
+    # place_market_order sends a plain market order with no bracket, so the
+    # trade copier must take bars from another account and cannot rely on a
+    # broker-side stop here.
+    supports_bars = False
+    supports_broker_stops = False
 
     def __init__(self, username: str, password: str, app_id: str, app_secret: str,
-                 cid: str, sec: str, is_live: bool = False, account_id: int | None = None):
+                 cid: str, sec: str, is_live: bool = False, account_id: int | str | None = None):
         self.username = username
         self.password = password
         self.app_id = app_id
@@ -64,7 +70,15 @@ class TradovateBrokerAdapter(BrokerAdapter):
         self.cid = cid          # Tradovate "client id" issued with your app registration
         self.sec = sec          # Tradovate "client secret" issued with your app registration
         self.is_live = is_live
-        self.account_id = account_id  # resolved on connect() if not supplied
+        # A login can own several accounts (typical when you hold several prop
+        # evaluations). `account_id` may be the numeric id OR the account name
+        # exactly as Tradovate lists it; blank = the login's first account
+        # (the old behaviour, fine for a single-account login).
+        self._account_pick: str = str(account_id).strip() if account_id not in (None, "") else ""
+        self.account_id = None
+        self.account_name: str | None = None
+        if self._account_pick.isdigit():
+            self.account_id = int(self._account_pick)
         self.base_url = _LIVE_BASE if is_live else _DEMO_BASE
         self.access_token: str | None = None
         self._session = requests.Session()
@@ -85,12 +99,16 @@ class TradovateBrokerAdapter(BrokerAdapter):
         self.access_token = data["accessToken"]
         self._session.headers.update({"Authorization": f"Bearer {self.access_token}"})
 
-        if self.account_id is None:
+        if self.account_id is None or self.account_name is None:
             try:
                 accounts = self._session.get(f"{self.base_url}/account/list", timeout=15).json()
                 if not accounts:
                     return ConnectionResult(ok=False, message="Login succeeded but no Tradovate accounts were found.")
-                self.account_id = accounts[0]["id"]
+                chosen, why = self._pick_account(accounts)
+                if chosen is None:
+                    return ConnectionResult(ok=False, message=why)
+                self.account_id = chosen["id"]
+                self.account_name = chosen.get("name") or None
             except Exception as exc:
                 return ConnectionResult(ok=False, message=f"Could not resolve account id: {exc}")
 
@@ -100,6 +118,18 @@ class TradovateBrokerAdapter(BrokerAdapter):
             account_server="Tradovate-live" if self.is_live else "Tradovate-demo",
             balance=summary.get("balance"), equity=summary.get("equity"), currency="USD",
         )
+
+    def _pick_account(self, accounts: list):
+        """(account dict, "") or (None, reason). Matches the user's pick against
+        the numeric id or the account name; with no pick, the first account."""
+        if not self._account_pick:
+            return accounts[0], ""
+        for a in accounts:
+            if str(a.get("id")) == self._account_pick or str(a.get("name", "")).lower() == self._account_pick.lower():
+                return a, ""
+        listing = ", ".join(f"{a.get('name', '?')} (id {a.get('id')})" for a in accounts)
+        return None, (f"This Tradovate login has no account '{self._account_pick}'. "
+                      f"Accounts on the login: {listing}.")
 
     def disconnect(self) -> None:
         self.access_token = None
@@ -212,7 +242,7 @@ class TradovateBrokerAdapter(BrokerAdapter):
         # to_broker_qty by the caller -- never raw sizing units (v7 P0-1).
         try:
             status, data = self._post("/order/placeorder", {
-                "accountSpec": self.username, "accountId": self.account_id, "symbol": symbol,
+                "accountSpec": self.account_name or self.username, "accountId": self.account_id, "symbol": symbol,
                 "action": "Buy" if direction == 1 else "Sell",
                 "orderQty": int(volume), "orderType": "Market", "isAutomated": True,
             })

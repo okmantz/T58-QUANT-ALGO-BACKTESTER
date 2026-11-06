@@ -21,6 +21,32 @@ SUPPORTED_PLATFORMS = [
 ]
 
 
+def adapter_class_for(platform: str):
+    """The BrokerAdapter subclass for a platform name, or None when unsupported. Nothing is constructed or
+    connected, so callers (the trade-copier preflight) can read class-level capability flags
+    (supports_bars, supports_broker_stops) cheaply."""
+    platform = normalize_platform(platform)
+    try:
+        if platform == PLATFORM_MT4_MT5:
+            from app.live_deploy.broker_mt5 import MT5BrokerAdapter
+            return MT5BrokerAdapter
+        if platform == PLATFORM_CTRADER:
+            from app.live_deploy.broker_ctrader import CTraderBrokerAdapter
+            return CTraderBrokerAdapter
+        if platform == PLATFORM_TRADOVATE:
+            from app.live_deploy.broker_tradovate import TradovateBrokerAdapter
+            return TradovateBrokerAdapter
+        if platform == PLATFORM_TRADELOCKER:
+            from app.live_deploy.broker_tradelocker import TradeLockerBrokerAdapter
+            return TradeLockerBrokerAdapter
+        if platform == PLATFORM_DXTRADE:
+            from app.live_deploy.broker_dxtrade import DXtradeBrokerAdapter
+            return DXtradeBrokerAdapter
+    except Exception:  # noqa: BLE001 -- a missing optional dependency means "not available here"
+        return None
+    return None
+
+
 def build_adapter(account: LiveAccount) -> BrokerAdapter:
     """Raises ValueError for an unknown/unsupported platform string, or
     KeyError-style ValueError if a platform-specific required field is
@@ -56,6 +82,7 @@ def build_adapter(account: LiveAccount) -> BrokerAdapter:
             app_id=extra["app_id"], app_secret=extra["app_secret"],
             cid=extra["cid"], sec=extra["sec"],
             is_live=extra.get("is_live", "false").lower() == "true" if isinstance(extra.get("is_live"), str) else bool(extra.get("is_live")),
+            account_id=(str(extra.get("account_id") or "").strip() or None),
         )
 
     if platform == PLATFORM_TRADELOCKER:
@@ -63,6 +90,7 @@ def build_adapter(account: LiveAccount) -> BrokerAdapter:
         return TradeLockerBrokerAdapter(
             email=account.login, password=account.password, server=account.server,
             is_live=extra.get("is_live", "false").lower() == "true" if isinstance(extra.get("is_live"), str) else bool(extra.get("is_live")),
+            account_id=(str(extra.get("account_id") or "").strip() or None),
         )
 
     if platform == PLATFORM_DXTRADE:
@@ -71,6 +99,7 @@ def build_adapter(account: LiveAccount) -> BrokerAdapter:
         return DXtradeBrokerAdapter(
             base_url=extra["base_url"], username=account.login, password=account.password,
             domain=extra.get("domain", "default"),
+            account_id=(str(extra.get("account_id") or "").strip() or None),
         )
 
     raise ValueError(f"Unsupported platform '{platform}'. Supported: {SUPPORTED_PLATFORMS}.")

@@ -95,6 +95,29 @@ def contract_size_for_symbol(symbol: str) -> float | None:
     return None
 
 
+def instrument_sizing_for_symbol(symbol: str) -> tuple[float | None, float | None]:
+    """(contract_size, pip_size) for a futures root symbol from the instrument registry, or (None, None).
+
+    The Deploy page has no contract-size / pip-size inputs, so without this a futures symbol reached the
+    engine with contract_size=None and Tradovate refused every entry (see to_broker_qty's no-guessing rule).
+    Never invents a number: an unknown symbol stays (None, None)."""
+    cs = contract_size_for_symbol(symbol)
+    if cs is None:
+        return None, None
+    pip = None
+    try:
+        from app.data.instrument_specs import get_instrument_spec
+        root = str(symbol).strip().upper()
+        spec = get_instrument_spec(root)
+        if spec is None:
+            m = _MONTH_CODE_RE.match(root)
+            spec = get_instrument_spec(m.group(1)) if m else None
+        pip = float(spec.pip_size) if spec is not None else None
+    except Exception:  # noqa: BLE001
+        pip = None
+    return cs, pip
+
+
 def resolve_units_per_lot(contract_size: float | None, explicit: float | None = None) -> float:
     """Resolve the units_per_lot conversion factor.
 

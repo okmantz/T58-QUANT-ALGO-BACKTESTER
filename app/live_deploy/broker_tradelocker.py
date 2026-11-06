@@ -60,7 +60,11 @@ class TradeLockerBrokerAdapter(BrokerAdapter):
     platform_name = "TradeLocker"
 
     def __init__(self, email: str, password: str, server: str, is_live: bool = False,
-                 base_url: str | None = None):
+                 base_url: str | None = None, account_id: int | str | None = None):
+        # A login can own several accounts. `account_id` may be the account id,
+        # its accNum, or its name as TradeLocker lists it; blank = first account
+        # (the old behaviour, fine for a single-account login).
+        self._account_pick: str = str(account_id).strip() if account_id not in (None, "") else ""
         self.email = email
         self.password = password
         self.server = server
@@ -152,6 +156,13 @@ class TradeLockerBrokerAdapter(BrokerAdapter):
             if not accts:
                 return ConnectionResult(ok=False, message="Login succeeded but no TradeLocker accounts were found.")
             chosen = accts[0]
+            if self._account_pick:
+                chosen = next((a for a in accts if self._account_pick in (
+                    str(a.get("id")), str(a.get("accNum")), str(a.get("name", "")))), None)
+                if chosen is None:
+                    listing = ", ".join(f"id {a.get('id')} (accNum {a.get('accNum')})" for a in accts)
+                    return ConnectionResult(ok=False, message=(
+                        f"This TradeLocker login has no account '{self._account_pick}'. Accounts on the login: {listing}."))
             self.account_id = str(chosen["id"])
             self.acc_num = int(chosen.get("accNum", 0) or 0)
             self.currency = chosen.get("currency")

@@ -36,9 +36,13 @@ def _trade_dict(t) -> dict:
             "status": t.status}
 
 
-def build_portfolio(accounts: Iterable[Any], journal, live_status: Optional[dict] = None, live_login: str = "") -> dict:
+def build_portfolio(accounts: Iterable[Any], journal, live_status: Optional[dict] = None, live_login: str = "",
+                    extra_statuses: Optional[dict] = None) -> dict:
     """``accounts``: LiveAccount-like objects (id, nickname, platform, firm_name, login, is_usable).
-    ``live_status``: the running session's status as a dict (or None). ``live_login``: login the session trades."""
+    ``live_status``: the running session's status as a dict (or None). ``live_login``: login the session trades.
+    ``extra_statuses``: {saved-account id: status dict} for every account in a trade-copier group (leader and followers).
+    Copier sessions are journaled under the saved-account id, so several accounts on one broker login stay separate."""
+    extra_statuses = extra_statuses or {}
     rows: list[dict] = []
     sessions_by_login: dict[str, list[tuple]] = {}
     try:
@@ -49,7 +53,9 @@ def build_portfolio(accounts: Iterable[Any], journal, live_status: Optional[dict
         pass
     for a in accounts:
         login = str(getattr(a, "login", "") or "")
-        sess = sessions_by_login.get(login, [])
+        acct_id = str(getattr(a, "id", "") or "")
+        sess = list(sessions_by_login.get(login, [])) + (list(sessions_by_login.get(acct_id, [])) if acct_id and acct_id != login else [])
+        sess.sort(key=lambda r: r[4] or 0, reverse=True)
         open_t: list[dict] = []
         past: list[dict] = []
         net = 0.0
@@ -70,6 +76,8 @@ def build_portfolio(accounts: Iterable[Any], journal, live_status: Optional[dict
         past.sort(key=lambda d: d.get("exit_time") or 0, reverse=True)
         is_live_acct = bool(live_status) and login and login == str(live_login or "")
         st = live_status if is_live_acct else None
+        if acct_id and acct_id in extra_statuses:
+            st = extra_statuses[acct_id]       # copier group member: its own status, not the single-session one
         rows.append({
             "id": getattr(a, "id", ""), "nickname": getattr(a, "nickname", "") or login or "Account",
             "firm": getattr(a, "firm_name", "") or "", "platform": getattr(a, "platform", ""),

@@ -84,6 +84,14 @@ class BrokerAdapter(ABC):
 
     platform_name: str = "unknown"
 
+    # Capability flags (class-level so the trade-copier preflight can read them
+    # without opening a connection). supports_bars: fetch_completed_bars really
+    # returns price history. supports_broker_stops: place_market_order attaches
+    # the sl_price / tp_price it is given to the order at the broker. An adapter
+    # that cannot do one of these overrides the flag to False.
+    supports_bars: bool = True
+    supports_broker_stops: bool = True
+
     @abstractmethod
     def connect(self) -> ConnectionResult: ...
 

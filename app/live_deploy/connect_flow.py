@@ -53,6 +53,9 @@ PLATFORM_FIELDS: dict[str, list[dict[str, Any]]] = {
         {"key": "is_live", "label": "Environment", "kind": "select", "options": ["false", "true"],
          "option_labels": {"false": "Demo / practice", "true": "Live / funded"}, "default": "false", "required": True, "store": "extra",
          "help": "Prop-firm evaluation accounts usually run on the DEMO environment; funded (PA/Live) accounts are LIVE."},
+        {"key": "account_id", "label": "Account ID or name (only if this login owns several accounts)", "kind": "text", "required": False, "store": "extra",
+         "help": "Leave blank for a single-account login. If you hold several accounts under one login (for example several prop evaluations), "
+                 "save each as its own entry here and put that account's ID or name in this box, otherwise every entry trades the login's FIRST account."},
     ],
     "TradeLocker": [
         {"key": "login", "label": "Email", "kind": "text", "required": True, "store": "core"},
@@ -60,6 +63,9 @@ PLATFORM_FIELDS: dict[str, list[dict[str, Any]]] = {
         {"key": "server", "label": "Server name", "kind": "text", "required": True, "store": "core"},
         {"key": "is_live", "label": "Environment", "kind": "select", "options": ["false", "true"],
          "option_labels": {"false": "Demo / practice", "true": "Live / funded"}, "default": "false", "required": True, "store": "extra"},
+        {"key": "account_id", "label": "Account ID or name (only if this login owns several accounts)", "kind": "text", "required": False, "store": "extra",
+         "help": "Leave blank for a single-account login. If you hold several accounts under one login (for example several prop evaluations), "
+                 "save each as its own entry here and put that account's ID or name in this box, otherwise every entry trades the login's FIRST account."},
     ],
     "DXtrade": [
         {"key": "base_url", "label": "DXtrade base URL", "kind": "text", "required": True, "store": "extra",
@@ -67,6 +73,9 @@ PLATFORM_FIELDS: dict[str, list[dict[str, Any]]] = {
         {"key": "login", "label": "Username", "kind": "text", "required": True, "store": "core"},
         {"key": "password", "label": "Password", "kind": "secret", "required": True, "store": "core"},
         {"key": "domain", "label": "Domain (leave 'default' unless your firm says otherwise)", "kind": "text", "default": "default", "required": False, "store": "extra"},
+        {"key": "account_id", "label": "Account ID or name (only if this login owns several accounts)", "kind": "text", "required": False, "store": "extra",
+         "help": "Leave blank for a single-account login. If you hold several accounts under one login (for example several prop evaluations), "
+                 "save each as its own entry here and put that account's ID or name in this box, otherwise every entry trades the login's FIRST account."},
     ],
 }
 
