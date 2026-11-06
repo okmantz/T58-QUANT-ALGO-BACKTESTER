@@ -364,6 +364,18 @@ class RiskConfig:
     # instrument's micro equivalent. None = no micro available.
     micro_commission_per_contract: float | None = None
     # micro_fallback only: $ round-turn commission per micro contract.
+    # 2026-11-05 audit: execution-realism stress knobs. ALL default off -- a run that never sets them is byte-identical to before. The
+    # Full Pipeline's verdict stress sets them (app.orchestration.full_pipeline._realism_risk) so an edge has to survive the failures that
+    # actually hurt futures traders, not only a flat cost multiplier:
+    #   tp_trade_through_pips         a resting take-profit limit fills only when price trades THIS many pips THROUGH it (a touch is
+    #                                 not a fill: queue position). The fill price stays the limit price. 0 = fills on touch (old).
+    #   stop_slippage_extra_pips      extra adverse slippage charged on STOP exits only, in pips.
+    #   stop_slippage_session_aware   scale that extra by the exit's session (thin overnight/Asia worse, London/NY overlap better, the
+    #                                 weekend-open gap far worse -- app.monte_carlo.slippage_model) and double it on news-sized bars
+    #                                 (bar range >= 3x its trailing median).
+    tp_trade_through_pips: float = 0.0
+    stop_slippage_extra_pips: float = 0.0
+    stop_slippage_session_aware: bool = False
     intrabar_replay: bool = False
     # When True AND the caller supplies a finer-timeframe frame (see
     # run_execution's intrabar_df), every open trade is walked bar-by-bar

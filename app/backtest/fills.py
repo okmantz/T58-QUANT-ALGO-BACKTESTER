@@ -64,19 +64,24 @@ def exit_fill_price(risk, raw_exit_price: float, direction: int) -> float:
     return raw_exit_price - side_cost(risk) * direction
 
 
-def resolve_intrabar_exit(direction_: int, stop, take, low: float, high: float, open_: float):
+def resolve_intrabar_exit(direction_: int, stop, take, low: float, high: float, open_: float, take_through: float = 0.0):
     """Pure fill-resolution logic: does this bar's high/low trigger the resting stop or target, and if so, at
     what honest price? A resting stop that the bar gapped straight through does NOT fill at the stop level --
-    it fills at the open, which is worse. Stop beats target on a bar that spans both."""
+    it fills at the open, which is worse. Stop beats target on a bar that spans both.
+
+    ``take_through`` (price units, default 0 = fills on touch) is the trade-through requirement for the resting take-profit limit: the bar
+    must trade that far BEYOND the target before the limit fills (a touch does not get you filled). A bar that opens beyond the target
+    fills at the target price as before. 2026-11-05 audit: lets the verdict stress model the limit order that does not fill."""
+    tt = float(take_through or 0.0)
     if direction_ == 1:
         if stop is not None and low <= stop:
             return min(stop, open_), "stop_loss"
-        if take is not None and high >= take:
+        if take is not None and high >= take + tt:
             return take, "take_profit"
     else:
         if stop is not None and high >= stop:
             return max(stop, open_), "stop_loss"
-        if take is not None and low <= take:
+        if take is not None and low <= take - tt:
             return take, "take_profit"
     return None, None
 
@@ -139,10 +144,11 @@ class SettleMath:
     gap_loss: bool              # a stop fill several times worse than the trade's sized risk
 
 
-def settle_math(risk, open_pos: dict, raw_exit_price: float, reason: str, direction_: int) -> SettleMath:
+def settle_math(risk, open_pos: dict, raw_exit_price: float, reason: str, direction_: int, extra_exit_slip: float = 0.0) -> SettleMath:
     """Round-turn costs for closing ALL of ``open_pos``: spread/slippage on the exit side, flat + per-contract
-    commission (B2-4), and the non-finite-pnl guard."""
-    filled = exit_fill_price(risk, raw_exit_price, direction_)
+    commission (B2-4), and the non-finite-pnl guard. ``extra_exit_slip`` (price units, default 0) is additional ADVERSE slippage on this
+    exit (session-aware stop slippage, 2026-11-05 audit)."""
+    filled = exit_fill_price(risk, raw_exit_price, direction_) - float(extra_exit_slip or 0.0) * direction_
     pnl = (filled - open_pos["entry_price"]) * open_pos["size"] * direction_
     pos_cs = open_pos.get("contract_size", risk.contract_size)
     pos_cpc = open_pos.get("commission_per_contract", risk.commission_per_contract)

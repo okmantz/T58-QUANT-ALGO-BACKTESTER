@@ -162,6 +162,11 @@ class BacktestStatistics:
     sharpe_per_trade: float = 0.0
     pnl_skew: float = 0.0
     pnl_kurtosis: float = 3.0   # NON-excess (a normal distribution = 3), as the PSR formula expects
+    # 2026-11-05 audit: the strategy's OWN per-trade standard deviation of R (ddof=1) and the number of trades it came from. 0.0 / 0 when
+    # fewer than 2 trades carried a planned risk. t-statistics (app.discovery_engine.objective.mean_r_t_stat) blend this with the 1.3R
+    # prior via app.validation.edge_stats.blended_trade_sd_r instead of assuming 1.3R for every strategy.
+    std_r: float = 0.0
+    n_r_trades: int = 0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -686,8 +691,14 @@ def compute_statistics(
         for t in trades
         if getattr(t, "initial_risk", None) and t.initial_risk > 0 and t.size
     ]
+    std_r = 0.0
+    n_r_trades = 0
     if r_multiples:
         average_r = float(np.mean(r_multiples))
+        n_r_trades = len(r_multiples)
+        if n_r_trades >= 2:
+            _sd = float(np.std(r_multiples, ddof=1))
+            std_r = _sd if np.isfinite(_sd) else 0.0
     else:
         risk_per_trade = [abs(t.pnl) for t in trades if t.pnl <= 0]
         avg_risk = float(np.mean(risk_per_trade)) if risk_per_trade else (abs(average_loser) or 1.0)
@@ -746,6 +757,7 @@ def compute_statistics(
         average_r=average_r, risk_reward=risk_reward,
         sharpe_ratio=sharpe_ratio, sortino_ratio=sortino_ratio, calmar_ratio=calmar_ratio,
         total_trades=len(trades), account_reset_count=account_reset_count,
+        std_r=std_r, n_r_trades=n_r_trades,
         payout_count=payout_count, total_payout_amount=total_payout_amount,
         is_reset_chain=account_reset_count > 0,
         final_segment_net_profit=final_segment_net_profit,

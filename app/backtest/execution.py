@@ -151,6 +151,10 @@ from app.backtest.fills import (  # noqa: E402,F401
 )
 
 
+# (timestamp fingerprint) -> (bar_dates, unique_days, day_idx); see run_execution. Tiny: eight datasets at most.
+_DAY_INDEX_CACHE: dict = {}
+
+
 def run_execution(
     df: pd.DataFrame,
     signals: pd.Series,
@@ -487,22 +491,49 @@ def run_execution(
     # circuit breaker, news blackout, weekend hold) keys off this SESSION
     # day. Falls back to the P2-3 wall-clock calendar day if the
     # trading_day module isn't importable yet (guarded import at top).
-    if trading_day is not None:
-        _ts_for_days = pd.DatetimeIndex(ts)
-        if _ts_tz is not None:
-            _ts_for_days = _ts_for_days.tz_localize("UTC").tz_convert(_ts_tz)
-        # v9.13 speed: trading_days() is the vectorized twin of the
-        # per-bar trading_day() list comprehension this used to be --
-        # elementwise identical dates (pinned by test), computed
-        # column-wise instead of one pd.Timestamp + pytz lookup per bar
-        # (that loop alone was ~half of a single engine pass's wall
-        # clock on a 75k-bar frame, paid by every backtest in the app).
-        bar_dates = trading_days(_ts_for_days, tz="America/Chicago", roll_hour=17)
+    # 2026-11-05 audit: the trading-day labels and the dense day index depend ONLY on the timestamps, and a search runs thousands of backtests
+    # over the SAME bars. Keyed on a cheap fingerprint of the timestamp column (length, first/middle/last value, timezone, roll mode), they are
+    # computed once per dataset instead of once per backtest. The cached arrays are read-only views so no run can corrupt another's labels.
+    _day_key = None
+    try:
+        _tsv = np.asarray(ts)
+        if len(_tsv):
+            _i64 = _tsv.astype("datetime64[ns]").astype("int64")
+            # length, ends, middle AND the wrapped sum / sum of squares of every timestamp: two different bar sets do not share all of these
+            _day_key = (len(_i64), str(_ts_tz), trading_day is not None, int(_i64[0]), int(_i64[len(_i64) // 2]), int(_i64[-1]),
+                        int(_i64.sum()), int((_i64 // 1_000_000_000 % 1_000_003).sum()))
+    except Exception:  # noqa: BLE001
+        _day_key = None
+    _day_hit = _DAY_INDEX_CACHE.get(_day_key) if _day_key is not None else None
+    if _day_hit is not None:
+        bar_dates, _unique_days, day_idx = _day_hit
     else:
-        _ts_for_days = df["timestamp"]
-        if _ts_tz is not None:
-            _ts_for_days = pd.DatetimeIndex(ts).tz_localize("UTC").tz_convert(_ts_tz)
-        bar_dates = pd.DatetimeIndex(_ts_for_days).normalize().to_numpy()
+        if trading_day is not None:
+            _ts_for_days = pd.DatetimeIndex(ts)
+            if _ts_tz is not None:
+                _ts_for_days = _ts_for_days.tz_localize("UTC").tz_convert(_ts_tz)
+            # v9.13 speed: trading_days() is the vectorized twin of the
+            # per-bar trading_day() list comprehension this used to be --
+            # elementwise identical dates (pinned by test), computed
+            # column-wise instead of one pd.Timestamp + pytz lookup per bar
+            # (that loop alone was ~half of a single engine pass's wall
+            # clock on a 75k-bar frame, paid by every backtest in the app).
+            bar_dates = trading_days(_ts_for_days, tz="America/Chicago", roll_hour=17)
+        else:
+            _ts_for_days = df["timestamp"]
+            if _ts_tz is not None:
+                _ts_for_days = pd.DatetimeIndex(ts).tz_localize("UTC").tz_convert(_ts_tz)
+            bar_dates = pd.DatetimeIndex(_ts_for_days).normalize().to_numpy()
+        _unique_days, day_idx = np.unique(bar_dates, return_inverse=True)
+        if _day_key is not None:
+            for _a in (bar_dates, _unique_days, day_idx):
+                try:
+                    _a.setflags(write=False)
+                except Exception:  # noqa: BLE001
+                    pass
+            if len(_DAY_INDEX_CACHE) >= 8:
+                _DAY_INDEX_CACHE.pop(next(iter(_DAY_INDEX_CACHE)))
+            _DAY_INDEX_CACHE[_day_key] = (bar_dates, _unique_days, day_idx)
 
     # UPGRADE (speed): trades_today / pnl_today used to be plain dicts keyed
     # by the numpy.datetime64 in bar_dates, with a hash + dict lookup (get(),
@@ -516,7 +547,6 @@ def run_execution(
     # becomes plain numpy arrays indexed by that integer -- an array index
     # is materially cheaper than a dict lookup, and it also means these
     # never grow a Python dict entry-by-entry across a multi-year run.
-    _unique_days, day_idx = np.unique(bar_dates, return_inverse=True)
     trades_today_count = np.zeros(len(_unique_days), dtype=np.int64)
     pnl_today_sum = np.zeros(len(_unique_days), dtype=np.float64)
     day_has_pnl = np.zeros(len(_unique_days), dtype=bool)
@@ -624,6 +654,33 @@ def run_execution(
     spread_price = risk.spread_pips * risk.pip_size
     slip_price = risk.slippage_pips * risk.pip_size
 
+    # 2026-11-05 audit: execution-realism stress (all default off; see RiskConfig). TP trade-through, and extra adverse slippage on stop
+    # exits that can scale with the exit bar's session and with news-sized bars.
+    _tp_through = float(getattr(risk, "tp_trade_through_pips", 0.0) or 0.0) * risk.pip_size
+    _stop_extra = float(getattr(risk, "stop_slippage_extra_pips", 0.0) or 0.0) * risk.pip_size
+    _stop_extra_mult = None
+    same_bar_both_touch = 0
+    if _stop_extra > 0 and getattr(risk, "stop_slippage_session_aware", False) and n:
+        try:
+            from app.monte_carlo.slippage_model import SessionVolatilitySlippageConfig, classify_session, is_weekend_open_gap
+            _sm_cfg = SessionVolatilitySlippageConfig()
+            _idx = pd.DatetimeIndex(ts)
+            if _idx.tz is None:
+                _idx = _idx.tz_localize("UTC")
+            _rng = pd.Series(np.asarray(highs, dtype=float) - np.asarray(lows, dtype=float))
+            _med = _rng.rolling(50, min_periods=10).median().to_numpy()
+            _stop_extra_mult = np.ones(n, dtype=float)
+            for _k in range(n):
+                _t = _idx[_k]
+                _m = _sm_cfg.session_multipliers.get(classify_session(_t), 1.0)
+                if is_weekend_open_gap(_t):
+                    _m *= _sm_cfg.weekend_gap_multiplier
+                if np.isfinite(_med[_k]) and _med[_k] > 0 and (highs[_k] - lows[_k]) >= 3.0 * _med[_k]:
+                    _m *= 2.0
+                _stop_extra_mult[_k] = _m
+        except Exception:  # noqa: BLE001 -- a failure here falls back to the flat extra, never to no stress
+            _stop_extra_mult = None
+
     # B2-2 (fill honesty): market entries and signal-driven exits fill at
     # open[i + fill_lag_bars], never at the signal bar's own close -- no
     # live trader can fill at the close that produced the signal. Default
@@ -719,7 +776,10 @@ def run_execution(
     def _settle_exit(open_pos: dict, raw_exit_price: float, reason: str, direction_: int, i: int) -> float:
         nonlocal equity, gap_loss_count, last_close_bar_idx
         last_close_bar_idx = i  # EXEC-002: this is a FULL close -- see reentry_cooldown_bars above
-        _sm = _fills.settle_math(risk, open_pos, raw_exit_price, reason, direction_)
+        _extra_slip = 0.0
+        if _stop_extra > 0 and reason == "stop_loss":
+            _extra_slip = _stop_extra * (float(_stop_extra_mult[i]) if _stop_extra_mult is not None else 1.0)
+        _sm = _fills.settle_math(risk, open_pos, raw_exit_price, reason, direction_, extra_exit_slip=_extra_slip)
         filled_exit_price, pnl, _commission_charged, reason = (
             _sm.filled_exit_price, _sm.pnl, _sm.commission, _sm.reason)
         if _sm.gap_loss:
@@ -1119,7 +1179,7 @@ def run_execution(
             # pre-checked -- take handling is unchanged).
             if _ib_on and open_trade["take_price"] is not None and stop is not None:
                 _both_s, _ = _resolve_intrabar_exit(direction, stop, None, lows[i], highs[i], opens[i])
-                _both_t, _ = _resolve_intrabar_exit(direction, None, open_trade["take_price"], lows[i], highs[i], opens[i])
+                _both_t, _ = _resolve_intrabar_exit(direction, None, open_trade["take_price"], lows[i], highs[i], opens[i], _tp_through)
                 if _both_s is not None and _both_t is not None:
                     _first = _intrabar_first_hit(direction, stop, open_trade["take_price"], i)
                     open_trade["fill_resolution"] = "intrabar"
@@ -1201,7 +1261,13 @@ def run_execution(
 
             open_trade["stop_price"] = stop
             take = open_trade["take_price"]
-            exit_price, reason = _resolve_intrabar_exit(direction, stop, take, lows[i], highs[i], opens[i])
+            exit_price, reason = _resolve_intrabar_exit(direction, stop, take, lows[i], highs[i], opens[i], _tp_through)
+            # 2026-11-05 audit: count exits where the SAME bar also reached the other level. The engine books the stop (pessimistic) on
+            # those bars; the count tells the reader how much of the result rests on that unknowable bar-internal order.
+            if reason == "stop_loss" and take is not None:
+                _t_only, _ = _resolve_intrabar_exit(direction, None, take, lows[i], highs[i], opens[i])
+                if _t_only is not None:
+                    same_bar_both_touch += 1
 
             # signal-driven exit (flat or reversal): a market order filled at
             # the next bar's open (see B2-2) if no SL/TP hit intrabar
@@ -1551,6 +1617,7 @@ def run_execution(
         equity_df.attrs["prop_attempts"] = prop_attempts
         equity_df.attrs["prop_rules"] = prop_rules
     equity_df.attrs["account_reset_events"] = reset_events
+    equity_df.attrs["same_bar_both_touch"] = int(same_bar_both_touch)
     equity_df.attrs["payout_events"] = [ev for ev in reset_events if ev.get("kind") == "payout"]
     # 2026-10-31 audit (section 3, fix 7): per-run ledger check -- start + sum(trade P&L) - payouts + resets must equal final equity.
     _payout_total = sum(float(ev.get("payout_amount") or 0.0) for ev in reset_events if ev.get("kind") == "payout")
