@@ -69,7 +69,7 @@
   <p>Goal: find out whether one strategy is good enough to risk a prop-firm evaluation fee on. You do not need to understand every setting first.</p>
   <ol class="quickstart-list">
     <li><b>Get market data.</b> Open <a href="/data-center">Data Center</a> and import a CSV or fetch data with a free key
-      (keys live in <a href="/settings/api-keys">API Keys</a>). For a verdict that can say READY you need at least 5 years of real, non-synthetic data.</li>
+      (keys live in <a href="/settings/api-keys">API Keys</a>). For a verdict that can say FORWARD-TEST CANDIDATE you need at least 5 years of real, non-synthetic data.</li>
     <li><b>Pick or build a strategy.</b> Go to <a href="/start-here/create">Create</a>. Use the visual Manual builder, paste Python / PineScript / MQL5,
       or let Search Lab / Evolution Lab find candidates for you. Saved strategies appear in the <a href="/library">Strategy Library</a>.</li>
     <li><b>Choose your prop firm and risk.</b> On <a href="/full-pipeline">Full Pipeline</a> pick the firm preset (account size, targets, drawdown rules fill in themselves).
@@ -77,7 +77,7 @@
     <li><b>Run the Full Pipeline.</b> Open <a href="/full-pipeline">Test &rarr; Full Pipeline</a> and press Run. It checks the strategy for hidden cheating
       (look-ahead), overfitting, out-of-sample performance on data it never saw, Monte Carlo account simulations and prop-firm rules, then gives one verdict.
       Big datasets take a while; you can leave the page, it keeps running.</li>
-    <li><b>Read the verdict</b> (next section) and follow the <b>Next step</b> button. READY goes on to Champion / Deploy; NOT READY goes back to Optimize or the Graveyard.</li>
+    <li><b>Read the verdict</b> (next section) and follow the <b>Next step</b> button. FORWARD-TEST CANDIDATE goes on to Champion / Deploy; REJECT goes back to Optimize or the Graveyard.</li>
   </ol>
   <div class="manual-tip">Everything beyond these five steps is optional extra tooling. Ignore it until you have a reason to open it.</div>
 </div>
@@ -112,12 +112,12 @@
 <div class="manual-section" id="verdict">
   <div class="eyebrow">The most important screen</div>
   <h2>Reading your Full Pipeline verdict</h2>
-  <p>The verdict is deliberately a high bar, because a false READY costs you real evaluation fees. Three results are possible:</p>
+  <p>The verdict is deliberately a high bar, because a false FORWARD-TEST CANDIDATE costs you real evaluation fees. Three results are possible:</p>
   <ul>
-    <li><b>READY</b> &ndash; the edge was confirmed on data the search never touched, survives realistic costs (double), beats random entries, and the simulated
+    <li><b>FORWARD-TEST CANDIDATE</b> &ndash; the edge was confirmed on data the search never touched, survives realistic costs (double), beats random entries, and the simulated
       accounts pass often enough to pay for the fee. Still a backtest: run a Forward Test before real money.</li>
-    <li><b>MARGINAL</b> &ndash; promising, but something is unproven (usually too few trades, an unconfirmed holdout, or one weak gate). The reasons list names it. Often the fix is more data or more time, not a different strategy.</li>
-    <li><b>NOT READY</b> &ndash; a hard failure: look-ahead, a negative edge after costs, or a result that is indistinguishable from luck after counting how many versions were tried.</li>
+    <li><b>LEAD</b> &ndash; promising, but something is unproven (usually too few trades, an unconfirmed holdout, or one weak gate). The reasons list names it. Often the fix is more data or more time, not a different strategy.</li>
+    <li><b>REJECT</b> &ndash; a hard failure: look-ahead, a negative edge after costs, or a result that is indistinguishable from luck after counting how many versions were tried.</li>
   </ul>
   <h3 style="font-size:14px;margin:16px 0 6px;">What it checks, in plain words</h3>
   <ul>
@@ -130,7 +130,7 @@
   </ul>
   <div class="manual-tip"><b>Why did it stop at one reason?</b> The report now lists <b>every gate</b> with pass / cap / fail, not only the first one that failed, so you can see whether a candidate missed by one gate or by five. A candidate that misses exactly one gate is the best one to fix.</div>
   <div class="manual-tip"><b>Position size:</b> if the strategy only uses a sliver of the firm's drawdown allowance, the pipeline scales planned risk up (never past your per-trade risk cap) and tells you it did, so slow passes are not just under-betting. This applies to this run only and is verified by a re-run.</div>
-  <div class="manual-warn"><b>READY needs verified firm rules.</b> A prop-firm preset counts only if its rules were checked against the firm's own page in the last 30 days. If one has gone stale, re-read the firm's page, then run
+  <div class="manual-warn"><b>FORWARD-TEST CANDIDATE needs verified firm rules.</b> A prop-firm preset counts only if its rules were checked against the firm's own page in the last 30 days. If one has gone stale, re-read the firm's page, then run
   <code>python scripts/restamp_presets.py firm_key --date YYYY-MM-DD</code> (use <code>--list</code> to see which are stale). Do not re-stamp without actually checking.</div>
 </div>
 
@@ -172,7 +172,7 @@
   <div class="eyebrow">Quick fixes</div>
   <h2>If something looks wrong</h2>
   <ul>
-    <li><b>Verdict is MARGINAL only because of data:</b> the data has fewer than 5 years, contains synthetic data or still has futures contract-roll jumps. Re-import real back-adjusted data in Data Center.</li>
+    <li><b>Verdict is LEAD only because of data:</b> the data has fewer than 5 years, contains synthetic data or still has futures contract-roll jumps. Re-import real back-adjusted data in Data Center.</li>
     <li><b>Evolution Lab passes but Full Pipeline fails:</b> make sure Evolution Lab's prop account and risk fields match your real firm and risk; otherwise it searched under different rules.</li>
     <li><b>A run seems stuck:</b> press STOP then START; hung workers recover automatically and a restart is always safe.</li>
     <li><b>Settings or runs missing after a reinstall:</b> re-enter your license key and email, then check the Saved runs card in Account Settings.</li>
@@ -240,11 +240,11 @@
 
   <h3 style="font-size:14px;margin:16px 0 6px;">Full Pipeline verdict</h3>
   <ul>
-    <li><b>READY</b> → your strongest evidence yet, but still a backtest. Consider a short Forward Test
+    <li><b>FORWARD-TEST CANDIDATE</b> → your strongest evidence yet, but still a backtest. Consider a short Forward Test
       (MT5) or paper trading before risking real capital on a prop-firm evaluation.</li>
-    <li><b>MARGINAL</b> → not clearly ready or clearly dead. Try Quick Optimize on it, or adjust risk
+    <li><b>LEAD</b> → not clearly ready or clearly dead. Try Quick Optimize on it, or adjust risk
       settings (position size, daily-loss limit) and re-run Full Pipeline. Don't take it live as-is.</li>
-    <li><b>NOT READY</b> → doesn't hold up under re-validation. Go back to Evolution Lab or Search Lab for
+    <li><b>REJECT</b> → doesn't hold up under re-validation. Go back to Evolution Lab or Search Lab for
       a different candidate rather than trying to rescue this one.</li>
   </ul>
 

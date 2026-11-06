@@ -55,6 +55,8 @@
 
 {% if not not_found %}
 <script>
+function STAGE(v){ return ({'READY':'FORWARD-TEST CANDIDATE','MARGINAL':'LEAD','NOT READY':'LEAD','NOTREADY':'LEAD'})[v] || v; }  // READY/MARGINAL/NOT READY are internal; users see the ladder stage
+
   const jobId = {{ job_id | tojson }};
   const fmt = (v, d) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d === undefined ? 2 : d);
 
@@ -69,7 +71,7 @@
       const tr = document.createElement('tr');
       tr.className = o.ok ? 'ok' : 'failed';
       const verdictCell = o.ok
-        ? `<span class="badge ${(o.verdict || '').replace(/\s+/g, '')}">${o.verdict || '—'}</span>`
+        ? `<span class="badge ${(o.verdict || '').replace(/\s+/g, '')}">${STAGE(o.verdict) || '—'}</span>`
         : `<span title="${(o.reason || '').replace(/"/g, '&quot;')}">FAILED</span>`;
       const reportCell = o.report_html ? `<a href="${o.report_html}" target="_blank">Open report &rarr;</a>` : '—';
       tr.innerHTML = `

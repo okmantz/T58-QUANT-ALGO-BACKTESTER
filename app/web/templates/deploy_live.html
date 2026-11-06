@@ -33,6 +33,20 @@
   .status-stat .value { font-size: 18px; font-weight: 700; }
   .error { background: var(--err-bg); border: 1px solid var(--err-bd); color: var(--err-fg); padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
   .warn { background: var(--warn-bg); border: 1px solid var(--warn-bd); color: var(--warn-fg2); padding: 14px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; line-height: 1.55; }
+  .cp-row { border: 1px solid var(--border-light); border-radius: 10px; padding: 10px 12px; margin: 8px 0; background: var(--panel-3); }
+  .cp-row.on { border-color: #3a6f9e; }
+  .cp-row .cp-head { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13.5px; }
+  .cp-row .cp-head input { width: auto; }
+  .cp-row .cp-sub { font-size: 11.5px; color: var(--t-faint); font-weight: 400; }
+  .cp-row .cp-fields { display: none; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .cp-row.on .cp-fields { display: flex; }
+  .cp-row .cp-fields > div { flex: 1; min-width: 118px; }
+  .cp-row .cp-fields label { margin: 0 0 3px; font-size: 11.5px; }
+  .cp-row .cp-fields input, .cp-row .cp-fields select { padding: 7px 9px; font-size: 13px; }
+  #s-followers { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 6px; }
+  #s-followers th { text-align: left; font-size: 11px; color: var(--text-muted); text-transform: uppercase; padding: 4px 6px; }
+  #s-followers td { padding: 6px; border-top: 1px solid var(--border-light); vertical-align: top; }
+  .fl-ok { color: #6fd08c; } .fl-bad { color: var(--err-fg2); font-weight: 700; } .fl-warn { color: var(--warn-fg2); }
   #log { background: var(--panel-3); border-radius: 8px; padding: 10px; font-family: ui-monospace, monospace; font-size: 12px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; }
 </style>
 </head>
@@ -107,7 +121,7 @@
 <form id="dl-form">
   <div class="card">
     <h2>1. Account &amp; instrument</h2>
-    <label>Broker account</label>
+    <label>Broker account <span style="color:var(--t-faint);">(the leader when you copy trades to other accounts below)</span></label>
     <select name="account_id" id="account_id">
       {% for a in broker_accounts %}
       <option value="{{ a.id }}">{{ a.nickname or a.login }} -- {{ a.platform }}{% if a.firm_name %} ({{ a.firm_name }}){% endif %}</option>
@@ -139,8 +153,28 @@
     <p class="help" id="dl-strategy-note">Pick the saved strategy to take live. Stop loss, take profit and the rest of its logic come from the strategy itself.</p>
   </div>
 
+  <div class="card" id="copier-card" style="max-width:none;">
+    <h2>3. Copy trades to other accounts <span style="font-weight:400;text-transform:none;">(optional)</span></h2>
+    <p class="help">The account picked in step 1 is the <b>leader</b>: it trades the strategy. Tick other accounts to make them <b>followers</b>.
+      Every trade the leader places is copied to each follower and closed when the leader closes, sized on that account's own equity
+      (or a multiple of the leader's exposure, or a fixed size) and guarded by that account's own drawdown, daily-loss and news rules.
+      Leave a field blank to use the leader's value from step 4. Followers only copy trades the leader actually placed.
+      If one follower breaches its drawdown or loses its connection it flattens and halts alone; the rest keep trading.</p>
+    <div id="cp-rows"></div>
+    <div id="cp-pre" style="margin-top:8px;"></div>
+    <label id="cp-ack-row" style="display:none;color:var(--warn-fg2);"><input type="checkbox" name="ack_copy_trading" id="cp-ack" value="1" style="width:auto;"> I have checked that every firm in this group allows copying trades across these accounts, and accept the risk of account termination if not.</label>
+    <div id="cp-halt-row" style="display:none;">
+      <label>If the leader halts (drawdown breach or lost connection)</label>
+      <select name="halt_group_on_leader_halt">
+        <option value="1">Flatten and halt every follower (recommended)</option>
+        <option value="0">Leave followers as they are</option>
+      </select>
+    </div>
+    <input type="hidden" name="copier_json" id="copier_json" value="">
+  </div>
+
   <div class="card">
-    <h2>3. Risk &amp; prop rules</h2>
+    <h2>4. Risk &amp; prop rules</h2>
     <div class="row">
       <div><label>Initial balance</label><input type="number" name="initial_balance" value="100000"></div>
       <div><label>Account size (prop rules)</label><input type="number" name="account_size" value="100000"></div>
@@ -165,7 +199,7 @@
   </div>
 
   <div class="card">
-    <h2>4. Confirm</h2>
+    <h2>5. Confirm</h2>
     <label>Type <code>DEPLOY LIVE</code> exactly to confirm you understand this trades real money</label>
     <input type="text" name="confirm_text" id="confirm_text" placeholder="DEPLOY LIVE">
   </div>
@@ -185,12 +219,130 @@
     <div class="status-stat"><div class="label">Net P&amp;L</div><div class="value" id="s-pnl">-</div></div>
   </div>
   <p style="font-size:12px;color:var(--err-fg2);margin-top:8px;" id="s-halted"></p>
+  <div id="s-followers-wrap" style="display:none;">
+    <h3 style="font-size:12px;color:var(--t-faint2);margin:14px 0 2px;">Copied accounts</h3>
+    <table id="s-followers"><thead><tr><th>Account</th><th>Symbol</th><th>Equity</th><th>Net P&amp;L</th><th>Open</th><th>State</th></tr></thead><tbody></tbody></table>
+  </div>
   <h3 style="font-size:12px;color:var(--t-faint2);margin:14px 0 6px;">Log</h3>
   <div id="log"></div>
 </div>
 
 </div>
 </div>
+
+<script>
+  // Trade copier: follower rows, per-follower sizing, live preflight, and the status table.
+  (function () {
+    var accounts = [{% for a in broker_accounts %}{id: {{ a.id|tojson }}, name: {{ (a.nickname or a.login)|tojson }}, platform: {{ a.platform|tojson }}, firm: {{ (a.firm_name or '')|tojson }}}{% if not loop.last %},{% endif %}{% endfor %}];
+    var state = {};
+    var rowsEl = document.getElementById('cp-rows'), preEl = document.getElementById('cp-pre');
+    var jsonEl = document.getElementById('copier_json'), ackRow = document.getElementById('cp-ack-row'), haltRow = document.getElementById('cp-halt-row');
+    var timer = null;
+    function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) { return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]; }); }
+    function leaderId() { var el = document.getElementById('account_id'); return el ? el.value : ''; }
+    function collect() {
+      var lid = leaderId();
+      return accounts.filter(function (a) { return a.id !== lid && state[a.id] && state[a.id].on; }).map(function (a) {
+        var st = state[a.id];
+        return {account_id: a.id, symbol: st.symbol || '', size_mode: st.mode || 'risk', size_value: st.value || '',
+                account_size: st.size || '', max_dd_pct: st.dd || '', daily_loss_pct: st.daily || ''};
+      });
+    }
+    window.dlSyncCopier = function () { var f = collect(); jsonEl.value = f.length ? JSON.stringify(f) : ''; return f; };
+    window.dlApplyStartState = function () {
+      var btn = document.getElementById('start-btn'); if (!btn) return;
+      btn.disabled = !!(window.dlSingleBlocked || window.dlCopierBlocked);
+    };
+    function valuePlaceholder(mode) {
+      return mode === 'multiplier' ? 'x leader exposure (e.g. 1)' : mode === 'fixed' ? 'contracts / lots' : "risk (blank = leader's)";
+    }
+    function render() {
+      var lid = leaderId();
+      var list = accounts.filter(function (a) { return a.id !== lid; });
+      if (!list.length) {
+        rowsEl.innerHTML = '<p class="help">Save at least one more account under "Connect / manage prop-firm accounts" to copy trades onto it.</p>';
+        haltRow.style.display = 'none'; ackRow.style.display = 'none'; preEl.innerHTML = '';
+        window.dlCopierBlocked = false; window.dlSyncCopier(); window.dlApplyStartState(); return;
+      }
+      rowsEl.innerHTML = list.map(function (a) {
+        var st = state[a.id] || {}, mode = st.mode || 'risk';
+        return '<div class="cp-row' + (st.on ? ' on' : '') + '" data-id="' + esc(a.id) + '">' +
+          '<label class="cp-head" style="margin:0;"><input type="checkbox" class="cp-on"' + (st.on ? ' checked' : '') + '> ' + esc(a.name) +
+          ' <span class="cp-sub">' + esc(a.platform) + (a.firm ? ' &middot; ' + esc(a.firm) : '') + '</span></label>' +
+          '<div class="cp-fields">' +
+          '<div><label>Symbol on this account</label><input type="text" class="cp-symbol" placeholder="same as leader" value="' + esc(st.symbol || '') + '"></div>' +
+          '<div><label>Size mode</label><select class="cp-mode">' +
+            ['risk', 'multiplier', 'fixed'].map(function (m) { return '<option value="' + m + '"' + (mode === m ? ' selected' : '') + '>' + ({risk: 'Risk on this account', multiplier: 'Multiple of leader', fixed: 'Fixed size'}[m]) + '</option>'; }).join('') +
+          '</select></div>' +
+          '<div><label>Size value</label><input type="number" step="any" min="0" class="cp-value" placeholder="' + valuePlaceholder(mode) + '" value="' + esc(st.value || '') + '"></div>' +
+          '<div><label>Account size ($)</label><input type="number" min="0" class="cp-size" placeholder="leader\'s" value="' + esc(st.size || '') + '"></div>' +
+          '<div><label>Max drawdown %</label><input type="number" step="0.1" min="0" class="cp-dd" placeholder="leader\'s" value="' + esc(st.dd || '') + '"></div>' +
+          '<div><label>Daily loss %</label><input type="number" step="0.1" min="0" class="cp-daily" placeholder="leader\'s" value="' + esc(st.daily || '') + '"></div>' +
+          '</div></div>';
+      }).join('');
+      Array.prototype.forEach.call(rowsEl.querySelectorAll('.cp-row'), function (row) {
+        var id = row.getAttribute('data-id');
+        function read() {
+          state[id] = {on: row.querySelector('.cp-on').checked, symbol: row.querySelector('.cp-symbol').value.trim(),
+            mode: row.querySelector('.cp-mode').value, value: row.querySelector('.cp-value').value, size: row.querySelector('.cp-size').value,
+            dd: row.querySelector('.cp-dd').value, daily: row.querySelector('.cp-daily').value};
+          row.classList.toggle('on', state[id].on);
+          row.querySelector('.cp-value').placeholder = valuePlaceholder(state[id].mode);
+          window.dlSyncCopier(); schedule();
+        }
+        Array.prototype.forEach.call(row.querySelectorAll('input,select'), function (el) { el.addEventListener('change', read); el.addEventListener('input', function () { if (el.type !== 'checkbox') read(); }); });
+      });
+      window.dlSyncCopier(); schedule();
+    }
+    function schedule() { clearTimeout(timer); timer = setTimeout(preflight, 350); }
+    function preflight() {
+      var followers = window.dlSyncCopier();
+      if (!followers.length) {
+        preEl.innerHTML = ''; ackRow.style.display = 'none'; haltRow.style.display = 'none';
+        window.dlCopierBlocked = false; window.dlApplyStartState(); return;
+      }
+      var sym = document.querySelector('input[name="symbol"]');
+      fetch('/deploy-live/copier/preflight', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({account_id: leaderId(), symbol: sym ? sym.value : '', followers: followers})})
+        .then(function (r) { return r.json(); }).then(function (d) {
+          var icon = {ok: '\u2705', warn: '\u26A0\uFE0F', ack: '\u26D4', block: '\u274C'};
+          preEl.innerHTML = (d.items || []).map(function (i) {
+            return '<div style="font-size:12.5px;margin:4px 0;line-height:1.45;">' + (icon[i.level] || '') + ' <b>' + esc(i.title) + '</b>' +
+              (i.detail ? '<br><span style="color:#9aa4b5;">' + esc(i.detail) + '</span>' : '') + '</div>';
+          }).join('');
+          ackRow.style.display = d.needs_ack ? 'block' : 'none';
+          haltRow.style.display = 'block';
+          window.dlCopierBlocked = !d.can_start; window.dlApplyStartState();
+        }).catch(function () { /* locked page / offline: leave the single-account gating alone */ });
+    }
+    window.dlSetAccounts = function (accts) {
+      accounts = (accts || []).map(function (a) { return {id: a.id, name: a.nickname || a.login || 'Account', platform: a.platform, firm: a.firm_name || ''}; });
+      Object.keys(state).forEach(function (id) { if (!accounts.some(function (a) { return a.id === id; })) delete state[id]; });
+      render();
+    };
+    var leaderSel = document.getElementById('account_id'); if (leaderSel) leaderSel.addEventListener('change', render);
+    var symEl = document.querySelector('input[name="symbol"]'); if (symEl) symEl.addEventListener('input', schedule);
+    render();
+  })();
+
+  function renderFollowers(list) {
+    var wrap = document.getElementById('s-followers-wrap'), tb = document.querySelector('#s-followers tbody');
+    if (!list.length) { wrap.style.display = 'none'; return; }
+    wrap.style.display = 'block';
+    function e(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) { return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]; }); }
+    tb.innerHTML = list.map(function (f) {
+      var state, cls;
+      if (f.alert) { state = f.alert; cls = 'fl-bad'; }
+      else if (f.halted_reason) { state = f.halted_reason; cls = 'fl-bad'; }
+      else if (f.blocked_reason) { state = f.blocked_reason; cls = 'fl-warn'; }
+      else if (!f.connected) { state = 'Reconnecting'; cls = 'fl-warn'; }
+      else { state = f.last_error ? 'Running (last error: ' + f.last_error + ')' : 'Copying'; cls = f.last_error ? 'fl-warn' : 'fl-ok'; }
+      return '<tr><td>' + e(f.nickname) + '<br><span style="color:var(--t-faint);font-size:11px;">' + e(f.platform) + '</span></td><td>' + e(f.symbol) +
+        '</td><td>' + (f.equity == null ? '\u2014' : Number(f.equity).toFixed(2)) + '</td><td>' + Number(f.net_pnl || 0).toFixed(2) +
+        '</td><td>' + (f.open_position_ticket ? (f.last_qty != null ? e(f.last_qty) : 'open') : '\u2014') + '</td><td class="' + cls + '">' + e(state) + '</td></tr>';
+    }).join('');
+  }
+</script>
 
 <script>
   // v9.8: saved-strategy dropdown drives the same strategy_mode /
@@ -228,6 +380,7 @@
       return '<option value="' + a.id + '">' + (a.nickname || a.login) + ' -- ' + a.platform + (a.firm_name ? ' (' + a.firm_name + ')' : '') + '</option>';
     }).join('');
     if (keep) sel.value = keep;
+    if (window.dlSetAccounts) window.dlSetAccounts(accts);
     runPreflight();
   };
   function runPreflight() {
@@ -243,7 +396,8 @@
           return '<div style="font-size:12.5px;margin:4px 0;line-height:1.45;">' + icon[i.level] + ' <b>' + i.title + '</b>' + (i.detail ? '<br><span style="color:#9aa4b5;">' + i.detail + '</span>' : '') + '</div>';
         }).join('');
         ack.style.display = d.needs_ack ? 'block' : 'none';
-        document.getElementById('start-btn').disabled = !d.can_deploy;
+        window.dlSingleBlocked = !d.can_deploy;
+        if (window.dlApplyStartState) window.dlApplyStartState();
       });
   }
   document.getElementById('account_id').addEventListener('change', runPreflight);
@@ -254,6 +408,7 @@
 
   document.getElementById('dl-form').addEventListener('submit', function(e) {
     e.preventDefault();
+    if (window.dlSyncCopier) window.dlSyncCopier();
     const btn = document.getElementById('start-btn');
     btn.disabled = true;
     btn.textContent = 'Starting…';
@@ -316,6 +471,7 @@
         document.getElementById('s-trades').textContent = data.n_trades_closed;
         document.getElementById('s-pnl').textContent = fmt(data.net_pnl);
         document.getElementById('s-halted').textContent = data.alert || data.halted_reason || '';
+        renderFollowers(data.followers || []);
         document.getElementById('log').textContent = (data.log || []).join('\n');
       });
     }, 3000);

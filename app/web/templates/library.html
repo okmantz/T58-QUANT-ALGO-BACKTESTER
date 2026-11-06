@@ -20,7 +20,7 @@
   /* Pipeline-progress stage bar: Create -> Test -> Optimize -> Validate ->
      Champion Check -> Ready, one small pill per stage -- filled/teal for a
      completed stage, red for Champion Check when the verdict came back
-     NOT READY/MARGINAL (done, but not the good kind of done), dim for a
+     NOT FORWARD-TEST CANDIDATE or LEAD (done, but not the good kind of done), dim for a
      stage not reached yet. Gives the whole grid an at-a-glance read on
      exactly how far along each strategy is, without opening it. */
   .stage-bar { display: flex; gap: 3px; margin-top: 8px; }
@@ -277,6 +277,8 @@
 </div>
 
 <script>
+function STAGE(v){ return ({'FORWARD-TEST CANDIDATE':'FORWARD-TEST CANDIDATE','LEAD':'LEAD','REJECT':'LEAD','NOTREADY':'LEAD'})[v] || v; }  // REJECT / LEAD / FORWARD-TEST CANDIDATE are internal; users see the ladder stage
+
   const STRATEGIES = {{ strategies_json | safe }};
   let currentDetail = null;
 
@@ -303,8 +305,8 @@
       case 'optimize': return 'Next step: run Quick Optimize (or Full Pipeline) on this strategy to reach the Optimize stage.';
       case 'validate': return 'Next step: run CPCV / PBO / Sensitivity / Walk-Forward Opt / Walk-Forward GA / Regime Matrix (or Full Pipeline, which validates internally) to reach the Validate stage.';
       case 'champion_check': return verdict && verdict !== 'READY'
-        ? `Champion-checked as ${verdict} -- not Ready yet. Open its last Full Pipeline report for what to fix, then re-run.`
-        : 'Next step: run Full Pipeline for a final READY/MARGINAL/NOT READY champion check.';
+        ? `Champion-checked as ${STAGE(verdict)} -- not a forward-test candidate yet. Open its last Full Pipeline report for what to fix, then re-run.`
+        : 'Next step: run Full Pipeline for a final champion check.';
       case 'forward_test': return 'Next step: run this strategy through Forward Test (e.g. the MT5 bridge) to reach the Forward Test stage.';
       case 'deploy': return 'Next step: deploy this strategy live to reach the final Deploy stage.';
       default: return verdict === 'READY' || !pp.next_stage ? 'Deployed -- cleared through every stage of the pipeline.' : '';
@@ -465,7 +467,7 @@
   function verdictBadge(v) {
     if (!v) return '';
     const cls = v === 'READY' ? 'good' : (v === 'MARGINAL' ? 'warn' : 'bad');
-    return `<span class="vbadge ${cls}">${escapeHtml(v)}</span>`;
+    return `<span class="vbadge ${cls}">${escapeHtml(STAGE(v))}</span>`;
   }
   function statusBadge(st) {
     const map = {pass: ['PASS', 'good'], caution: ['BORDERLINE', 'warn'], fail: ['FAIL', 'bad'], error: ['DID NOT RUN', 'bad'], info: ['RAN', '']};

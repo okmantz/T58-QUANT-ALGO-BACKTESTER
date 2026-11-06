@@ -67,6 +67,8 @@
 
 {% if not not_found %}
 <script>
+function STAGE(v){ return ({'READY':'FORWARD-TEST CANDIDATE','MARGINAL':'LEAD','NOT READY':'LEAD','NOTREADY':'LEAD'})[v] || v; }  // READY/MARGINAL/NOT READY are internal; users see the ladder stage
+
   const jobId = {{ job_id | tojson }};
   const fmt = (v, d) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d === undefined ? 1 : d);
 
@@ -130,7 +132,7 @@
             const banner = document.getElementById('verdict-banner');
             if (s.winner) {
               banner.className = 'verdict-banner verdict-' + s.winner.verdict;
-              banner.textContent = `WINNER: ${s.winner.verdict}`;
+              banner.textContent = `WINNER: ${STAGE(s.winner.verdict)}`;
               document.getElementById('summary-card').style.display = 'block';
               document.getElementById('s-candidate').textContent = s.winner.candidate_id;
               document.getElementById('s-family').textContent = s.winner.family || 'unknown';
@@ -170,7 +172,7 @@
               s.candidates.forEach(c => {
                 const tr = document.createElement('tr');
                 const reportLink = c.report_html ? `<a href="${c.report_html}" target="_blank">report</a>` : '';
-                tr.innerHTML = `<td>${c.verdict || 'FAILED'}</td><td>${c.candidate_id}</td><td>${c.family || 'unknown'}</td>` +
+                tr.innerHTML = `<td>${STAGE(c.verdict) || 'FAILED'}</td><td>${c.candidate_id}</td><td>${c.family || 'unknown'}</td>` +
                   `<td>${fmt(c.eval_pass_probability)}%</td><td>${fmt(c.first_payout_probability)}%</td><td>${reportLink}</td>`;
                 body.appendChild(tr);
               });

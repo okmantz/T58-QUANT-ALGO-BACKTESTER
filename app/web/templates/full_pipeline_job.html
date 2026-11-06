@@ -139,12 +139,12 @@
 
   <div class="lc-side-card">
     <h4>&#129517; What happens next</h4>
-    <p class="lc-hint" style="font-size:12.5px; color:var(--lc-text);">READY &rarr; moves to <b>Champion</b>.<br>NOT READY &rarr; one button carries these exact settings into <b>Optimize</b>.<br>Preflight block &rarr; the reason (and the fix) shows in the log, in dollars.</p>
+    <p class="lc-hint" style="font-size:12.5px; color:var(--lc-text);">FORWARD-TEST CANDIDATE &rarr; moves to <b>Champion</b>.<br>REJECT &rarr; one button carries these exact settings into <b>Optimize</b>.<br>Preflight block &rarr; the reason (and the fix) shows in the log, in dollars.</p>
   </div>
 
   <div class="lc-side-card">
     <h4>&#9888; Watch-outs</h4>
-    <p class="lc-hint" style="font-size:12.5px;">A NOT READY verdict is the app working, not failing. Don't widen the stop just to get past a preflight block — on ES that hides real risk in the far tail.</p>
+    <p class="lc-hint" style="font-size:12.5px;">A REJECT verdict is the app working, not failing. Don't widen the stop just to get past a preflight block — on ES that hides real risk in the far tail.</p>
   </div>
 </div>
 </div>
@@ -156,6 +156,8 @@
 
 {% if not not_found %}
 <script>
+function STAGE(v){ return ({'FORWARD-TEST CANDIDATE':'FORWARD-TEST CANDIDATE','LEAD':'LEAD','REJECT':'LEAD','NOTREADY':'LEAD'})[v] || v; }  // REJECT / LEAD / FORWARD-TEST CANDIDATE are internal; users see the ladder stage
+
   const jobId = {{ job_id | tojson }};
   // v9.11: a visible heartbeat. Long quiet stretches inside a run (the
   // Step 7 evidence pass runs hundreds of full backtests) used to be
@@ -292,7 +294,7 @@
               if (r.verdict === 'ERROR') {
                 tr.innerHTML = `<td align="left">${label}</td><td colspan="7">failed: ${r.error}</td>`;
               } else {
-                tr.innerHTML = `<td align="left">${label}${r.is_best ? ' \u2605' : ''}</td><td>${r.verdict}</td>` +
+                tr.innerHTML = `<td align="left">${label}${r.is_best ? ' \u2605' : ''}</td><td>${STAGE(r.verdict)}</td>` +
                   `<td>${fmt(r.t58_score, 1)}${r.weight_coverage != null ? ` <span class="muted" title="Share of scorecard weight actually measured">(${(r.weight_coverage*100).toFixed(0)}% measured)</span>` : ''}</td>` +
                   `<td>${r.ev_verdict || '<span class="muted">--</span>'}</td>` +
                   `<td>${fmt(r.eval_pass_probability, 1)}%</td><td>${fmt(r.risk_of_ruin_pct, 1)}%</td>` +
@@ -308,7 +310,7 @@
             const banner = document.getElementById('verdict-banner');
             const cls = 'verdict-' + s.verdict.replace(' ', '_');
             banner.className = 'verdict-banner ' + cls;
-            banner.textContent = (s.ladder_stage || s.verdict) + (s.ladder_stage && s.ladder_stage !== s.verdict ? '  (' + s.verdict + ')' : '');
+            banner.textContent = s.ladder_stage || STAGE(s.verdict);
 
             document.getElementById('summary-card').style.display = 'block';
             document.getElementById('s-trades').textContent = `${s.baseline_trades} \u2192 ${s.final_trades}`;

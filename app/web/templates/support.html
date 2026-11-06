@@ -89,7 +89,7 @@
     </details>
     <details>
       <summary>What's the difference between Optimize and Full Pipeline?</summary>
-      <p>Optimize runs a walk-forward-aware genetic search for better parameters and finishes in minutes. It never grants a READY verdict. Full Pipeline runs the complete process (baseline, search, final Monte Carlo, out-of-sample checks) and returns READY / MARGINAL / NOT READY. Run it before trusting a result.</p>
+      <p>Optimize runs a walk-forward-aware genetic search for better parameters and finishes in minutes. It never grants a FORWARD-TEST CANDIDATE verdict. Full Pipeline runs the complete process (baseline, search, final Monte Carlo, out-of-sample checks) and returns REJECT / LEAD / FORWARD-TEST CANDIDATE. Run it before trusting a result.</p>
     </details>
     <details>
       <summary>Why is Optimize searching only part of my data?</summary>

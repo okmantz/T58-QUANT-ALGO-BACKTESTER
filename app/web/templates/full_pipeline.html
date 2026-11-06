@@ -28,7 +28,7 @@
 {% include '_lifecycle_stepper.html' %}
 <div class="lc-crumb">Test &rsaquo; <b>Test a strategy</b></div>
 <h1 class="lc-title">Test it properly</h1>
-<p class="lc-sub">The full check: baseline &rarr; preflight &rarr; walk-forward-aware search &rarr; re-validated Monte Carlo &rarr; out-of-sample &rarr; holdout &rarr; a verdict on the evidence ladder (Reject &rarr; Lead &rarr; Forward-Test Candidate &rarr; Evaluate &rarr; Funded) alongside the READY / MARGINAL / NOT READY read. This is the only run allowed to call a strategy READY. It is the slowest thing this app runs — expect it to take a while on a full dataset.</p>
+<p class="lc-sub">The full check: baseline &rarr; preflight &rarr; walk-forward-aware search &rarr; re-validated Monte Carlo &rarr; out-of-sample &rarr; holdout &rarr; a verdict on the evidence ladder (Reject &rarr; Lead &rarr; Forward-Test Candidate &rarr; Evaluate &rarr; Funded) alongside the REJECT / LEAD / FORWARD-TEST CANDIDATE read. This is the only run allowed to call a strategy FORWARD-TEST CANDIDATE. It is the slowest thing this app runs — expect it to take a while on a full dataset.</p>
 
 {% if error %}
 <div class="lc-error">{{ error }}</div>
@@ -366,14 +366,14 @@
     <div class="lc-kv"><span class="k">Prop firm</span><span class="v" id="lc-ck-firm">pick above</span></div>
     <div class="lc-kv"><span class="k">Sizing fits budget</span><span class="v">fit-stop cap · floor in Advanced</span></div>
     <div class="lc-kv"><span class="k">Holdout</span><span class="v" id="lc-ck-holdout">{{ READY_BAR.holdout_text }}</span></div>
-    <div class="lc-kv"><span class="k"><span data-metric="ready_bar">READY bar</span></span><span class="v">{{ READY_BAR.ready_short }}, &le;{{ '%.0f'|format(READY_BAR.breach_cap_pct) }}% breach</span></div>
+    <div class="lc-kv"><span class="k"><span data-metric="ready_bar">Forward-test bar</span></span><span class="v">{{ READY_BAR.ready_short }}, &le;{{ '%.0f'|format(READY_BAR.breach_cap_pct) }}% breach</span></div>
   </div>
 
   {% include '_lifecycle_how.html' %}
 
   <div class="lc-side-card">
     <h4>&#129517; What happens next</h4>
-    <p class="lc-hint" style="font-size:12.5px; color:var(--lc-text);">READY &rarr; moves to <b>Champion</b>.<br>NOT READY &rarr; tune it in <b>Optimize</b> — the button below carries this strategy, data, firm and timeframe across with it.<br>Blocked preflight &rarr; it says why in dollars, with one-click fixes, right there.</p>
+    <p class="lc-hint" style="font-size:12.5px; color:var(--lc-text);">FORWARD-TEST CANDIDATE &rarr; moves to <b>Champion</b>.<br>REJECT &rarr; tune it in <b>Optimize</b> — the button below carries this strategy, data, firm and timeframe across with it.<br>Blocked preflight &rarr; it says why in dollars, with one-click fixes, right there.</p>
     <button type="button" class="lc-btn" id="lc-next-step" style="width:100%; margin-top:10px;">Next step: Optimize →</button>
   </div>
 

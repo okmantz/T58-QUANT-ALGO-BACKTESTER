@@ -28,7 +28,7 @@
 <div class="lc-card">
   <h3>How these were ranked — PropFit</h3>
   <p class="lc-hint" style="font-size:13px;">{{ ds.formula }}</p>
-  <p class="lc-hint" style="font-size:13px;">Searched {{ ds.n_variants }} variants. Stage 1 scored each on full data; Stage 2 re-verified the top 20 (walk-forward/CPCV, Monte Carlo seed dispersion, 2x cost stress). <b>Screen</b> and <b>Verified</b> are side by side so an edge that evaporates is visible, not crowned. PropFit never overrides the 70% per-attempt READY gate.</p>
+  <p class="lc-hint" style="font-size:13px;">Searched {{ ds.n_variants }} variants. Stage 1 scored each on full data; Stage 2 re-verified the top 20 (walk-forward/CPCV, Monte Carlo seed dispersion, 2x cost stress). <b>Screen</b> and <b>Verified</b> are side by side so an edge that evaporates is visible, not crowned. PropFit never overrides the 70% per-attempt gate.</p>
 </div>
 
 {% if ds.no_winner %}
@@ -41,7 +41,7 @@
   <h3>Verified winner</h3>
   <p style="font-size:13.5px;">{{ ds.message }}</p>
   {% set w = ds.rows[0] %}
-  <p class="lc-hint" style="font-size:12.5px;">Per-attempt eval pass after verification: {{ '%.1f%%'|format((w.eval_pass_verified or 0) * 100) }} — {{ 'clears' if (w.eval_pass_verified or 0) >= 0.70 else 'still below' }} the 70% READY bar. PropFit ranked it first; the READY verdict still belongs to Test/Validate.</p>
+  <p class="lc-hint" style="font-size:12.5px;">Per-attempt eval pass after verification: {{ '%.1f%%'|format((w.eval_pass_verified or 0) * 100) }} — {{ 'clears' if (w.eval_pass_verified or 0) >= 0.70 else 'still below' }} the 70% bar. PropFit ranked it first; the verdict still belongs to Test/Validate.</p>
 </div>
 {% endif %}
 

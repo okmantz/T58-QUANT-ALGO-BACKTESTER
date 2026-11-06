@@ -69,6 +69,8 @@
 
 {% if not not_found %}
 <script>
+function STAGE(v){ return ({'READY':'FORWARD-TEST CANDIDATE','MARGINAL':'LEAD','NOT READY':'LEAD','NOTREADY':'LEAD'})[v] || v; }  // READY/MARGINAL/NOT READY are internal; users see the ladder stage
+
   const jobId = {{ job_id | tojson }};
   const fmt = (v, d) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d === undefined ? 1 : d);
   // v8: heartbeat -- proves the poll loop is alive; a stalled job turns
@@ -145,7 +147,7 @@
         const p1 = document.createElement('p');
         const v = document.createElement('span');
         v.className = 'verdict ' + (w.verdict || '');
-        v.textContent = w.verdict || '';
+        v.textContent = STAGE(w.verdict) || '';
         p1.append(v);
         p1.append(document.createTextNode(` — candidate ${w.candidate_id} (${w.family || 'unknown family'})`));
         if (w.report_html) {

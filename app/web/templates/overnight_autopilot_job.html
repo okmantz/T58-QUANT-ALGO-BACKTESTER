@@ -45,6 +45,8 @@
 
 {% if not not_found %}
 <script>
+function STAGE(v){ return ({'READY':'FORWARD-TEST CANDIDATE','MARGINAL':'LEAD','NOT READY':'LEAD','NOTREADY':'LEAD'})[v] || v; }  // READY/MARGINAL/NOT READY are internal; users see the ladder stage
+
   const jobId = {{ job_id | tojson }};
   const fmt = (v, d) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Number(v).toFixed(d === undefined ? 1 : d);
 
@@ -76,7 +78,7 @@
             document.getElementById('summary-card').style.display = 'block';
             if (s.winner) {
               banner.className = 'verdict-banner verdict-' + s.winner.verdict;
-              banner.textContent = `WINNER: ${s.winner.verdict}`;
+              banner.textContent = `WINNER: ${STAGE(s.winner.verdict)}`;
               document.getElementById('s-candidate').textContent = s.winner.candidate_id;
               document.getElementById('s-family').textContent = s.winner.family || 'unknown';
               document.getElementById('s-evalpass').textContent = fmt(s.winner.eval_pass_probability) + '%';

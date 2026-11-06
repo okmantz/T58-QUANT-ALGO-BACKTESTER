@@ -29,7 +29,7 @@
 
 <div class="lc-card">
   <h3>The six stages — stop at the first failure</h3>
-  <p class="lc-hint" style="margin-bottom:8px;">A fix after a failure is a new look: log it and it adds to N. A strategy is READY only after Stage 6; passing Stage 4 or 5 makes it a candidate, not a strategy.</p>
+  <p class="lc-hint" style="margin-bottom:8px;">A fix after a failure is a new look: log it and it adds to N. A strategy is FORWARD-TEST CANDIDATE only after Stage 6; passing Stage 4 or 5 makes it a candidate, not a strategy.</p>
   {% for s in snap.stages %}
   <div class="rb-stage"><div class="n">{{ s.stage }}</div><div style="min-width:0;"><div class="t">{{ s.name }}</div><div class="r">{{ s.rule }}</div><div class="w">Where: {{ s.where }}</div></div></div>
   {% endfor %}
