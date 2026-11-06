@@ -79,7 +79,7 @@ class SpeedRunMixin:
             "One button: searches EVERY registered strategy family at once for something "
             "that shows an edge, validates the best few candidates through Full Pipeline "
             "(walk-forward-aware GA + fresh Monte Carlo + out-of-sample check) running "
-            "concurrently, and hands back whichever one is best -- READY, MARGINAL, or "
+            "concurrently, and hands back whichever one is best -- FORWARD-TEST CANDIDATE, LEAD, or "
             "(if nothing cleared the bar) an honest 'no winner found'. This does NOT skip "
             "any check Full Pipeline or Search Lab would otherwise run; it only asks each "
             "of them to spend less time per candidate, and every existing safeguard "
@@ -144,7 +144,7 @@ class SpeedRunMixin:
         autopilot_section = self._section(
             f, "Overnight Autopilot",
             "One button: runs Speed Run (using the settings above), and if it lands on a "
-            "READY/MARGINAL winner, automatically starts forward-testing it live on your saved "
+            "FORWARD-TEST CANDIDATE or LEAD winner, automatically starts forward-testing it live on your saved "
             "MT5 demo account (set up on the Forward Test tab first) -- then writes one dated "
             "report summarizing both. This can't finish a full forward-test evaluation overnight "
             "(forward testing is a live, ongoing process) -- what you get by morning is a "
@@ -155,7 +155,7 @@ class SpeedRunMixin:
             "just without an auto-started forward test.",
         )
         self.autopilot_auto_forward_test = LabeledCheckbox(
-            autopilot_section, "Auto-start a live MT5 demo forward test on a READY/MARGINAL winner", True,
+            autopilot_section, "Auto-start a live MT5 demo forward test on a FORWARD-TEST CANDIDATE or LEAD winner", True,
         )
         self.autopilot_ft_risk_pct = LabeledEntry(autopilot_section, "Forward test risk per trade (%)", 1.0)
         self.autopilot_ft_max_trades_per_day = LabeledEntry(autopilot_section, "Forward test max trades/day", 10)
@@ -191,7 +191,7 @@ class SpeedRunMixin:
         candidates_section = self._section(
             f, "Validated candidates",
             "Every candidate that made it to Full Pipeline validation, ranked best first "
-            "(READY beats MARGINAL beats anything else, tied-broken by eval pass probability). "
+            "(FORWARD-TEST CANDIDATE beats LEAD beats anything else, tied-broken by eval pass probability). "
             "Double-click a row (or select it and click OPEN REPORT) to open that candidate's "
             "own full HTML report.",
         )
@@ -373,7 +373,7 @@ class SpeedRunMixin:
                 pr = r.pipeline_result
                 html_path = pr.report_paths.get("html")
                 line = (
-                    f"[{pr.verdict:9s}]  {r.candidate_id}  ({r.family or 'unknown family'})  "
+                    f"[{pr.headline:22s}]  {r.candidate_id}  ({r.family or 'unknown family'})  "
                     f"eval pass {pr.final_mc.evaluation_pass_probability:5.1f}%  "
                     f"payout {pr.final_mc.first_payout_probability:5.1f}%"
                 )
@@ -458,7 +458,7 @@ class SpeedRunMixin:
                 self.speedrun_verdict_label.config(
                     text=(
                         f"WINNER: {result.winner.candidate_id} ({result.winner.family or 'unknown family'})\n"
-                        f"  {pr.verdict}  --  eval pass {pr.final_mc.evaluation_pass_probability:.1f}%  --  "
+                        f"  {pr.headline}  --  eval pass {pr.final_mc.evaluation_pass_probability:.1f}%  --  "
                         f"payout {pr.final_mc.first_payout_probability:.1f}%"
                     ),
                     fg=verdict_color,
@@ -658,7 +658,7 @@ class SpeedRunMixin:
                 pr = r.winner.pipeline_result
                 html_path = pr.report_paths.get("html")
                 line = (
-                    f"[{pr.verdict:9s}]  {label}  eval pass {pr.final_mc.evaluation_pass_probability:5.1f}%  "
+                    f"[{pr.headline:22s}]  {label}  eval pass {pr.final_mc.evaluation_pass_probability:5.1f}%  "
                     f"payout {pr.final_mc.first_payout_probability:5.1f}%"
                 )
             else:
@@ -731,7 +731,7 @@ class SpeedRunMixin:
                     text=(
                         f"BEST: {best.label} -- {best.result.winner.candidate_id} "
                         f"({best.result.winner.family or 'unknown family'})\n"
-                        f"  {pr.verdict}  --  eval pass {pr.final_mc.evaluation_pass_probability:.1f}%  --  "
+                        f"  {pr.headline}  --  eval pass {pr.final_mc.evaluation_pass_probability:.1f}%  --  "
                         f"payout {pr.final_mc.first_payout_probability:.1f}%"
                     ),
                     fg=verdict_color,
@@ -815,7 +815,7 @@ class SpeedRunMixin:
                         self.speedrun_verdict_label.config(
                             text=(
                                 f"WINNER: {result.winner.candidate_id} ({result.winner.family or 'unknown family'})\n"
-                                f"  {pr.verdict}  --  eval pass {pr.final_mc.evaluation_pass_probability:.1f}%  --  "
+                                f"  {pr.headline}  --  eval pass {pr.final_mc.evaluation_pass_probability:.1f}%  --  "
                                 f"payout {pr.final_mc.first_payout_probability:.1f}%"
                             ),
                             fg=verdict_color,

@@ -350,7 +350,7 @@ class ApiKeysSupportMixin:
             ("What's the difference between Quick Optimize and Full Pipeline?",
              "Quick Optimize runs the walk-forward-aware GA search on its own for a fast iteration "
              "loop. Full Pipeline runs the complete 15-step process -- baseline, search, final Monte "
-             "Carlo, out-of-sample checks, and a READY/MARGINAL/NOT READY verdict -- and is what you'd "
+             "Carlo, out-of-sample checks, and a REJECT / LEAD / FORWARD-TEST CANDIDATE verdict -- and is what you'd "
              "run before trusting a result."),
             ("Why does a search say a candidate has zero trades?",
              "The strategy's entry conditions never fired on that dataset/timeframe combination -- "

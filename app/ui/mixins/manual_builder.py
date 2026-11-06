@@ -109,7 +109,7 @@ class ManualBuilderMixin:
         numstep(2, "CREATE → Strategy Builder — pick Manual / Python / PineScript / MQL5 and set it up.")
         numstep(3, "TEST → Prop-Firm Rules — enter your prop firm's account size, targets, and drawdown rules.")
         numstep(4, "TEST → Risk & Execution — set your risk per trade and starting balance (defaults are fine to start).")
-        numstep(5, "OPTIMIZE → Full Pipeline — click RUN FULL PIPELINE and read the READY / MARGINAL / NOT READY verdict.")
+        numstep(5, "OPTIMIZE → Full Pipeline — click RUN FULL PIPELINE and read the REJECT / LEAD / FORWARD-TEST CANDIDATE verdict.")
         tip(
             "That's it. Everything under OPTIMIZE, VALIDATE, and CHAMPION in the sidebar is all "
             "optional extra tooling for later — you do not need it for a first pass."
@@ -424,10 +424,10 @@ class ManualBuilderMixin:
         numstep(3, "Watch the live progress log — it can take anywhere from under a minute to several minutes "
                     "depending on your data size and settings.")
         numstep(4, "Read the VERDICT box at the top once it finishes:")
-        substep("READY — passed every check: Monte Carlo pass probability, drawdown, out-of-sample stability, "
+        substep("FORWARD-TEST CANDIDATE — passed every check: Monte Carlo pass probability, drawdown, out-of-sample stability, "
                 "and the signal-quality (ICIR) gate.")
-        substep("MARGINAL — passed some but not all checks — worth a closer look before trusting it.")
-        substep("NOT READY — failed enough checks that this configuration isn't trustworthy as-is; check the "
+        substep("LEAD — passed some but not all checks — worth a closer look before trusting it.")
+        substep("REJECT — failed enough checks that this configuration isn't trustworthy as-is; check the "
                 "listed reasons for exactly why.")
         substep("The Verdict box lists the specific reason for every pass/fail — scroll down within the box "
                 "(or the page) if the full list runs long.")
@@ -611,12 +611,12 @@ class ManualBuilderMixin:
         )
 
         h2("Full Pipeline verdict")
-        bullet("READY → your strongest evidence yet, but still a backtest. Consider a short Forward Test "
+        bullet("FORWARD-TEST CANDIDATE → your strongest evidence yet, but still a backtest. Consider a short Forward Test "
                "(MT5) or paper trading before risking real capital on a prop-firm evaluation.")
-        bullet("MARGINAL → not clearly ready or clearly dead. Try Quick Optimize on it, or adjust risk "
+        bullet("LEAD → not clearly ready or clearly dead. Try Quick Optimize on it, or adjust risk "
                "settings (position size, daily-loss limit) and re-run Full Pipeline. Don't take it live "
                "as-is.")
-        bullet("NOT READY → doesn't hold up under re-validation. Go back to Evolution Lab or Search Lab "
+        bullet("REJECT → doesn't hold up under re-validation. Go back to Evolution Lab or Search Lab "
                "for a different candidate rather than trying to rescue this one.")
 
         h2("Forward Test (MT5) results")
@@ -659,7 +659,7 @@ class ManualBuilderMixin:
         numstep(2, "CREATE → Strategy Builder → pick/build your strategy (or load/optimize one from the Strategy Library).")
         numstep(3, "TEST → Prop-Firm Rules + Risk & Execution → confirm these still match your firm/settings.")
         numstep(4, "OPTIMIZE → Full Pipeline → RUN FULL PIPELINE → read the verdict.")
-        numstep(5, "If READY and you want to see it trade live → FORWARD TEST → Forward Test (MT5) (paper) or "
+        numstep(5, "If FORWARD-TEST CANDIDATE and you want to see it trade live → FORWARD TEST → Forward Test (MT5) (paper) or "
                     "DEPLOY → Deploy Live (real capital, once you're confident).")
         tip(
             "That's the whole loop. OPTIMIZE, VALIDATE, and CHAMPION in the sidebar are all "

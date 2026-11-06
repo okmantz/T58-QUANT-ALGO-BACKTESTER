@@ -27,6 +27,7 @@ from app.ui.widgets.basic import LabeledCheckbox, LabeledCombo, LabeledEntry
 from app.ui.widgets.cards import NeuralProgress
 from app.ui.widgets.run_context import RunContextPanel
 from app.ui import theme
+from app.orchestration.verdict_labels import headline as _vl_headline
 
 # Palette names below are (re)bound by app.ui.theme on import and on every theme toggle.
 BG = ""
@@ -59,8 +60,8 @@ class PipelinesMixin:
             "(scored ONLY on out-of-sample fold data, never in-sample -- so it isn't just "
             "curve-fit harder), re-validates the winner with a fresh full-fidelity Monte "
             "Carlo, checks it holds up across several distinct historical stretches with "
-            "no further re-tuning, and produces one final report with a plain READY / "
-            "MARGINAL / NOT READY verdict. For Python/PineScript/MQL5 strategies, the "
+            "no further re-tuning, and produces one final report with a plain FORWARD-TEST CANDIDATE / "
+            "LEAD / REJECT verdict. For Python/PineScript/MQL5 strategies, the "
             "winning source is also saved straight into the Strategy Library, auto-tagged "
             "TESTED / PASSED, VALIDATED, or TESTED / FAILED based on that verdict (or "
             "whatever fixed status you pick below), ready to use. Uses the strategy "
@@ -116,7 +117,7 @@ class PipelinesMixin:
         self.fp_save_to_library = LabeledCheckbox(
             library_section, "Save the winning strategy to the Strategy Library when finished", True,
         )
-        _AUTO_STATUS_LABEL = "Auto (based on READY / MARGINAL / NOT READY verdict)"
+        _AUTO_STATUS_LABEL = "Auto (based on REJECT / LEAD / FORWARD-TEST CANDIDATE verdict)"
         self._fp_status_label_to_key = {_AUTO_STATUS_LABEL: None}
         self._fp_status_label_to_key.update({status_label(s): s for s in STRATEGY_STATUSES})
         self.fp_library_status = LabeledCombo(
@@ -223,7 +224,7 @@ class PipelinesMixin:
 
             verdict_color = {"READY": GREEN, "MARGINAL": AMBER, "NOT READY": RED}.get(result.verdict, TEXT_DIM)
             self.fullpipeline_verdict_label.config(
-                text=f"{result.verdict}\n" + "\n".join(f"  \u2022 {r}" for r in result.verdict_reasons),
+                text=f"{result.headline}\n" + "\n".join(f"  \u2022 {r}" for r in result.verdict_reasons),
                 fg=verdict_color,
             )
 
@@ -250,7 +251,7 @@ class PipelinesMixin:
             except Exception:
                 pass
 
-            self._log_fullpipeline(f"\nVerdict: {result.verdict}")
+            self._log_fullpipeline(f"\nVerdict: {result.headline}")
             self._log_fullpipeline("\nDone. Full Pipeline report written to:")
             for k, p in result.report_paths.items():
                 self._log_fullpipeline(f"  {k}: {p}")
@@ -943,7 +944,7 @@ class PipelinesMixin:
             verdict_color = {"READY": GREEN, "MARGINAL": AMBER}.get(result.winner_verdict, TEXT_DIM if not result.winner_verdict else RED)
             self.speedrun_verdict_label.config(
                 text=(
-                    f"Autopilot done -- verdict: {result.winner_verdict or 'no winner'}\n"
+                    f"Autopilot done -- verdict: {_vl_headline(result.winner_verdict) if result.winner_verdict else 'no winner'}\n"
                     f"Forward test: {result.forward_test_message}"
                 ),
                 fg=verdict_color,

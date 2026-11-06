@@ -28,6 +28,7 @@ from app.ui.common import STATUS_KEY_TO_LABEL, STATUS_LABEL_TO_KEY, _safe_font
 from app.ui.platform_win import _apply_dark_titlebar
 from app.ui.theme import MONO
 from app.ui import theme
+from app.orchestration.verdict_labels import headline as _vl_headline
 
 # Palette names below are (re)bound by app.ui.theme on import and on every theme toggle.
 BG = ""
@@ -220,7 +221,7 @@ class StrategyLibraryMixin:
             current_title = next((s["title"] for s in pp["stages"] if s["key"] == pp["current_stage"]), "Create")
             stage_note = f"  ·  Stage: {current_title}"
             if pp["verdict"] and pp["current_stage"] in ("champion_check", "ready") and pp["verdict"] != "READY":
-                stage_note += f" ({pp['verdict']})"
+                stage_note += f" ({_vl_headline(pp['verdict'])})"
             idx = self.strategy_library_listbox.size()
             self.strategy_library_listbox.insert(
                 END, f"  [{item.status_display}]  {item.name}  ({kb:.1f} KB){badge}{stage_note}{suffix}"
