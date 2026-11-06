@@ -222,7 +222,7 @@
       <div><label>Monte Carlo sims (per full eval)</label><input type="number" name="mc_sims" value="1000"></div>
       <div><label>Optimizer mode</label>
         <select name="optimizer_mode">
-          {% for key, label in optimizer_modes.items() %}
+          {% for key, label in optimizer_modes.items() if key != 'auto' %}
           <option value="{{ key }}" {{ 'selected' if key == 'genetic' else '' }}>{{ label }}</option>
           {% endfor %}
         </select>
@@ -233,7 +233,7 @@
     <div class="row">
       <div style="flex:1;"><label>Optimizer mode (elite breeding)</label>
         <select name="optimizer_mode">
-          {% for key, label in optimizer_modes.items() %}
+          {% for key, label in optimizer_modes.items() if key != 'auto' %}
           <option value="{{ key }}" {{ 'selected' if key == 'genetic' else '' }}>{{ label }}</option>
           {% endfor %}
         </select>
@@ -304,7 +304,7 @@
     </div>
     <div class="checkbox-row" style="margin-top:10px;"><input type="checkbox" name="save_to_library" checked><label style="margin:0;">Save new elites to the Strategy Library (tagged "draft")</label></div>
     <div class="checkbox-row"><input type="checkbox" name="resume_from_checkpoint" checked><label style="margin:0;">Resume from checkpoint if one exists for this data</label></div>
-    <div class="checkbox-row"><input type="checkbox" name="adaptive_risk_enabled"><label style="margin:0;">Enable adaptive, limit-aware position sizing for every candidate evaluated</label></div>
+    <div class="checkbox-row"><input type="checkbox" name="adaptive_risk_enabled" checked><label style="margin:0;">Enable adaptive, limit-aware position sizing for every candidate evaluated</label></div>
     <div class="checkbox-row" style="background:rgba(120,200,120,0.08);border:1px solid rgba(120,200,120,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="reset_on_breach" checked><label style="margin:0;">Reset-on-breach: score every candidate on the basis that a blown account gets a fresh eval and keeps going, not a dead end (recommended -- uncheck to optimize on a single account with no reset)</label></div>
     <div class="form-row" style="margin-top:8px;">
       <label title="Carved off the very end of your data before anything else. Nothing -- not evolution, not selection, not the per-generation holdout gate -- ever sees it. After the run stops you get exactly one look at it per candidate, for an honest final pass rate.">Sealed final test slice (% of data, never touched until the end)</label>

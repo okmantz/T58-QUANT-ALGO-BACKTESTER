@@ -206,7 +206,7 @@
             <div class="lc-adv-field"><label class="flabel">Optimizer mode</label>
               <select name="optimizer_mode">
                 {% for key, label in optimizer_modes.items() %}
-                <option value="{{ key }}" {{ 'selected' if key == 'genetic' else '' }}>{{ label }}</option>
+                <option value="{{ key }}" {{ 'selected' if key == 'auto' else '' }}>{{ label }}</option>
                 {% endfor %}
               </select>
               <div class="why">All three score candidates identically &mdash; only how the next one is picked differs. TPE / CMA-ES need the optuna / cma packages.</div></div>

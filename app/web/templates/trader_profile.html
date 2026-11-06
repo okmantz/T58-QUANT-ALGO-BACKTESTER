@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Trader Profile — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+{% include '_lifecycle_css.html' %}
+<style>
+  .tp-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:16px;}
+  .tp-grid label{display:block; font-size:12px; color:var(--lc-muted); margin-bottom:4px;}
+  .tp-grid input,.tp-grid select{width:100%;}
+  .tp-note{font-size:12px; color:var(--lc-muted); margin-top:10px;}
+</style>
+</head>
+<body>
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="lc-scope"><div class="lc-wrap">
+<div class="lc-crumb">Settings · <b>Trader profile</b></div>
+<h1 class="lc-title">Trader profile</h1>
+<p class="lc-sub">Tell the app once how you trade. Every run form then opens with your prop firm's rules, account size, instruments, session hours and risk per trade already filled in — you can still change any field for a single run. Nothing here changes what a backtest computes.</p>
+{% if saved %}<div class="lc-notice">Saved. New run forms will open pre-filled.</div>{% endif %}
+<form method="post" action="/profile" class="lc-card">
+  <div class="tp-grid">
+    <div><label for="preset_key">Prop firm and account</label>
+      <select id="preset_key" name="preset_key">
+        <option value="">— not trading a prop evaluation —</option>
+        {% for key, label in presets %}<option value="{{ key }}" {{ 'selected' if profile.get('preset_key') == key else '' }}>{{ label }}</option>{% endfor %}
+      </select></div>
+    <div><label for="account_size">Account size ($) — leave blank to use the preset's</label>
+      <input id="account_size" name="account_size" type="number" step="any" min="500" value="{{ profile.get('account_size', '') }}"></div>
+    <div><label for="instruments">Instruments you trade (comma separated, e.g. NQ, ES, MNQ)</label>
+      <input id="instruments" name="instruments" type="text" value="{{ (profile.get('instruments') or [])|join(', ') }}"></div>
+    <div><label for="typical_hold">Typical hold time</label>
+      <select id="typical_hold" name="typical_hold">
+        <option value="">—</option>
+        {% for key, label in hold_choices.items() %}<option value="{{ key }}" {{ 'selected' if profile.get('typical_hold') == key else '' }}>{{ label }}</option>{% endfor %}
+      </select></div>
+    <div><label for="session_start_hour">Session start hour (0–23)</label>
+      <input id="session_start_hour" name="session_start_hour" type="number" min="0" max="23" value="{{ profile.get('session_start_hour', '') }}"></div>
+    <div><label for="session_end_hour">Session end hour (0–24)</label>
+      <input id="session_end_hour" name="session_end_hour" type="number" min="0" max="24" value="{{ profile.get('session_end_hour', '') }}"></div>
+    <div><label for="session_timezone">Session time zone (e.g. America/New_York)</label>
+      <input id="session_timezone" name="session_timezone" type="text" value="{{ profile.get('session_timezone', '') }}"></div>
+    <div><label for="risk_per_trade_pct">Risk per trade (% of account)</label>
+      <input id="risk_per_trade_pct" name="risk_per_trade_pct" type="number" step="any" min="0.01" max="10" value="{{ profile.get('risk_per_trade_pct', '') }}"></div>
+  </div>
+  <p class="tp-note">Instrument specs and cost assumptions (tick size, point value, spread, commission) are filled from the instrument you pick on each form; the profile decides which instruments are suggested first.</p>
+  <p style="margin-top:14px;"><button class="btn" type="submit">Save profile</button></p>
+</form>
+</div></div>
+</div>
+</div>
+</body>
+</html>

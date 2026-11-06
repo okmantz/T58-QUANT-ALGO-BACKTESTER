@@ -139,7 +139,7 @@
     <label>Optimizer mode</label>
     <select name="optimizer_mode">
       {% for key, label in optimizer_modes.items() %}
-      <option value="{{ key }}" {{ 'selected' if key == 'genetic' else '' }}>{{ label }}</option>
+      <option value="{{ key }}" {{ 'selected' if key == 'auto' else '' }}>{{ label }}</option>
       {% endfor %}
     </select>
     <label>Fitness metric (scored per market, before aggregation)</label>

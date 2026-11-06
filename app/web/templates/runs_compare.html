@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Compare runs — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+{% include '_lifecycle_css.html' %}
+<style>
+  table.cmp{width:100%; border-collapse:collapse; font-size:13px;}
+  table.cmp th{font-size:11px; color:var(--lc-muted); text-align:left; text-transform:uppercase; letter-spacing:.6px; padding:6px 8px; border-bottom:1px solid var(--lc-border2);}
+  table.cmp td{padding:8px; border-bottom:1px solid var(--lc-border); font-variant-numeric:tabular-nums;}
+  table.cmp td.best{color:var(--lc-acc); font-weight:700;}
+  .pick{display:flex; gap:8px; align-items:center; padding:6px 0; border-bottom:1px solid var(--lc-border); font-size:13px;}
+</style>
+</head>
+<body>
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="lc-scope"><div class="lc-wrap">
+<div class="lc-crumb"><a href="/runs">Runs</a> · <b>Compare</b></div>
+<h1 class="lc-title">Compare runs</h1>
+<p class="lc-sub">Pick up to four finished runs. The best value in each row is highlighted (lower is better for drawdown and risk of ruin).</p>
+{% if cmp.columns %}
+<div class="lc-card"><table class="cmp">
+  <thead><tr><th></th>{% for c in cmp.columns %}<th>{{ c.strategy_name }}<br><span style="text-transform:none;letter-spacing:0;">{{ c.instrument }} · {{ c.timeframe }}</span></th>{% endfor %}</tr></thead>
+  <tbody>
+  {% for row in cmp.rows if row.key != 'ladder' %}
+    <tr><td>{{ row.label }}</td>
+    {% for v in row['values'] %}<td class="{{ 'best' if row.best is not none and v == row.best else '' }}">{% if v is number %}{{ '{:,.2f}'.format(v) if v is not integer else v }}{% else %}—{% endif %}</td>{% endfor %}</tr>
+  {% endfor %}
+    <tr><td>Report</td>{% for c in cmp.columns %}<td>{% if c.report_html %}<a href="/reports/{{ c.report_html.replace('\\', '/').split('/reports/')[-1] }}" target="_blank">open</a>{% else %}—{% endif %}</td>{% endfor %}</tr>
+  </tbody></table></div>
+{% else %}
+<div class="lc-card"><p>Choose the runs to compare:</p>
+  <form method="get" action="/runs/compare" id="pickform"><div id="picklist">Loading recent runs…</div>
+  <p style="margin-top:12px;"><button class="btn" type="submit">Compare selected</button></p></form></div>
+<script>
+fetch('/api/runs/recent').then(r=>r.json()).then(rows=>{
+  const box=document.getElementById('picklist');
+  if(!rows.length){box.textContent='No finished runs yet.';return;}
+  box.innerHTML=rows.map(r=>'<label class="pick"><input type="checkbox" value="'+r.run_id+'" class="pk"> <span>'+(r.strategy_name||'Strategy')+' — '+(r.instrument||'')+' '+(r.timeframe||'')+' — '+(r.timestamp||'').slice(0,16).replace('T',' ')+'</span></label>').join('');
+  document.getElementById('pickform').addEventListener('submit',e=>{
+    e.preventDefault();
+    const ids=[...document.querySelectorAll('.pk:checked')].slice(0,4).map(x=>x.value);
+    if(ids.length<2){alert('Pick at least two runs.');return;}
+    location.href='/runs/compare?ids='+ids.join(',');
+  });
+});
+</script>
+{% endif %}
+</div></div>
+</div>
+</div>
+</body>
+</html>

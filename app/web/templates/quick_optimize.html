@@ -189,7 +189,7 @@
       <div><label>Fitness metric</label>
         <select name="fitness_metric">
           {% for key, label in fitness_metrics.items() %}
-          <option value="{{ key }}" {{ 'selected' if key == 'eval_pass_probability' else '' }}>{{ label }}</option>
+          <option value="{{ key }}" {{ 'selected' if key == 'edge_lb_r_dd' else '' }}>{{ label }}</option>
           {% endfor %}
         </select>
         <p style="font-size:12px;color:var(--t-faint);margin-top:4px;">Not trading a prop-firm evaluation? Pick "Long-Term Net Profit" -- it scores candidates purely on total P&amp;L and ignores prop-firm drawdown/payout rules entirely.</p>
@@ -199,7 +199,7 @@
       <div style="flex:1;"><label>Optimizer mode</label>
         <select name="optimizer_mode">
           {% for key, label in optimizer_modes.items() %}
-          <option value="{{ key }}" {{ 'selected' if key == 'genetic' else '' }}>{{ label }}</option>
+          <option value="{{ key }}" {{ 'selected' if key == 'auto' else '' }}>{{ label }}</option>
           {% endfor %}
         </select>
         <p style="font-size:12px;color:var(--t-faint);margin-top:4px;">All three run the exact same chained out-of-sample scoring per candidate -- only how the next configuration to try is chosen differs. TPE/CMA-ES need the optuna / cma packages on the server; you'll get a clear error here if one isn't installed.</p>
@@ -207,9 +207,9 @@
     </div>
     <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;"><input type="checkbox" name="save_to_library" checked style="width:auto;">Save the result to the Strategy Library (tagged "draft")</label>
     <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;background:rgba(90,220,180,0.08);border:1px solid rgba(90,220,180,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="save_as_copy" style="width:auto;">Save the optimized version as a separate copy instead of updating the original (by default the strategy you picked is updated in place — its previous version is archived, never deleted, and its reports stay with it. Tick this only when you want to keep the original untouched and split off a new strategy.)</label>
-    <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;background:rgba(255,200,80,0.08);border:1px solid rgba(255,200,80,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="adaptive_risk_enabled" style="width:auto;">Enable adaptive, limit-aware position sizing on the search</label>
+    <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;background:rgba(255,200,80,0.08);border:1px solid rgba(255,200,80,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="adaptive_risk_enabled" style="width:auto;" checked>Enable adaptive, limit-aware position sizing on the search</label>
     <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;background:rgba(120,200,120,0.08);border:1px solid rgba(120,200,120,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="reset_on_breach" checked style="width:auto;">Reset-on-breach: score on the basis that a blown account gets a fresh eval and keeps going, not a dead end (recommended)</label>
-    <p style="font-size:12px;color:var(--t-faint);margin-top:4px;">Off by default. This setting is NOT saved with the optimized strategy -- if you later run this strategy through Full Pipeline, its own "Enable adaptive, limit-aware position sizing" checkbox (off by default there too) needs to match whatever you choose here, or the two results are not comparable.</p>
+    <p style="font-size:12px;color:var(--t-faint);margin-top:4px;">On by default. This setting is NOT saved with the optimized strategy -- if you later run this strategy through Full Pipeline, its own "Enable adaptive, limit-aware position sizing" checkbox (on by default there too) needs to match whatever you choose here, or the two results are not comparable.</p>
     <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;background:rgba(90,160,255,0.08);border:1px solid rgba(90,160,255,0.35);border-radius:8px;padding:8px 10px;"><input type="checkbox" name="reserve_holdout" style="width:auto;" checked disabled>Reserve a holdout slice (always on: Quick Optimize will not rank without one; still not a substitute for Full Pipeline)</label>
     <div class="row" id="holdout-frac-row">
       <div><label>Holdout fraction</label><input type="number" name="holdout_frac" value="0.2" min="0.05" max="0.5" step="0.05"></div>
