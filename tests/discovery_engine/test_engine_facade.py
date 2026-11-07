@@ -54,7 +54,8 @@ def test_apply_overrides_only_touches_fields_that_exist_and_relaxes_prop_floors(
 
 
 # ------------------------------------------------------------------------------------------------------------ family guard
-def test_resolve_families_gates_unregistered_v13_families_and_unknown_names(tmp_path):
+def test_resolve_families_gates_unregistered_v13_families_and_unknown_names(tmp_path, monkeypatch):
+    monkeypatch.setenv('T58_USE_ALL_FAMILIES', '0')   # legacy gated mode
     from app.discovery.hypothesis import HypothesisStore, preregister_v13_families
     store = HypothesisStore(tmp_path / "hyp.json")
     preset = get_preset("search_lab")
@@ -269,6 +270,7 @@ def test_code_hash_ignores_comments_docstrings_and_unrelated_files(tmp_path):
 
 
 def test_new_v13_batches_open_only_through_the_gate(tmp_path, monkeypatch):
+    monkeypatch.setenv("T58_USE_ALL_FAMILIES", "0")   # legacy gated mode
     from app.search import strategy_space as ss
     closed = set(ss.active_family_names())
     p = tmp_path / "gate.json"
