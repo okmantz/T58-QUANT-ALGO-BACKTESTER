@@ -268,6 +268,10 @@ def apply_family_exclusions(
     dead = dead_end_families(search_dir, evolution_base_dir, min_samples=min_samples)
     if not dead:
         return None, []
+    from app.search.strategy_space import use_all_families
+    if use_all_families():
+        # 2026-11-07: "use everything" -- dead-end families are REPORTED but never removed from the search.
+        return None, sorted(dead)
     pool = active_family_names()          # families still closed behind the surrogate gate are not part of "every family"
     survivors = [f for f in pool if f not in dead]
     if len(survivors) < min(min_active_families, len(pool)):

@@ -4927,10 +4927,21 @@ def _v13_enabled_batches() -> set:
         return set()
 
 
+def use_all_families() -> bool:
+    """2026-11-07: the engine uses EVERYTHING it has. Default ON; set T58_USE_ALL_FAMILIES=0 to restore the narrowed (v13-style) set.
+    Enabling every family does not weaken the multiple-testing accounting: every candidate still lands in the trial ledger, so the
+    deflated / false-discovery statistics are computed over the larger family count."""
+    import os
+    return os.environ.get("T58_USE_ALL_FAMILIES", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
 def active_family_names() -> list[str]:
-    """Families an "all" search runs: everything except RETIRED_FAMILIES, and except v13 families whose rollout batch has not been
-    opened by the surrogate false-discovery gate (an explicit single-family request still runs them) or that need data not supplied."""
+    """Families an "all" search runs. By default (use_all_families) that is EVERY family, including the formerly RETIRED near-duplicates
+    and the v13 batches the surrogate gate had held closed; only v13 families that need data not supplied (status != "ready") are
+    skipped, because they cannot run at all. With T58_USE_ALL_FAMILIES=0 the old narrowing applies."""
     v13 = globals().get("_V13_META")
+    if use_all_families():
+        return [n for n in FAMILIES if not v13 or n not in v13 or v13[n].status == "ready"]
     if not v13:
         return [n for n in FAMILIES if n not in RETIRED_FAMILIES]
     opened = _v13_enabled_batches()
