@@ -6,6 +6,7 @@ Orchestrates: Dataset + Strategy + Risk/Execution Configuration
 """
 from __future__ import annotations
 
+import threading
 import warnings as _warnings_module
 from dataclasses import dataclass, field
 
@@ -41,6 +42,29 @@ class BacktestResult:
 
 
 _LOOKAHEAD_CACHE: dict = {}
+_LOOKAHEAD_LOCK = threading.Lock()  # 2026-11-06 audit finding 3: same unlocked evict-then-insert shape as the day-index cache
+_LOOKAHEAD_CACHE_MAX = 512
+
+
+def _lookahead_cache_get(key):
+    """Thread-safe read; None on a miss (or a None key)."""
+    if key is None:
+        return None
+    with _LOOKAHEAD_LOCK:
+        return _LOOKAHEAD_CACHE.get(key)
+
+
+def _lookahead_cache_put(key, value) -> None:
+    """Thread-safe insert with oldest-first eviction. Tolerates the oldest key vanishing under us."""
+    if key is None:
+        return
+    with _LOOKAHEAD_LOCK:
+        while len(_LOOKAHEAD_CACHE) >= _LOOKAHEAD_CACHE_MAX:
+            try:
+                _LOOKAHEAD_CACHE.pop(next(iter(_LOOKAHEAD_CACHE)), None)
+            except (StopIteration, RuntimeError):
+                break
+        _LOOKAHEAD_CACHE[key] = value
 
 
 def _structure_only(obj):
@@ -449,8 +473,9 @@ def prepare_run(
         try:
             from app.strategy.lookahead_check import check_for_lookahead
             _key = _lookahead_cache_key(strategy, df) if lookahead_check == "auto" else None
-            if _key is not None and _key in _LOOKAHEAD_CACHE:
-                _lookahead_result = _LOOKAHEAD_CACHE[_key]
+            _cached_la = _lookahead_cache_get(_key)
+            if _cached_la is not None:
+                _lookahead_result = _cached_la
             else:
                 _lookahead_result = _lookahead_disk_load(strategy, df) if _key is not None else None
                 if _lookahead_result is None:
@@ -458,9 +483,7 @@ def prepare_run(
                     if _key is not None:
                         _lookahead_disk_store(strategy, df, _lookahead_result)
                 if _key is not None:
-                    if len(_LOOKAHEAD_CACHE) >= 512:
-                        _LOOKAHEAD_CACHE.pop(next(iter(_LOOKAHEAD_CACHE)))
-                    _LOOKAHEAD_CACHE[_key] = _lookahead_result
+                    _lookahead_cache_put(_key, _lookahead_result)
         except Exception as _exc:  # noqa: BLE001
             _lookahead_result = None
             _lookahead_error = f"{type(_exc).__name__}: {_exc}"

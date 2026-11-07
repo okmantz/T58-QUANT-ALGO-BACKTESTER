@@ -129,4 +129,4 @@ def slot_mask_for_timestamps(timestamps, raw) -> np.ndarray:
     import pandas as pd
     slots = parse_slots(raw)
     idx = pd.DatetimeIndex(timestamps)
-    return slot_mask(idx.dayofweek.to_numpy(), idx.hour.to_numpy(), slots)
+    return slot_mask(idx.day_of_week.to_numpy(), idx.hour.to_numpy(), slots)

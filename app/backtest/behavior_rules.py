@@ -158,7 +158,7 @@ def window_mask(ts_naive_utc, windows: list, tz: str = "America/Chicago") -> np.
         return np.zeros(len(idx), dtype=bool)
     ct = idx.tz_localize("UTC").tz_convert(tz)
     mod = (ct.hour * 60 + ct.minute).to_numpy()
-    dow = ct.dayofweek.to_numpy()
+    dow = ct.day_of_week.to_numpy()
     mask = np.zeros(len(idx), dtype=bool)
     for wd, s, e in windows:
         inside = (mod >= s) & (mod <= e) if s <= e else (mod >= s) | (mod <= e)

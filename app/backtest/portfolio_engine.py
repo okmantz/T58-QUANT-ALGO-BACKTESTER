@@ -59,6 +59,7 @@ import pandas as pd
 from app.backtest import fills as _fills
 from app.backtest.adaptive_risk import AdaptiveRiskConfig, AdaptiveRiskState, volatility_percentile_series
 from app.backtest.engine import PreparedRun, prepare_run
+from app.backtest import execution as _execution_mod
 from app.backtest.execution import Trade
 from app.backtest.risk import RiskConfig
 from app.backtest.statistics import BacktestStatistics, compute_statistics
@@ -290,7 +291,7 @@ class _PortfolioEngine:
                 warn_msgs.append(f"news_blackout_windows could not be applied ({exc}); window blackout is DISABLED for this run.")
 
         weekend_hold = bool(getattr(account, "block_weekend_hold", False))
-        dow = pd.DatetimeIndex(bar_dates).dayofweek.to_numpy()
+        dow = pd.DatetimeIndex(bar_dates).day_of_week.to_numpy()
         week_ends_at = np.zeros(M, dtype=bool)
         if M:
             week_ends_at[-1] = True
@@ -435,6 +436,9 @@ class _PortfolioEngine:
 
         # ---- outputs -------------------------------------------------------------------------------------------------
         equity_arr = np.empty(M, dtype=np.float64)
+        # 2026-11-06 audit finding 4 (same fix as run_execution): leg k -> (fill_step, pnl, entry_price, size, direction) for a signal exit
+        # that is booked on the decision step but fills on a LATER master step; until then the equity point still carries the position.
+        deferred_sig_exit: dict = {}
         attempt_arr = np.zeros(M, dtype=np.int32)
         n_open_arr = np.zeros(M, dtype=np.int16)
         gross_contracts_arr = np.zeros(M, dtype=np.float32)
@@ -992,7 +996,11 @@ class _PortfolioEngine:
                     fill_idx = i_ + lg.fill_lag
                     if fill_idx < n_ and lg.step[fill_idx] >= 0:
                         exit_price, reason = opens_[fill_idx], "signal"
-                        settle_exit(lg, pos, exit_price, reason, direction, fill_idx, int(lg.step[fill_idx]))
+                        _sig_entry, _sig_size = pos["entry_price"], pos["size"]
+                        _sig_fill_m = int(lg.step[fill_idx])
+                        _sig_pnl = settle_exit(lg, pos, exit_price, reason, direction, fill_idx, _sig_fill_m)
+                        if _execution_mod._EQUITY_SIGNAL_EXIT_TIMING and _sig_fill_m > m:
+                            deferred_sig_exit[lg.k] = (_sig_fill_m, _sig_pnl, _sig_entry, _sig_size, direction)
                         lg.last_close_bar_idx = i_
                         lg.open = None
 
@@ -1034,6 +1042,24 @@ class _PortfolioEngine:
                 if margin_arr is not None:
                     marg += (cfg.margin_per_contract or {}).get(lg.name, 0.0) * c_
             mtm_equity = equity + floating_total if n_open else equity
+            if deferred_sig_exit:
+                _undo = 0.0
+                _def_float = 0.0
+                _any_def = False
+                for _k in list(deferred_sig_exit):
+                    _fm, _dpnl, _dentry, _dsize, _ddir = deferred_sig_exit[_k]
+                    if m >= _fm:
+                        del deferred_sig_exit[_k]      # the exit has filled by this step: its P&L belongs on this point
+                        continue
+                    _lg = L[_k]
+                    _i = _lg.bar_at[m]
+                    _px = _lg.closes[_i] if _i >= 0 else mark_price(_lg, m)
+                    _undo += _dpnl
+                    _def_float += (_px - _dentry) * _dsize * _ddir
+                    _any_def = True
+                if _any_def:
+                    # same operation order as run_execution -- (equity - exit P&L) + floating -- so one leg matches it bit for bit
+                    mtm_equity = (equity - _undo) + (_def_float + floating_total if n_open else _def_float)
             equity_arr[m] = mtm_equity
             attempt_arr[m] = attempt_id
             n_open_arr[m] = n_open

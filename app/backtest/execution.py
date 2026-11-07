@@ -36,6 +36,7 @@ EXPLICIT EXECUTION ASSUMPTIONS (documented here so none of these are silent):
 from __future__ import annotations
 
 import math
+import threading
 from dataclasses import dataclass, asdict
 
 import numpy as np
@@ -152,7 +153,20 @@ from app.backtest.fills import (  # noqa: E402,F401
 
 
 # (timestamp fingerprint) -> (bar_dates, unique_days, day_idx); see run_execution. Tiny: eight datasets at most.
+# 2026-11-06 audit finding 3: sweeps call the engine from thread pools, and the unlocked evict-then-insert raced (KeyError /
+# "dictionary changed size during iteration"). get, put and evict now share one lock; eviction tolerates a vanished key.
 _DAY_INDEX_CACHE: dict = {}
+_DAY_INDEX_LOCK = threading.Lock()
+_DAY_INDEX_MAX = 8
+
+# 2026-11-06 audit finding 1: remember the last skipped entry plan while its inputs are unchanged. Tests flip this to compare against the old path.
+_SKIP_MEMO_ENABLED = True
+
+# 2026-11-06 audit finding 4: a signal exit fills at the NEXT bar's open but is booked while processing the signal bar, so that bar's equity
+# point already held the next bar's price (a one-bar peek that flattered drawdown/Sharpe and could flag a breach a bar early). With this on,
+# the equity point of every bar before the fill still carries the position, marked at that bar's own close. TRADES ARE UNCHANGED; only the
+# equity curve (and so drawdown / Sharpe / equity-based gates) moves. Set False to reproduce pre-2026-11-07 curves.
+_EQUITY_SIGNAL_EXIT_TIMING = True
 
 
 def run_execution(
@@ -272,6 +286,13 @@ def run_execution(
     zero_size_contract_floor_count = 0  # BAR count of floor-skips (diagnostic; one unaffordable signal that persists N bars adds N)
     zero_size_skip_episodes = 0         # EPISODE count: consecutive skipped bars are ONE signal (this is what the skip ratio uses)
     _last_floor_skip_bar = -10
+    # 2026-11-06 audit finding 1 (skip-memo): while a signal persists and sizing says "skip", the next bar's plan is identical (same equity,
+    # same stop/target distance, same direction), so the whole plan is reused instead of recomputed. ONLY skips are remembered, so a trade can
+    # never change. Adaptive risk is excluded (its state moves between bars); the price-derived fallback stop puts the entry price in the key.
+    _use_skip_memo = bool(_SKIP_MEMO_ENABLED) and not (adaptive_risk is not None and adaptive_risk.enabled)
+    _last_skip_key = None
+    _last_skip_plan = None
+    _deferred_sig_exit = None  # (fill_idx, pnl, entry_price, size, direction) while a signal exit is booked but not yet filled
     pip_scale_mismatch_count = 0
     pip_scale_mismatch_worst_ratio = None  # smallest (stop_distance / entry_price) seen, for the warning
     atr_scale_mismatch_count = 0
@@ -506,7 +527,8 @@ def run_execution(
                         int(_i64.sum()), int((_i64 // 1_000_000_000 % 1_000_003).sum()))
     except Exception:  # noqa: BLE001
         _day_key = None
-    _day_hit = _DAY_INDEX_CACHE.get(_day_key) if _day_key is not None else None
+    with _DAY_INDEX_LOCK:
+        _day_hit = _DAY_INDEX_CACHE.get(_day_key) if _day_key is not None else None
     if _day_hit is not None:
         bar_dates, _unique_days, day_idx = _day_hit
     else:
@@ -533,9 +555,13 @@ def run_execution(
                     _a.setflags(write=False)
                 except Exception:  # noqa: BLE001
                     pass
-            if len(_DAY_INDEX_CACHE) >= 8:
-                _DAY_INDEX_CACHE.pop(next(iter(_DAY_INDEX_CACHE)))
-            _DAY_INDEX_CACHE[_day_key] = (bar_dates, _unique_days, day_idx)
+            with _DAY_INDEX_LOCK:
+                while len(_DAY_INDEX_CACHE) >= _DAY_INDEX_MAX:
+                    try:
+                        _DAY_INDEX_CACHE.pop(next(iter(_DAY_INDEX_CACHE)), None)
+                    except (StopIteration, RuntimeError):
+                        break
+                _DAY_INDEX_CACHE[_day_key] = (bar_dates, _unique_days, day_idx)
 
     # UPGRADE (speed): trades_today / pnl_today used to be plain dicts keyed
     # by the numpy.datetime64 in bar_dates, with a hash + dict lookup (get(),
@@ -616,7 +642,7 @@ def run_execution(
     # instruments. False (default) = the whole feature is off,
     # byte-identical to every run before it existed.
     _weekend_hold = bool(getattr(risk, "block_weekend_hold", False))
-    _dow = pd.DatetimeIndex(bar_dates).dayofweek.to_numpy()  # Mon=0..Sun=6
+    _dow = pd.DatetimeIndex(bar_dates).day_of_week.to_numpy()  # Mon=0..Sun=6
     _week_ends_at = np.zeros(n, dtype=bool)
     if n:
         _week_ends_at[-1] = True
@@ -1281,7 +1307,10 @@ def run_execution(
                     # the signal. The trade settles on the FILL bar (exit
                     # time, cooldown, and day-PnL all key off it).
                     exit_price, reason = opens[_sig_fill_idx], "signal"
-                    _settle_exit(open_trade, exit_price, reason, direction, _sig_fill_idx)
+                    _sig_entry_price, _sig_size = open_trade["entry_price"], open_trade["size"]
+                    _sig_pnl = _settle_exit(open_trade, exit_price, reason, direction, _sig_fill_idx)
+                    if _EQUITY_SIGNAL_EXIT_TIMING and _sig_fill_idx > i:
+                        _deferred_sig_exit = (_sig_fill_idx, _sig_pnl, _sig_entry_price, _sig_size, direction)
                     # Cooldown keys off the TRIGGER bar (i), not the fill
                     # bar: reentry_cooldown_bars is documented as "measured
                     # from the bar the previous position closed on", and its
@@ -1345,7 +1374,15 @@ def run_execution(
         # drawdown statistics (app.backtest.statistics) -- using realized
         # equity alone understated true intrabar/multi-day drawdown
         # whenever a trade was open across the peak.
-        if open_trade is not None:
+        if _deferred_sig_exit is not None and i >= _deferred_sig_exit[0]:
+            _deferred_sig_exit = None  # the exit has filled by this bar: its P&L belongs on this point
+        if _deferred_sig_exit is not None:
+            # Booked but not yet filled: undo the exit's P&L and keep the old position floating at this bar's close.
+            _d_fill, _d_pnl, _d_entry, _d_size, _d_dir = _deferred_sig_exit
+            mtm_equity = (equity - _d_pnl) + (closes[i] - _d_entry) * _d_size * _d_dir
+            if open_trade is not None and open_trade["entry_bar_idx"] <= i:
+                mtm_equity += (closes[i] - open_trade["entry_price"]) * open_trade["size"] * open_trade["direction"]
+        elif open_trade is not None:
             floating_close_pnl = (
                 (closes[i] - open_trade["entry_price"]) * open_trade["size"] * open_trade["direction"]
             )
@@ -1518,13 +1555,25 @@ def run_execution(
                     _vol_pct = float(_v) if not math.isnan(_v) else None
                 # Sizing, stop/target construction, the dead-lock guard, adaptive throttling and the scale-mismatch
                 # checks are ONE shared routine (app.backtest.fills.plan_entry) -- the portfolio engine calls the same one.
-                plan = _fills.plan_entry(
-                    risk=risk, equity=equity, direction=direction, raw_price=raw_price,
-                    bar_sl_distance=bar_sl_distance, bar_tp_distance=bar_tp_distance,
-                    bar_trail_distance=bar_trail_distance, stop_loss_pips=stop_loss_pips,
-                    take_profit_pips=take_profit_pips, adaptive_risk=adaptive_risk,
-                    adaptive_state=adaptive_state, vol_pct=_vol_pct, atr_now=_atr_for_mismatch_check[i],
-                )
+                _memo_key = None
+                if _use_skip_memo:
+                    _price_derived_stop = not bar_sl_distance and not stop_loss_pips
+                    _memo_key = (direction, equity, bar_sl_distance, bar_tp_distance, bar_trail_distance,
+                                 raw_price if _price_derived_stop else None)
+                if _memo_key is not None and _memo_key == _last_skip_key:
+                    plan = _last_skip_plan  # counters below still increment exactly as before
+                else:
+                    plan = _fills.plan_entry(
+                        risk=risk, equity=equity, direction=direction, raw_price=raw_price,
+                        bar_sl_distance=bar_sl_distance, bar_tp_distance=bar_tp_distance,
+                        bar_trail_distance=bar_trail_distance, stop_loss_pips=stop_loss_pips,
+                        take_profit_pips=take_profit_pips, adaptive_risk=adaptive_risk,
+                        adaptive_state=adaptive_state, vol_pct=_vol_pct, atr_now=_atr_for_mismatch_check[i],
+                    )
+                    if _memo_key is not None and plan.skipped:
+                        _last_skip_key, _last_skip_plan = _memo_key, plan
+                    else:
+                        _last_skip_key = _last_skip_plan = None
                 sizing_considered_count += 1
                 if plan.min_contract_rescue:
                     min_contract_rescue_count += 1
