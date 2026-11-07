@@ -229,12 +229,43 @@ economic question: `EV = p × q × V − p × A − c`. For firms that charge a 
 Combine, $49 per month) `c` is the monthly price × the months the evaluation is expected to take (median time to pass,
 rounded up to whole 30-day periods), so slow passers are no longer priced as if they paid for one month.
 
-## Edge Rulebook
+## T58 Prop Firm Rulebook v2
 
-The **Edge Rulebook** page (sidebar) states the project's staged rules in the same numbers the app enforces, with live calculators: the z-bar for a given
-number of looks, the trades needed to detect a given edge, the required lift, the 10-hypotheses-per-quarter **alpha ledger**, and the forward-test
-**kill line** (a running log-likelihood ratio of H1 = +0.15R against H0 = 0R; the strategy is cut when it falls to -2.25, which in the Rulebook's simulation removes a dead edge after a median of about 300 trades). The forward-test monitor reports it beside the SPRT, and a hit is listed as a halt reason.
-Source: `app/validation/rulebook.py`, `app/forward_test/sprt_monitor.py`. A binary screen is applied to every Full Pipeline run (`rulebook_screen` in the result).
+The **Prop Firm Rulebook v2** page (sidebar) replaces the old Edge Rulebook. v2 designs a strategy *backwards from the account's rules and pay structure* and
+holds every engine (create, test, optimize, validate, deploy) to the same eight gates, each a number the app computes:
+
+| Gate | Question | Verdict it unlocks |
+|---|---|---|
+| G0 | Rules sheet complete, sourced and < 30 days old (one blank stops everything) | LEAD |
+| G1 | Mechanism and counterparty written down before any data is touched | LEAD |
+| G2 | Pre-registered trial (family, sign, breadth, seal date); at most 3 looks per family | LEAD |
+| G3 | Development evidence: `E_plan = observed edge - E[max N] x SE >= +0.05R`, >= 400 trades over >= 150 days, plus leg / top-3 / quarter / year / neighbour / lookahead checks | FORWARD-TEST CANDIDATE |
+| G4 | Day behaviour (2 to 4 trades a day, day-stop = min(3R, 60% of the soft limit)) | FORWARD-TEST CANDIDATE |
+| G5 | Lifecycle under the v2 sizing policy (Wilson 5th-percentile pass / payout bars, EV at E_plan with payouts cut 50%) | FORWARD-TEST CANDIDATE |
+| G6 | Live-sim forward test, kill line LLR (H1 = +0.10R) at -2.25 | EVALUATE |
+| G7 | Capped paid attempts (score +1.5 paid / -0.9 unpaid, scale at +2.2, retire at -2.2, max 6) | scale to FUNDED |
+
+Sizing (`app/prop/lifecycle_v2.py`): evaluation risk 7.5% of the loss limit (x0.5 below half the cushion, x0.25 below a quarter, floor one micro);
+funded risk 5% of the cushion, capped at 5% of the limit and recomputed after each payout; day stop as above. Source: `app/validation/rulebook.py`,
+`app/prop/lifecycle_v2.py`, `app/forward_test/sprt_monitor.py`. The Full Pipeline writes `rulebook_v2` into its audit evidence and the verdict ladder
+demotes a candidate whose gate failed. The discovery engine runs G3 as a mandatory promotion step (`rulebook_g3`) with N = the lifetime effective trial count.
+The Rulebook's payout terms (qualifying-day size, cumulative minimum, buffer, split) are assumptions in `PayoutTerms` until the firm's own page is
+entered on the rules sheet (G0): treat G5's dollar figures as a model, not a quote.
+
+### Net profit mode
+
+Every engine form has a **Test mode** switch. *Net profit* never applies prop rules or Rulebook gates; it tests a strategy as a live account would:
+net profit after costs, annualised Sharpe and Sortino of daily returns, Probabilistic Sharpe, Calmar, day-block Monte Carlo (P(profit), drawdown percentiles, P(losing half)),
+cost stress at 1.5x / 2x and month stability (`app/validation/net_profit_tester.py`).
+
+## Demo and Live accounts
+
+New users start in **Demo**. Account settings has a Demo / Live toggle; the header shows a live P&L tracker next to the bell and profile picture (badge, running P&L, colour).
+Demo is a **T58 Prop Firm simulation at 25k / 50k / 100k** (`app/demo_account/`): the same rule shape the Rulebook tests against (trailing end-of-day loss floor that locks,
+daily soft limit, profit target, best-day cap). Run create -> test -> optimize -> validate, then open **T58 Demo account** and press *Get my alert*: it creates the
+TradingView webhook URL and the Pine alert message. Every alert from your Pine strategy goes through the same webhook relay a real account uses, and each closed trade
+is booked as a visible win or loss; the account passes or breaches like a real evaluation. The deploy-live page warns you to switch to **Live** before connecting a real
+prop-firm account, and saving broker credentials or starting a real session is refused in Demo mode.
 
 ## Monte Carlo
 
