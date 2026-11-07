@@ -90,7 +90,10 @@ def test_instrument_tied_families_are_marked_for_stricter_validation():
 def test_use_all_families_is_the_default_and_includes_every_runnable_family(monkeypatch):
     monkeypatch.delenv("T58_USE_ALL_FAMILIES", raising=False)
     active = set(ss.active_family_names())
-    assert set(ss.RETIRED_FAMILIES) <= active
+    # Every retired family that CAN run is active again. A retired v13 family that needs data nobody supplies (metals_dispersion:
+    # needs_data) is still blocked below, like every other not-ready v13 family.
+    runnable_retired = {n for n in ss.RETIRED_FAMILIES if n not in f13.V13_META or f13.V13_META[n].status == "ready"}
+    assert runnable_retired and runnable_retired <= active
     ready = {n for n, m in f13.V13_META.items() if m.status == "ready"}
     assert ready <= active
     assert not (set(f13.V13_META) - ready) & active   # families that need data nobody supplied cannot run
@@ -213,15 +216,30 @@ def test_a_family_runs_only_if_it_is_preregistered(tmp_path):
     assert hyp.is_preregistered("trend_breakout", store)               # a pre-v13 family is not subject to the rule
 
 
-def test_engine_gates_out_unregistered_families(tmp_path):
+def test_engine_gates_out_unregistered_families(tmp_path, monkeypatch):
     from app.discovery_engine.engine import resolve_families
     from app.discovery_engine.presets import get_preset
+    monkeypatch.setenv("T58_USE_ALL_FAMILIES", "0")   # legacy narrowed mode: the kill-condition ledger gates families
     store = hyp.HypothesisStore(tmp_path / "h.json")
     ok, gated = resolve_families(["nr_breakout", "trend_breakout", "no_such_family"], get_preset("search_lab"), store=store)
     assert ok == ["trend_breakout"] and "nr_breakout" in gated and "pre-registered" in gated["nr_breakout"] and gated["no_such_family"] == "unknown family"
     hyp.preregister_v13_families(store)
     ok, gated = resolve_families(["nr_breakout"], get_preset("search_lab"), store=store)
     assert ok == ["nr_breakout"] and not gated
+
+
+def test_use_all_families_mode_registers_kill_conditions_instead_of_gating(tmp_path, monkeypatch):
+    """Default ("use everything") mode: the ledger is bookkeeping, so resolve_families writes the kill conditions for the person
+    and the family runs; an unknown family is still reported."""
+    from app.discovery_engine.engine import resolve_families
+    from app.discovery_engine.presets import get_preset
+    monkeypatch.delenv("T58_USE_ALL_FAMILIES", raising=False)
+    store = hyp.HypothesisStore(tmp_path / "h.json")
+    assert not hyp.is_preregistered("nr_breakout", store)
+    ok, gated = resolve_families(["nr_breakout", "trend_breakout", "no_such_family"], get_preset("search_lab"), store=store)
+    assert ok == ["nr_breakout", "trend_breakout"]
+    assert gated == {"no_such_family": "unknown family"}
+    assert hyp.is_preregistered("nr_breakout", store)
 
 
 # ------------------------------------------------------------------------------------- the family-support primitives

@@ -135,6 +135,9 @@ def test_full_pipeline_reuses_baseline_backtest_when_final_matches(tmp_path, mon
         n_folds=3, ga_population=4, ga_generations=1, ga_search_mc_sims=20,
         final_mc_sims=200, holdout_frac=0.2,
         skip_optimization=True, reserve_true_holdout=False,
+        # The 2026-11-04 rule-based sizing step legitimately re-runs the baseline once at the new size. This test is about Step 3
+        # reusing the baseline, so keep the sizing step out of the count.
+        size_to_drawdown_budget=False,
     )
     result = run_full_pipeline(
         _trending_df(n=2400), ManualStrategy(_sma_config()), RiskConfig(),

@@ -194,7 +194,7 @@ def test_evolution_n_children_positive_at_defaults():
     children. Uses the REAL defaults and the REAL family registry, so a
     future default/budget regression fails here, not silently in prod.
     """
-    from app.evolution.engine import EvolutionConfig
+    from app.evolution.engine import EvolutionConfig, elite_children_budget
     from app.search.strategy_space import active_family_names
     cfg = EvolutionConfig()
     n_fam = len(active_family_names()) + 1  # +1: the grammar pseudo-family
@@ -202,7 +202,8 @@ def test_evolution_n_children_positive_at_defaults():
     base_per_family = max(cfg.min_immigrants_per_family, n_immigrants // n_fam)
     immigrant_floor = base_per_family * n_fam
     structural_budget = max(2, int(cfg.population_size * 0.15)) if cfg.use_structural_operators else 0
-    n_children = max(0, cfg.population_size - (immigrant_floor + structural_budget))
+    # with every family active the floor alone can fill the population; elite_children_budget reserves min_elite_children_frac for them
+    n_children = elite_children_budget(cfg.population_size, immigrant_floor + structural_budget, cfg.min_elite_children_frac)
     assert n_children > 0, (
         f"elite compounding starved at defaults: population={cfg.population_size}, "
         f"immigrant_floor={immigrant_floor}, structural={structural_budget}, "
@@ -213,3 +214,11 @@ def test_evolution_n_children_positive_at_defaults():
 def test_evolution_template_population_default_raised():
     html = (REPO_ROOT / "app" / "web" / "templates" / "evolution.html").read_text()
     assert 'name="population_size" value="200"' in html
+
+
+def test_elite_children_budget_reserves_a_share_when_the_floor_fills_the_population():
+    from app.evolution.engine import elite_children_budget
+    assert elite_children_budget(200, 223, 0.25) == 50            # floor + structural already past the population: reserve applies
+    assert elite_children_budget(200, 60, 0.25) == 140            # plenty of room left: unchanged leftovers
+    assert elite_children_budget(200, 223, 0.0) == 0              # 0 restores the old leftovers-only budget
+    assert elite_children_budget(30, 0, 0.25) == 30
