@@ -367,6 +367,19 @@ def _evo_full_eval_task(
     )
 
 
+def elite_children_budget(population_size: int, already_placed: int, min_frac: float) -> int:
+    """How many children the elites breed in one generation.
+
+    Normally that is whatever is left of ``population_size`` after the immigrant floor and the structural budget have taken
+    their slots. With every family in play (2026-11-07 "use everything") the per-family immigrant floor alone can reach or pass
+    ``population_size``, which used to leave elite compounding with nothing. The elites therefore always get at least
+    ``min_frac`` of ``population_size`` on top of the floor (the generation then runs a little over ``population_size``, exactly
+    as it already does when the floor exceeds it). ``min_frac <= 0`` restores the old "leftovers only" behaviour."""
+    left = int(population_size) - int(already_placed)
+    reserve = int(int(population_size) * max(0.0, float(min_frac)))
+    return max(0, left, reserve)
+
+
 @dataclass
 class EvolutionConfig:
     # v7 (2026-10-05, worker B, fix #10): 60 -> 200. At 60, the immigrant
@@ -547,6 +560,10 @@ class EvolutionConfig:
     # and elite compounding actually happens. Guarded by
     # tests/search/test_search_v7.py::test_evolution_n_children_positive_at_defaults.
     min_immigrants_per_family: int = 1   # every family gets at least this many fresh candidates, every generation
+    # 2026-11-07: with all ~190 families active the immigrant floor (1 each) plus the structural budget fills the whole
+    # population, so elite compounding starved again (n_children = 0). The elites now always get at least this share of
+    # population_size as children on top of the floor. 0 restores the old "whatever is left" budget.
+    min_elite_children_frac: float = 0.25
     max_elite_frac_per_family: float = 0.5   # no single family may hold more than this share of the elite/breeding pool
 
     # Adaptive family budget -- the graduated, intra-run counterpart to
@@ -2226,7 +2243,7 @@ class EvolutionRunner(DiscoveryMixin):
         if elites:
             rng = random.Random(seed)
             np_rng = np.random.default_rng(seed)
-            n_children = max(0, self.cfg.population_size - len(out))
+            n_children = elite_children_budget(self.cfg.population_size, len(out), self.cfg.min_elite_children_frac)
             per_elite = max(1, n_children // len(elites))
             for spec, meta in elites:
                 config = spec.get("config")
