@@ -29,7 +29,16 @@ READ_TIMEOUT = 8
 FEEDS: tuple[dict, ...] = (
     {"id": "fed_press", "publisher": "Federal Reserve", "tier": 1, "url": "https://www.federalreserve.gov/feeds/press_all.xml"},
     {"id": "ecb_press", "publisher": "European Central Bank", "tier": 1, "url": "https://www.ecb.europa.eu/rss/press.html"},
-    {"id": "sec_press", "publisher": "SEC", "tier": 1, "url": "https://www.sec.gov/news/pressreleases.rss"},
+    {"id": "sec_press", "publisher": "SEC", "tier": 1, "url": "https://www.sec.gov/news/pressreleases.rss", "sec": True},
+    # SEC EDGAR live filings (Atom). 8-K = material corporate events (earnings, M&A, guidance, management changes, bankruptcies...).
+    # These need the user-configured SEC User-Agent (app.investing.sec_edgar.set_user_agent / T58_SEC_USER_AGENT); without one they report
+    # "SEC User-Agent not set" in source health instead of sending a made-up identity.
+    {"id": "edgar_8k", "publisher": "SEC EDGAR 8-K", "tier": 1, "sec": True,
+     "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&company=&dateb=&owner=include&start=0&count=40&output=atom"},
+    {"id": "edgar_10q", "publisher": "SEC EDGAR 10-Q", "tier": 2, "sec": True,
+     "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=10-Q&company=&dateb=&owner=include&start=0&count=40&output=atom"},
+    {"id": "edgar_10k", "publisher": "SEC EDGAR 10-K", "tier": 2, "sec": True,
+     "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=10-K&company=&dateb=&owner=include&start=0&count=40&output=atom"},
     {"id": "eia_today", "publisher": "EIA", "tier": 1, "url": "https://www.eia.gov/rss/todayinenergy.xml"},
     {"id": "gn_reuters", "publisher": "Reuters", "tier": 1, "gnews": "site:reuters.com markets OR economy OR oil when:1d"},
     {"id": "gn_reuters_world", "publisher": "Reuters", "tier": 1, "gnews": "site:reuters.com world conflict OR sanctions OR tariffs when:1d"},
@@ -146,6 +155,12 @@ _etag_cache: dict[str, dict] = {}
 def fetch_feed(feed: dict) -> tuple[list[dict], str | None]:
     url = google_news_url(feed["gnews"]) if feed.get("gnews") else feed["url"]
     hdr = {}
+    if feed.get("sec"):
+        from app.investing.sec_edgar import user_agent as _sec_ua
+        ua = _sec_ua()
+        if not ua:
+            return [], "SEC User-Agent not set (Investing > SEC setup)"
+        hdr["User-Agent"] = ua
     cached = _etag_cache.get(url)
     if cached:
         if cached.get("etag"):
