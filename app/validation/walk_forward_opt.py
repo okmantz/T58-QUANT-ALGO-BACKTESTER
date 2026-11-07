@@ -75,7 +75,6 @@ from app.optimize.refinement import (
 from app.orchestration.resource_guard import safe_worker_count
 from app.prop.simulator import PropRules, simulate_account, summarize_single_run
 from app.strategy.base import Strategy
-from concurrent.futures import ThreadPoolExecutor
 
 ProgressCallback = Callable[[str], None]
 
@@ -217,6 +216,27 @@ def build_folds(
     return folds
 
 
+def score_genome_on_window(
+    train_df: pd.DataFrame, candidate_strategy, risk: RiskConfig, prop_rules: PropRules,
+    mc_config: MonteCarloConfig, fitness_metric: str, mc_sims: int,
+) -> float:
+    """One genome's fitness on one fold's train window: backtest + prop simulation + Monte Carlo + fitness.
+
+    Module level (not a closure) so the SAME math runs in this process and in the sweep worker processes
+    (app.validation.process_sweep.task_wfo_fitness)."""
+    bt = run_backtest(train_df, candidate_strategy, risk)
+    if not bt.trades:
+        return float("-inf")
+    pnls = [t.pnl for t in bt.trades]
+    dates = [t.entry_time for t in bt.trades]
+    single_run = simulate_account(pnls, dates, prop_rules)
+    from app.monte_carlo.engine import run_monte_carlo
+    mc = run_monte_carlo(bt.trades, prop_rules, replace(mc_config, n_simulations=mc_sims))
+    prop_summary = summarize_single_run(single_run)
+    fitness = compute_fitness(bt.statistics.to_dict(), prop_summary, mc, fitness_metric, trades=bt.trades, prop_rules=prop_rules)
+    return fitness if math.isfinite(fitness) else float("-inf")
+
+
 # ---------------------------------------------------------------------------
 # Per-fold optimization (a small, fresh GA run per fold's train window)
 # ---------------------------------------------------------------------------
@@ -256,106 +276,106 @@ def _optimize_on_window(
         return _memo.get_or_compute(genome_key(genes, genome), lambda: _evaluate_uncached(genome))
 
     def _evaluate_uncached(genome: list) -> float:
-        candidate_strategy = build(genome)
-        bt = run_backtest(train_df, candidate_strategy, risk)
-        if not bt.trades:
-            return float("-inf")
-        pnls = [t.pnl for t in bt.trades]
-        dates = [t.entry_time for t in bt.trades]
-        single_run = simulate_account(pnls, dates, prop_rules)
-        from app.monte_carlo.engine import run_monte_carlo
-        mc = run_monte_carlo(bt.trades, prop_rules, replace(mc_config, n_simulations=refine_cfg.search_monte_carlo_sims))
-        prop_summary = summarize_single_run(single_run)
-        fitness = compute_fitness(bt.statistics.to_dict(), prop_summary, mc, refine_cfg.fitness_metric, trades=bt.trades, prop_rules=prop_rules)
-        return fitness if math.isfinite(fitness) else float("-inf")
-
-    # PERFORMANCE FIX (WFO slowness): every evaluate() call below is a full
-    # backtest + prop simulation + Monte Carlo re-run, and this GA used to
-    # call them one at a time in a plain Python loop -- for n_folds folds
-    # each running population_size + generations*population_size of these
-    # sequentially, that's easily 100-200+ fully independent, CPU-heavy
-    # calls done back to back with zero overlap. Each evaluate() call only
-    # reads train_df/risk/prop_rules/mc_config/refine_cfg (never mutates
-    # them) and builds its own fresh candidate_strategy from genome, so a
-    # whole batch of them is embarrassingly parallel -- the same pattern
-    # already used for Speed Run's Phase 2 validation and Search Lab's
-    # parallel_search. run_backtest/pandas/numpy release the GIL for their
-    # actual numeric work, so a ThreadPoolExecutor (no per-worker data
-    # copy, unlike a process pool) gives a real wall-clock speedup here.
-    _max_workers = safe_worker_count(train_df, requested=None)
-
-    def evaluate_many(genomes: list[list]) -> list[float]:
-        if len(genomes) <= 1 or _max_workers <= 1:
-            return [evaluate(g) for g in genomes]
-        with ThreadPoolExecutor(max_workers=min(_max_workers, len(genomes))) as pool:
-            return list(pool.map(evaluate, genomes))
-
-    def report(msg: str) -> None:
-        if progress_cb:
-            progress_cb(msg)
-
-    baseline_genome = [g.base_value for g in genes]
-    candidate_genomes = [baseline_genome]
-    while len(candidate_genomes) < refine_cfg.population_size:
-        candidate_genomes.append([_random_gene_value(gene, rng) for gene in genes])
-    report(
-        f"    evaluating initial population ({len(candidate_genomes)} candidate(s))..."
-    )
-    fitnesses = evaluate_many(candidate_genomes)
-    population = list(zip(candidate_genomes, fitnesses))
-
-    best_genome, best_fitness = max(population, key=lambda p: p[1])
-    report(f"    generation 0/{refine_cfg.generations}: best fitness so far = {best_fitness:.4f}")
-
-    # PROGRESS FIX (WFO "hangs forever"): this loop is where the vast
-    # majority of a fold's wall-clock time actually goes -- each
-    # generation is population_size full backtests + Monte Carlo runs,
-    # and this used to run completely silently until the WHOLE fold
-    # finished. On a large dataset (e.g. millions of 1-minute bars) one
-    # fold can legitimately take many minutes; with no progress line in
-    # between, the job log just sat static on "Fold N/M: optimizing on X
-    # train bars..." the entire time, which is indistinguishable from a
-    # genuine hang from the person's side. Logging one line per
-    # generation (with the running best fitness) makes it visibly alive
-    # and gives a sense of how much longer it has left.
-    for _gen in range(refine_cfg.generations):
-        population.sort(key=lambda p: p[1], reverse=True)
-        elites = population[: refine_cfg.elite_count]
-        next_pop = list(elites)
-        n_immigrants = max(1, round(refine_cfg.population_size * refine_cfg.random_immigrants_frac))
-        n_bred = max(refine_cfg.population_size - len(elites) - n_immigrants, 0)
-
-        class _Cand:  # minimal shim so we can reuse refinement._tournament_select unmodified
-            __slots__ = ("genome", "fitness")
-
-            def __init__(self, genome, fitness):
-                self.genome = genome
-                self.fitness = fitness
-
-        cand_pop = [_Cand(g, f) for g, f in population]
-        bred_genomes = []
-        for _ in range(n_bred):
-            pa = _tournament_select(cand_pop, rng)
-            pb = _tournament_select(cand_pop, rng)
-            child = _crossover(pa.genome, pb.genome, rng)
-            child = _mutate(child, genes, refine_cfg.mutation_rate, refine_cfg.mutation_strength, rng)
-            bred_genomes.append(child)
-        while len(bred_genomes) + len(next_pop) < refine_cfg.population_size:
-            bred_genomes.append([_random_gene_value(gene, rng) for gene in genes])
-
-        bred_fitnesses = evaluate_many(bred_genomes)
-        next_pop.extend(zip(bred_genomes, bred_fitnesses))
-
-        population = next_pop
-        gen_best_genome, gen_best_fitness = max(population, key=lambda p: p[1])
-        if gen_best_fitness > best_fitness:
-            best_genome, best_fitness = gen_best_genome, gen_best_fitness
-        report(
-            f"    generation {_gen + 1}/{refine_cfg.generations}: "
-            f"this-gen best = {gen_best_fitness:.4f}, overall best = {best_fitness:.4f}"
+        return score_genome_on_window(
+            train_df, build(genome), risk, prop_rules, mc_config, refine_cfg.fitness_metric, refine_cfg.search_monte_carlo_sims,
         )
 
-    return best_genome, [g.base_value for g in genes], None
+    # 2026-11-07 (audit finding 2): this used to be a ThreadPoolExecutor on the belief that run_backtest releases the GIL for
+    # a meaningful share of its time. It does not -- the bar loop is pure Python -- so threads measured 0.92x of serial on 2
+    # cores while processes measured 1.91x. Independent genomes now go to worker processes (app.validation.process_sweep:
+    # the price frame is spilled once and loaded by each worker, so the Windows spawn build behaves like fork), with the
+    # same math run serially here when processes are unavailable or the window is too small to repay the spawn cost.
+    from app.validation.process_sweep import GenomeEvaluator
+
+    _unique_hint = max(int(refine_cfg.population_size) * (int(refine_cfg.generations) + 1), 1)
+    _evaluator = GenomeEvaluator(
+        df=train_df, strategy=strategy, genes=genes, risk=risk, prop_rules=prop_rules, mc_config=mc_config,
+        local_fn=_evaluate_uncached, task="wfo_fitness", n_items=_unique_hint, tmp_dir=tmp_dir,
+        extra={"fitness_metric": refine_cfg.fitness_metric, "mc_sims": refine_cfg.search_monte_carlo_sims},
+    )
+
+    def evaluate_many(genomes: list[list]) -> list[float]:
+        if len(genomes) <= 1 or not _evaluator.parallel:
+            return [evaluate(g) for g in genomes]
+        keys = [genome_key(genes, g) for g in genomes]
+        todo: dict = {}
+        for k, g in zip(keys, genomes):
+            if k not in todo and not _memo.has(k):
+                todo[k] = g
+        if todo:
+            for k, v in zip(todo, _evaluator.map(list(todo.values()))):
+                _memo.get_or_compute(k, lambda _v=v: _v)
+        return [evaluate(g) for g in genomes]    # every key is memoized now, so this only reads
+
+    try:
+        def report(msg: str) -> None:
+            if progress_cb:
+                progress_cb(msg)
+
+        baseline_genome = [g.base_value for g in genes]
+        candidate_genomes = [baseline_genome]
+        while len(candidate_genomes) < refine_cfg.population_size:
+            candidate_genomes.append([_random_gene_value(gene, rng) for gene in genes])
+        report(
+            f"    evaluating initial population ({len(candidate_genomes)} candidate(s))..."
+        )
+        fitnesses = evaluate_many(candidate_genomes)
+        population = list(zip(candidate_genomes, fitnesses))
+
+        best_genome, best_fitness = max(population, key=lambda p: p[1])
+        report(f"    generation 0/{refine_cfg.generations}: best fitness so far = {best_fitness:.4f}")
+
+        # PROGRESS FIX (WFO "hangs forever"): this loop is where the vast
+        # majority of a fold's wall-clock time actually goes -- each
+        # generation is population_size full backtests + Monte Carlo runs,
+        # and this used to run completely silently until the WHOLE fold
+        # finished. On a large dataset (e.g. millions of 1-minute bars) one
+        # fold can legitimately take many minutes; with no progress line in
+        # between, the job log just sat static on "Fold N/M: optimizing on X
+        # train bars..." the entire time, which is indistinguishable from a
+        # genuine hang from the person's side. Logging one line per
+        # generation (with the running best fitness) makes it visibly alive
+        # and gives a sense of how much longer it has left.
+        for _gen in range(refine_cfg.generations):
+            population.sort(key=lambda p: p[1], reverse=True)
+            elites = population[: refine_cfg.elite_count]
+            next_pop = list(elites)
+            n_immigrants = max(1, round(refine_cfg.population_size * refine_cfg.random_immigrants_frac))
+            n_bred = max(refine_cfg.population_size - len(elites) - n_immigrants, 0)
+
+            class _Cand:  # minimal shim so we can reuse refinement._tournament_select unmodified
+                __slots__ = ("genome", "fitness")
+
+                def __init__(self, genome, fitness):
+                    self.genome = genome
+                    self.fitness = fitness
+
+            cand_pop = [_Cand(g, f) for g, f in population]
+            bred_genomes = []
+            for _ in range(n_bred):
+                pa = _tournament_select(cand_pop, rng)
+                pb = _tournament_select(cand_pop, rng)
+                child = _crossover(pa.genome, pb.genome, rng)
+                child = _mutate(child, genes, refine_cfg.mutation_rate, refine_cfg.mutation_strength, rng)
+                bred_genomes.append(child)
+            while len(bred_genomes) + len(next_pop) < refine_cfg.population_size:
+                bred_genomes.append([_random_gene_value(gene, rng) for gene in genes])
+
+            bred_fitnesses = evaluate_many(bred_genomes)
+            next_pop.extend(zip(bred_genomes, bred_fitnesses))
+
+            population = next_pop
+            gen_best_genome, gen_best_fitness = max(population, key=lambda p: p[1])
+            if gen_best_fitness > best_fitness:
+                best_genome, best_fitness = gen_best_genome, gen_best_fitness
+            report(
+                f"    generation {_gen + 1}/{refine_cfg.generations}: "
+                f"this-gen best = {gen_best_fitness:.4f}, overall best = {best_fitness:.4f}"
+            )
+
+        return best_genome, [g.base_value for g in genes], None
+    finally:
+        _evaluator.close()
 
 
 # ---------------------------------------------------------------------------

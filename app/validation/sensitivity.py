@@ -26,8 +26,6 @@ same gene discovery Iterative Refinement already uses.
 from __future__ import annotations
 
 import math
-import os
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -42,46 +40,14 @@ from app.optimize.parameter_space import RefinementError
 from app.optimize.refinement import _build_adapter, compute_fitness
 from app.prop.simulator import PropRules, simulate_account, summarize_single_run
 from app.strategy.base import Strategy
+from app.validation.process_sweep import GenomeEvaluator
 
 
-def _sweep_worker_count(n_items: int) -> int:
-    """Bounded thread count for parallelizing independent sensitivity/
-    heatmap evaluations. Threads, not processes: each evaluation builds
-    its OWN fresh Strategy instance (see app.optimize.refinement.
-    _build_adapter / materialize_python_strategy's uuid-named temp file)
-    and never touches shared mutable state, and run_backtest/
-    run_monte_carlo do enough real numpy/pandas work to release the GIL
-    for a meaningful fraction of each call -- the same reasoning that
-    made ThreadPoolExecutor a real win for Walk-Forward Opt's previously
-    unparallelized loop. No memory-duplication guard is needed here (see
-    app.orchestration.resource_guard's docstring on why ProcessPoolExecutor
-    needs one): a thread pool shares the parent process's one copy of
-    `df`, it doesn't multiply it per worker. Capped at 8 regardless of
-    core count -- past that, thread-scheduling/GIL overhead on this kind
-    of workload stops paying for itself.
-    """
-    return max(1, min(n_items, os.cpu_count() or 4, 8))
-
-
-class _NullExecutor:
-    """Trivial stand-in used when there's only one item to evaluate (a
-    single value/cell) -- skips ThreadPoolExecutor's setup/teardown cost
-    entirely rather than spinning up a pool for one item."""
-
-    def map(self, fn, iterable):
-        return [fn(x) for x in iterable]
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-
-def _executor_for(n_items: int):
-    if n_items <= 1:
-        return _NullExecutor()
-    return ThreadPoolExecutor(max_workers=_sweep_worker_count(n_items))
+# 2026-11-07 (audit finding 2): the sweeps below used to run their independent evaluations on a ThreadPoolExecutor, justified by
+# a claim that run_backtest releases the GIL for a meaningful share of its time. It does not (the bar loop is pure Python):
+# threads measured 0.92x of serial, processes 1.91x on 2 cores. They now go through app.validation.process_sweep.GenomeEvaluator,
+# which uses worker processes (frame spilled once, loaded per worker -- spawn-safe on the Windows build) when the job is big
+# enough to repay the spawn cost and runs the same math serially otherwise.
 
 
 def _metric_for(
@@ -220,18 +186,46 @@ def compute_1d_sensitivity(
     if base_metric is None:
         base_metric = _metric_for(df, build([g.base_value for g in genes]), risk, prop_rules, mc_config, metric)
 
-    results: list[Sensitivity1DResult] = []
+    # Every (parameter, value) evaluation is independent: flatten them ALL into one batch so one worker stage serves the whole
+    # sweep, then regroup per parameter. Results are positional, so the output is identical to the old per-parameter loop.
+    param_values: list[list[float]] = []
+    flat_genomes: list[list] = []
+    owner: list[int] = []
     for pi, (gi, gene) in enumerate(list(enumerate(genes))[:max_params]):
         values = _sweep_values(gene.base_value, gene.lo, gene.hi, gene.is_int, pct_range, n_steps)
-
-        def _eval_one(v, _gi=gi):
+        param_values.append(values)
+        for v in values:
             genome = [g.base_value for g in genes]
-            genome[_gi] = v
-            candidate = build(genome)
-            return _metric_for(df, candidate, risk, prop_rules, mc_config, metric)
+            genome[gi] = v
+            flat_genomes.append(genome)
+            owner.append(pi)
 
-        with _executor_for(len(values)) as ex:
-            metric_values = list(ex.map(_eval_one, values))
+    remaining = [len(v) for v in param_values]
+    reported = [False] * len(param_values)
+
+    def _on_result(idx: int, _val) -> None:
+        pi_ = owner[idx]
+        remaining[pi_] -= 1
+        if remaining[pi_] == 0 and not reported[pi_] and progress_cb is not None:
+            reported[pi_] = True
+            try:
+                progress_cb(f"Sensitivity: swept {genes[pi_].label} ({sum(reported)}/{len(active_genes)}).")
+            except Exception:  # noqa: BLE001 -- a broken progress callback must never break the sweep
+                pass
+
+    with GenomeEvaluator(
+        df=df, strategy=strategy, genes=genes, risk=risk, prop_rules=prop_rules, mc_config=mc_config,
+        local_fn=lambda g: _metric_for(df, build(g), risk, prop_rules, mc_config, metric),
+        task="metric", task_args=(metric,), n_items=len(flat_genomes), tmp_dir=tmp_dir,
+    ) as _evaluator:
+        flat_values = _evaluator.map(flat_genomes, on_result=_on_result)
+
+    results: list[Sensitivity1DResult] = []
+    cursor = 0
+    for pi, (gi, gene) in enumerate(list(enumerate(genes))[:max_params]):
+        values = param_values[pi]
+        metric_values = list(flat_values[cursor:cursor + len(values)])
+        cursor += len(values)
 
         finite_vals = [m for m in metric_values if math.isfinite(m)]
         max_drop_pct = 0.0
@@ -253,11 +247,6 @@ def compute_1d_sensitivity(
             cliff_detected=max_drop_pct >= cliff_threshold_pct,
             cliff_threshold=cliff_threshold_pct,
         ))
-        if progress_cb is not None:
-            try:
-                progress_cb(f"Sensitivity: swept {gene.label} ({pi + 1}/{len(active_genes)}).")
-            except Exception:  # noqa: BLE001 -- a broken progress callback must never break the sweep
-                pass
     return results
 
 
@@ -318,30 +307,37 @@ def compute_2d_heatmap(
     if base_metric is None:
         base_metric = _metric_for(df, build(base_genome), risk, prop_rules, mc_config, metric)
 
-    # PERFORMANCE (2026-09): this grid is n_steps x n_steps independent
-    # full backtest+Monte-Carlo evaluations -- 49 of them at the default
-    # n_steps=7 -- that used to run one at a time in a plain nested loop.
-    # Flattening to (av, bv) pairs and evaluating a whole ROW concurrently
-    # (bounded thread pool -- see _executor_for's docstring for why
-    # threads, not processes, are safe here) is what actually cuts this
-    # from "however long 49 sequential runs take" down to roughly
-    # (49 / worker_count) runs' worth of wall-clock time.
-    def _eval_cell(bv, _av=None):
-        genome = list(base_genome)
-        genome[ia] = _av
-        genome[ib] = bv
-        return _metric_for(df, build(genome), risk, prop_rules, mc_config, metric)
+    # The grid is n_steps x n_steps independent full backtest(+Monte-Carlo) evaluations (49 at the default n_steps=7). They all go to
+    # one worker stage as a single flat batch (2026-11-07: processes, not threads -- see the note at the top of this module); results are
+    # positional, so grid[i][j] is still the metric at (a_values[i], b_values[j]). Progress is reported as each ROW completes.
+    flat_genomes: list[list] = []
+    for av in a_values:
+        for bv in b_values:
+            genome = list(base_genome)
+            genome[ia] = av
+            genome[ib] = bv
+            flat_genomes.append(genome)
+    row_len = len(b_values)
+    row_left = [row_len] * len(a_values)
+    rows_reported = [0]
 
-    grid: list[list[float]] = []
-    for ri, av in enumerate(a_values):
-        with _executor_for(len(b_values)) as ex:
-            row = list(ex.map(lambda bv, _av=av: _eval_cell(bv, _av), b_values))
-        grid.append(row)
-        if progress_cb is not None:
+    def _on_cell(idx: int, _val) -> None:
+        ri_ = idx // row_len
+        row_left[ri_] -= 1
+        if row_left[ri_] == 0 and progress_cb is not None:
+            rows_reported[0] += 1
             try:
-                progress_cb(f"Heatmap {gene_label_a} x {gene_label_b}: row {ri + 1}/{len(a_values)}.")
+                progress_cb(f"Heatmap {gene_label_a} x {gene_label_b}: row {rows_reported[0]}/{len(a_values)}.")
             except Exception:  # noqa: BLE001 -- a broken progress callback must never break the sweep
                 pass
+
+    with GenomeEvaluator(
+        df=df, strategy=strategy, genes=genes, risk=risk, prop_rules=prop_rules, mc_config=mc_config,
+        local_fn=lambda g: _metric_for(df, build(g), risk, prop_rules, mc_config, metric),
+        task="metric", task_args=(metric,), n_items=len(flat_genomes), tmp_dir=tmp_dir,
+    ) as _evaluator:
+        flat_values = _evaluator.map(flat_genomes, on_result=_on_cell)
+    grid: list[list[float]] = [list(flat_values[r * row_len:(r + 1) * row_len]) for r in range(len(a_values))]
 
     return Sensitivity2DResult(
         gene_a_label=gene_label_a,

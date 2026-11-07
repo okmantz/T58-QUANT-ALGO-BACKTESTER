@@ -221,8 +221,9 @@ def compute_parameter_robustness(
     time while looking, from the UI, indistinguishable from a hang. Now:
     the baseline is computed exactly ONCE (compute_base_metric) and
     reused everywhere; the independent evaluations within each sweep/
-    heatmap run on a bounded thread pool (see
-    app.validation.sensitivity._executor_for) instead of one at a time;
+    heatmap run on worker processes (see app.validation.process_sweep;
+    threads gave no speedup because the bar loop holds the GIL) instead of
+    one at a time;
     and progress_cb (wired through to both compute_1d_sensitivity and
     compute_2d_heatmap) reports real status as each parameter/row
     finishes, so a job page has something to show throughout instead of
