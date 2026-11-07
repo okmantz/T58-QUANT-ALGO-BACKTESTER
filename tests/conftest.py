@@ -140,6 +140,10 @@ _SETTINGS_MODULES = (
     "app.data.alpaca_credentials",
     "app.forward_test.mt5_settings",
     "app.accounts.api_keys",
+    "app.accounts.settings",
+    "app.demo_account.account",
+    "app.webhook_relay.config",
+    "app.webhook_relay.paper",
 )
 
 
