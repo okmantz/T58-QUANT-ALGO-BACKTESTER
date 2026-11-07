@@ -4,20 +4,20 @@ T58 Gap-Aligned Opening Drive, fixed 3:1 target (GAD-F) -- ES / NQ (MES / MNQ), 
 MECHANISM (Rulebook Stage 0).  Who pays you: participants who must trade the overnight imbalance at the open.  When the overnight gap and the first
 15-180 minutes of cash trading point the SAME way, close near the extreme of the session range and on the correct side of VWAP, the imbalance has not been
 absorbed; price keeps going far enough, often enough, to pay a 3:1 target.  Sign: continuation (long after gap-up + up-drive, short after gap-down + down-drive).
-Segment: entry 15-180 minutes after 09:30 ET, exit at stop, target or 15:55 ET.  Payoff b = 3 (fixed in advance).  Cost c in R: ES 0.5 pt, NQ 2 pt round turn (0.03R measured).
+Segment: entry 15-180 minutes after 09:30 ET, exit at stop, target or 15:55 ET.  Payoff b = 3 (fixed in advance).  Cost c in R: engine round-turn from the instrument registry -- ES 1.084 pt, MES 1.284, NQ 1.210, MNQ 1.710 (spread + slippage + commission); the report prints the exact figure for the run.
 
 WHAT THIS FILE IS.  It is "NQ1! Context Aligned Drive 1m v2" with three overlays REMOVED (each one was a degree of freedom, not a mechanism):
   * the daily 50/200 EMA context filter (it deleted ~55% of trades and almost every short; the drive edge is present without it),
   * the trailing stop (replaced by a fixed target, so every trade has one pre-declared payoff and the Rulebook payoff grid applies),
   * the static news blackout (use the prop-rule news blackout in the lab instead).
 Nothing here was tuned on the 2025-09-01+ sealed window.  Parameters are CAD v2's own, unchanged: min move 0.15 ATR, close in the outer 30% of the since-open range,
-beyond VWAP, move <= 0.6 ATR (do not chase), stop = 0.7 x |move| clipped to [0.05, 0.27] x ATR14, decisions at minutes 15/30/45/90/120/180, one trade per day.
+beyond VWAP, move <= 0.6 ATR (do not chase), stop = 0.7 x |move| clipped to [0.05, MAX_STOP_ATR = 0.15] x ATR14, decisions at minutes 15/30/45/90/120/180, one trade per day.
 
 STOPS AND TARGETS.  stop_loss_distance and take_profit_distance are written on EVERY row of the signal segment (the engine fills on the bar after the decision bar).
 The strategy walks the bars itself, mirroring the engine (stop first if one bar touches both), so the signal ends on the exit bar and the engine cannot re-enter.
 MAX_TRADES_PER_DAY = 1 is a second guard.
 
-SIZING (lab setting, not code).  Trade MNQ / MES.  Risk about $110-150 per trade on Lucid 50k.  NQ stops reach 0.27 x ATR14 = ~60 points = $120 per MNQ contract, so a
+SIZING (lab setting, not code).  Trade MNQ / MES.  Risk about $110-150 per trade on Lucid 50k.  NQ stops reach MAX_STOP_ATR (0.15) x ATR14, which is about $120 per MNQ contract at the widest, so a
 $110 budget skips the widest NQ stops; MES has finer granularity.  Never trade full-size NQ on a 50k account with this stop.
 """
 import numpy as np
