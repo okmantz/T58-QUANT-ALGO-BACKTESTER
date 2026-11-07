@@ -16,12 +16,14 @@
 
   function newState(p) {
     var start = p.account;
-    return { day: 0, balance: start, peak: start, floor: start - p.account * p.maxDdPct / 100, dayPnl: 0, bestDay: 0, dayPnls: [], curve: [start], floors: [start - p.account * p.maxDdPct / 100], status: 'running', reason: '', passed: false, trades: 0, passDay: null };
+    return { day: 0, balance: start, peak: start, eodPeak: start, floor: start - p.account * p.maxDdPct / 100, dayPnl: 0, bestDay: 0, dayPnls: [], curve: [start], floors: [start - p.account * p.maxDdPct / 100], status: 'running', reason: '', passed: false, trades: 0, passDay: null };
   }
   function floorFor(p, st) {
     var base = p.account - p.account * p.maxDdPct / 100;
     if (p.ddType === 'static') return base;
-    return Math.min(p.account, st.peak - p.account * p.maxDdPct / 100) < base ? base : Math.min(p.account, st.peak - p.account * p.maxDdPct / 100);
+    var ref = p.ddType === 'eod' && st.eodPeak != null ? st.eodPeak : st.peak;       /* end-of-day trailing: the floor only moves at the close */
+    var f = Math.min(p.account, ref - p.account * p.maxDdPct / 100);                    /* trailing stops at the starting balance (lock) */
+    return f < base ? base : f;
   }
   function profitOf(st, p) { return st.balance - p.account; }
   function consistencyOk(p, st) {
@@ -42,8 +44,9 @@
       if (st.balance > st.peak) st.peak = st.balance;
       st.floor = floorFor(p, st);
       if (st.balance <= st.floor) { st.status = 'failed'; st.reason = 'Drawdown breached'; break; }
-      if (st.dayPnl <= -dailyLimit) { st.status = 'failed'; st.reason = 'Daily loss limit hit'; break; }
+      if (st.dayPnl <= -dailyLimit) { if (p.dailyAction === 'lock_day') { st.lockedDays = (st.lockedDays || 0) + 1; break; } st.status = 'failed'; st.reason = 'Daily loss limit hit'; break; }
     }
+    if (st.balance > st.eodPeak) st.eodPeak = st.balance;
     st.dayPnls.push(st.dayPnl); st.curve.push(st.balance); st.floors.push(st.floor);
     if (st.dayPnl > st.bestDay) st.bestDay = st.dayPnl;
     if (st.status === 'running' && !st.passed && profitOf(st, p) >= p.account * p.targetPct / 100 && st.day >= p.minDays && consistencyOk(p, st)) {
@@ -54,16 +57,18 @@
   }
   /* after passing: funded phase until the payout milestone, a breach, or fundedDays */
   function fundedPhase(p, st, rand) {
-    var fs = { balance: p.account, peak: p.account, floor: p.account - p.account * p.maxDdPct / 100, dayPnl: 0, day: 0 };
+    var fs = { balance: p.account, peak: p.account, eodPeak: p.account, floor: p.account - p.account * p.maxDdPct / 100, dayPnl: 0, day: 0 };
     var risk = p.account * p.riskPct / 100, dailyLimit = p.account * p.dailyLossPct / 100, goal = p.account * p.payoutPct / 100;
     for (var d = 0; d < p.fundedDays; d++) {
       fs.dayPnl = 0;
       for (var i = 0; i < p.tradesPerDay; i++) {
         var pnl = rand() < p.winRate ? risk * p.payoffR : -risk;
         fs.balance += pnl; fs.dayPnl += pnl; if (fs.balance > fs.peak) fs.peak = fs.balance;
-        fs.floor = floorFor(p, { peak: fs.peak });
-        if (fs.balance <= fs.floor || fs.dayPnl <= -dailyLimit) return false;
+        fs.floor = floorFor(p, { peak: fs.peak, eodPeak: fs.eodPeak });
+        if (fs.balance <= fs.floor) return false;
+        if (fs.dayPnl <= -dailyLimit) { if (p.dailyAction === 'lock_day') break; return false; }
       }
+      if (fs.balance > fs.eodPeak) fs.eodPeak = fs.balance;
       if (fs.balance - p.account >= goal && d + 1 >= (p.payoutMinDays || 1)) return true;
     }
     return false;
@@ -111,7 +116,7 @@
 
   API.mount = function (host) {
     var P = { account: 100000, targetPct: 8, dailyLossPct: 5, maxDdPct: 10, ddType: 'trailing', consistencyPct: 30, minDays: 5, winRate: 0.45, payoffR: 1.8,
-              tradesPerDay: 3, riskPct: 0.5, maxDays: 60, payoutPct: 4, fundedDays: 30, payoutMinDays: 5 };
+              tradesPerDay: 3, riskPct: 0.5, maxDays: 60, payoutPct: 4, fundedDays: 30, payoutMinDays: 5, dailyAction: 'fail', fee: null, splitPct: 80 };
     var presets = [], st = newState(P), timer = null, seed = 7, rand = rng(seed * 99 + 1);
     var css = document.createElement('style');
     css.textContent = '.ps{display:grid;grid-template-columns:minmax(260px,320px) 1fr;gap:14px}@media(max-width:900px){.ps{grid-template-columns:1fr}}' +
@@ -134,7 +139,9 @@
     left.appendChild(el('label', null, 'Prop-firm rules')); left.appendChild(firmSel);
     firmSel.addEventListener('change', function () {
       var p = presets.filter(function (x) { return x.key === firmSel.value; })[0]; if (!p) return;
-      P.account = p.account_size; P.targetPct = p.target_pct; P.dailyLossPct = p.daily_loss_pct; P.maxDdPct = p.max_dd_pct; P.ddType = p.drawdown_type === 'static' ? 'static' : 'trailing';
+      P.account = p.account_size; P.targetPct = p.target_pct; P.dailyLossPct = p.daily_loss_pct; P.maxDdPct = p.max_dd_pct; P.ddType = p.drawdown_type === 'static' ? 'static' : (p.dd_basis === 'eod' ? 'eod' : 'trailing'); P.dailyAction = p.daily_loss_action === 'lock_day' ? 'lock_day' : 'fail';
+      P.maxDays = p.max_eval_days ? Math.max(10, Math.round(p.max_eval_days * 5 / 7)) : 60; P.fee = p.fee || null; P.splitPct = p.fee && p.fee.split_pct ? p.fee.split_pct : 80;
+      API._firmNote = (p.algo_allowed ? '' : 'Heads up: this firm does not explicitly allow automated trading. ') + (p.fee && p.fee.price ? 'Challenge fee $' + Math.round(p.fee.price) + (p.fee.monthly ? ' per month' : '') + ', profit split ' + P.splitPct + '%.' : 'No fee data for this firm.');
       P.consistencyPct = p.consistency_pct; P.minDays = p.min_days || 1; if (p.payout_threshold_pct) P.payoutPct = p.payout_threshold_pct; buildInputs(); recompute(true);
     });
     var inputsBox = el('div'); left.appendChild(inputsBox);
@@ -142,8 +149,13 @@
       inputsBox.textContent = '';
       [['Account size ($)', 'account', 1000], ['Profit target (%)', 'targetPct', 0.5], ['Daily loss limit (%)', 'dailyLossPct', 0.5], ['Max drawdown (%)', 'maxDdPct', 0.5], ['Min trading days', 'minDays', 1], ['Consistency rule: best day ≤ (%)', 'consistencyPct', 5]]
         .forEach(function (r) { inputsBox.appendChild(num(r[0], r[1], r[2], 0, 10000000)); });
-      var dl = el('label', null, 'Drawdown type'); var ds = el('select'); [['trailing', 'Trailing (floor rises with peak)'], ['static', 'Static (fixed floor)']].forEach(function (o) { var op = el('option', null, o[1]); op.value = o[0]; ds.appendChild(op); }); ds.value = P.ddType;
+      var dl = el('label', null, 'Drawdown type'); var ds = el('select'); [['trailing', 'Trailing, intraday (floor rises with peak)'], ['eod', 'Trailing, end-of-day (floor moves at the close)'], ['static', 'Static (fixed floor)']].forEach(function (o) { var op = el('option', null, o[1]); op.value = o[0]; ds.appendChild(op); }); ds.value = P.ddType;
       ds.addEventListener('change', function () { P.ddType = ds.value; recompute(true); }); inputsBox.appendChild(dl); inputsBox.appendChild(ds);
+      var al = el('label', null, 'Breaching the daily loss limit'); var as = el('select');
+      [['fail', 'Fails the account'], ['lock_day', 'Locks the rest of the day only']].forEach(function (o) { var op = el('option', null, o[1]); op.value = o[0]; as.appendChild(op); }); as.value = P.dailyAction;
+      as.addEventListener('change', function () { P.dailyAction = as.value; recompute(true); }); inputsBox.appendChild(al); inputsBox.appendChild(as);
+      if (API._firmNote) { var fnote = el('div', 'muted', API._firmNote); fnote.style.marginTop = '6px'; inputsBox.appendChild(fnote); }
+      inputsBox.appendChild(num('Evaluation time limit (trading days)', 'maxDays', 5, 5, 400));
       inputsBox.appendChild(el('h4', null, 'Strategy edge')).style.margin = '14px 0 0';
       /* Load edge from ANY saved strategy (manual JSON, Python, PineScript, MQL5). Rows with recorded results apply
          instantly; everything else (e.g. the preloaded, never-backtested strategies) is measured on the fly on a
@@ -208,6 +220,7 @@
 
     var statusBox = el('div'), gauges = el('div'), odds = el('div', 'odds'), btns = el('div', 'btns'), info = el('div', 'muted'), chart = el('div', 'pschart'), sweep = el('div', 'pssweep');
     right.appendChild(statusBox); right.appendChild(btns); right.appendChild(chart); right.appendChild(gauges); right.appendChild(el('h4', null, 'Probabilities (500 simulated attempts at this risk)')).style.margin = '14px 0 0'; right.appendChild(odds); right.appendChild(sweep); right.appendChild(info);
+    var fcBox = el('div'); right.appendChild(fcBox);
     function mkBtn(t, cls, fn) { var b = el('button', cls, t); b.type = 'button'; b.addEventListener('click', fn); btns.appendChild(b); return b; }
     var playBtn = mkBtn('▶ Play a new attempt', 'p', function () { if (timer) { clearInterval(timer); timer = null; playBtn.textContent = '▶ Play a new attempt'; return; } if (st.status !== 'running') reset(); playBtn.textContent = '⏸ Pause'; timer = setInterval(function () { stepDay(P, st, rand); drawGauges(); if (st.status !== 'running') { clearInterval(timer); timer = null; playBtn.textContent = '▶ Play a new attempt'; } }, 450); });
     mkBtn('Step 1 day', '', function () { if (st.status !== 'running') reset(); stepDay(P, st, rand); drawGauges(); });
@@ -264,9 +277,59 @@
       odds.appendChild(oddCard('Fail', r.failPct.toFixed(0) + '%', 'var(--coral)'));
       odds.appendChild(oddCard('Payout milestone', r.payoutPct.toFixed(0) + '%', 'var(--amber)', 'first_payout_probability'));
       odds.appendChild(oddCard('Time out', r.timeoutPct.toFixed(0) + '%', 'var(--text-muted)'));
+      if (P.fee && P.fee.price) {
+        var vNet = P.account * P.targetPct / 100 * (P.splitPct || 80) / 100, ev = r.payoutPct / 100 * vNet - P.fee.price;
+        odds.appendChild(oddCard('Rough EV per attempt', money(ev), ev >= 0 ? 'var(--teal)' : 'var(--coral)', 'expected_value'));
+      }
       info.textContent = 'Fails split: ' + r.failDdPct.toFixed(0) + '% drawdown, ' + r.failDailyPct.toFixed(0) + '% daily loss. ' + (r.avgDays ? 'Passing attempts took ' + r.avgDays.toFixed(0) + ' trading days on average. ' : '') +
         'Expectancy ' + expectedR(P).toFixed(2) + 'R per trade (' + money(expectedR(P) * P.account * P.riskPct / 100) + ' at this risk). Payout milestone = +' + P.payoutPct + '% more profit within ' + P.fundedDays + ' funded days.';
     }
+    /* Payout forecast: the REAL trades of the picked saved strategy, run through the backtester's exact prop engine at every firm
+       (Monte Carlo + every real start date), ranked by conservative expected payout. The day-by-day model above is a what-if toy; this is the check. */
+    function drawForecast(state) {
+      fcBox.textContent = '';
+      fcBox.appendChild(el('h4', null, 'Will it actually get paid? Forecast at every firm')).style.margin = '18px 0 4px';
+      fcBox.appendChild(el('div', 'muted', 'Uses the saved strategy\u2019s real trades and each firm\u2019s real rules, fee and profit split. Ranks firms by conservative expected payout, not by any score.'));
+      var row = el('div', 'btns'), unseen = el('input'); unseen.type = 'checkbox'; unseen.id = 'pf-unseen';
+      var ul = el('label', null, ' I never tuned this strategy on the most recent 30% of the data'); ul.style.display = 'inline'; ul.setAttribute('for', 'pf-unseen');
+      var go = el('button', 'p', 'Forecast payout at every firm'); go.type = 'button'; row.appendChild(go); fcBox.appendChild(row);
+      var wrapU = el('div'); wrapU.appendChild(unseen); wrapU.appendChild(ul); fcBox.appendChild(wrapU);
+      var out = el('div'); fcBox.appendChild(out);
+      function show(d) {
+        out.textContent = '';
+        if (!d.ok) { out.appendChild(el('div', 'status failed', d.error || 'Could not build the forecast.')); return; }
+        out.appendChild(el('div', 'status ' + (d.summary.n_paying ? 'passed' : 'timeout'), d.summary.headline));
+        out.appendChild(el('div', 'muted', d.info.trades + ' trades on ' + d.info.dataset + ' (' + d.info.period + '). Grade: ' + d.summary.grade + (d.info.note ? ' \u2014 ' + d.info.note : '')));
+        var t = el('table'); t.style.cssText = 'width:100%;border-collapse:collapse;font-size:12px;margin-top:6px';
+        var hr = el('tr'); ['Firm', 'Verdict', 'Pass (safe)', 'Paid', 'EV / attempt', 'EV / month (safe)', 'Fee'].forEach(function (h) { var th = el('th', null, h); th.style.cssText = 'text-align:left;padding:4px 5px;color:var(--text-muted)'; hr.appendChild(th); }); t.appendChild(hr);
+        d.firms.forEach(function (f) {
+          var tr = el('tr'), pc = function (v) { return v == null ? '\u2014' : (v * 100).toFixed(0) + '%'; }, mo = function (v) { return v == null ? '\u2014' : money(v); };
+          var col = f.verdict === 'PAYS' ? 'var(--teal)' : (f.verdict === 'DOES NOT PAY' ? 'var(--coral)' : 'var(--amber)');
+          [f.label, f.verdict, pc(f.p_pass) + ' (' + pc(f.p_pass_lcb) + ')', pc(f.p_paid), mo(f.ev), mo(f.ev_per_month_lcb), f.fee == null ? '\u2014' : money(f.fee)].forEach(function (v, i) {
+            var td = el('td', null, v); td.style.cssText = 'padding:4px 5px;border-top:1px solid var(--border)' + (i === 1 ? ';font-weight:700;color:' + col : ''); if (i === 0) td.title = f.reasons.join('\n'); tr.appendChild(td); });
+          t.appendChild(tr);
+          if (f.reasons.length) { var rr = el('tr'), rd = el('td', 'muted', f.reasons[0]); rd.colSpan = 7; rd.style.cssText = 'padding:0 5px 5px;font-size:11px'; rr.appendChild(rd); t.appendChild(rr); }
+        });
+        out.appendChild(t);
+        out.appendChild(el('div', 'muted', '\u201CSafe\u201D = the lower of the Monte Carlo and real-start-date pass odds, at 95% confidence. A firm is only called PAYS if it still earns money at that rate. After you buy an evaluation, log what happened below so the forecast gets calibrated against reality.'));
+        var lg = el('div', 'btns'); lg.style.alignItems = 'center'; var best = d.firms[0]; if (best && best.p_pass != null) {
+          lg.appendChild(el('span', 'muted', 'Log a real result for ' + best.label + ':'));
+          [['It passed', { passed: true }], ['It failed', { passed: false }], ['I got paid', { passed: true, paid: true }]].forEach(function (o) {
+            var b = el('button', null, o[0]); b.type = 'button'; b.addEventListener('click', function () {
+              fetch('/api/payout-forecast/outcome', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ strategy: d.info.dataset + '|' + (API._pick || ''), preset_key: best.preset_key, forecast_p_pass: best.p_pass, forecast_p_paid: best.p_paid }, o[1])) })
+                .then(function (r) { return r.json(); }).then(function (x) { b.textContent = x.ok ? 'Logged \u2714' : 'Failed'; if (x.calibration) out.appendChild(el('div', 'muted', x.calibration.message)); });
+            }); lg.appendChild(b); }); }
+        out.appendChild(lg);
+      }
+      go.addEventListener('click', function () {
+        var r = (API._rows || []).filter(function (x) { return x.id === API._pick; })[0];
+        if (!r) { out.textContent = ''; out.appendChild(el('div', 'status timeout', 'Pick a saved strategy in \u201CLoad edge from a saved strategy\u201D first.')); return; }
+        go.disabled = true; out.textContent = 'Running the strategy and forecasting each firm\u2026 (up to a minute)';
+        fetch('/api/payout-forecast/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: r.type, name: r.name, dataset: API._dsPick || (API._ds && API._ds.suggested && API._ds.suggested[r.id]) || '', holdout_frac: unseen.checked ? 0.3 : 0 }) })
+          .then(function (x) { return x.json(); }).then(function (d) { go.disabled = false; show(d); }).catch(function (e) { go.disabled = false; show({ ok: false, error: String(e) }); });
+      });
+    }
+    drawForecast();
     function reset() { st = newState(P); rand = rng(seed * 99 + 1); drawGauges(); }
     function recompute(userInput) {
       riskLab.textContent = P.riskPct.toFixed(2) + '%  =  ' + money(P.account * P.riskPct / 100) + ' per trade';
