@@ -5,11 +5,24 @@
 {% include '_head_common.html' %}
 <script src="/static/lightweight-charts.standalone.production.js"></script>
 <script src="/static/chart_drawing_tools.js"></script>
+<script src="/static/t58-chart-kit.js"></script>
 <style>
   * { box-sizing: border-box; }
   .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
-  .chart-toolbar-row { display: flex; justify-content: flex-end; margin-bottom: 6px; }
-  #replay-chart { width: 100%; height: 480px; position: relative; }
+  .chart-toolbar-row { display: flex; justify-content: flex-start; margin-bottom: 6px; }
+  #replay-chart { width: 100%; height: 540px; min-height: 300px; position: relative; resize: vertical; overflow: hidden; border-radius: 8px; }
+  .view-opts { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin: 8px 0 0; font-size: 12px; color: var(--text-muted); }
+  .view-opts label { display: inline-flex; gap: 5px; align-items: center; cursor: pointer; }
+  .view-opts select, .view-opts input[type=text], .view-opts input[type=datetime-local] { padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 12px; }
+  .open-trade-chip { display: none; margin-top: 8px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); font-size: 12.5px; }
+  .open-trade-chip.show { display: block; }
+  .prop-banner { padding: 9px 12px; border-radius: 9px; font-weight: 700; margin-bottom: 8px; border: 1px solid var(--border-light); font-size: 13px; }
+  .prop-banner.pass { color: var(--ok); border-color: var(--ok); }
+  .prop-banner.fail { color: var(--err-fg4); border-color: var(--err-fg4); }
+  .prop-banner.live { color: var(--text-muted); }
+  .prop-meter { height: 8px; border-radius: 5px; background: var(--panel-3); overflow: hidden; margin-top: 4px; }
+  .prop-meter i { display: block; height: 100%; background: var(--teal); }
+  .prop-meter i.warn { background: #f0b429; } .prop-meter i.bad { background: #ff6b6b; }
   #equity-chart { width: 100%; height: 120px; }
   .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
   .controls button {
@@ -106,6 +119,7 @@
 <div class="replay-layout">
 <div class="replay-main">
 <div class="card">
+  <div id="replay-controls"></div>
   <div class="chart-toolbar-row">
     <div class="t58-draw-toolbar" id="replay-draw-toolbar"></div>
   </div>
@@ -120,6 +134,9 @@
     <button onclick="resetReplay()">&#8635; Reset</button>
     <button onclick="jumpTrade(-1)" title="Jump to the previous trade entry (P)">&#9198; Prev trade</button>
     <button onclick="jumpTrade(1)" title="Jump to the next trade entry (N)">Next trade &#9197;</button>
+    <select id="step-size" aria-label="Bars per step" title="Bars advanced by each step / play tick">
+      <option value="1" selected>1 bar</option><option value="5">5 bars</option><option value="10">10 bars</option><option value="30">30 bars</option><option value="100">100 bars</option>
+    </select>
     <select id="speed-select" onchange="updateSpeed()" aria-label="Playback speed">
       <option value="1200">Very slow</option>
       <option value="600">Slow</option>
@@ -129,7 +146,17 @@
       <option value="5">Max</option>
     </select>
   </div>
-  <p class="hint" style="font-size:12px;color:var(--text-muted);margin:4px 0 0;">Shortcuts: <b>Space</b> play/pause &middot; <b>&larr; &rarr;</b> step &middot; <b>N / P</b> next / previous trade &middot; <b>R</b> reset. The replay shows the exact trades the backtest produced.</p>
+  <div class="view-opts">
+    <label><input type="checkbox" id="opt-follow" checked> Follow latest bar</label>
+    <label><input type="checkbox" id="opt-markers" checked> Trade arrows</label>
+    <label><input type="checkbox" id="opt-lines" checked> Entry&rarr;exit lines</label>
+    <label><input type="checkbox" id="opt-zones" checked> Open-trade SL/TP zone</label>
+    <label>Bars on screen <select id="opt-window"><option value="60">60</option><option value="120" selected>120</option><option value="250">250</option><option value="500">500</option></select></label>
+    <label>Go to <input type="datetime-local" id="goto-time"></label>
+    <button class="mini-btn" style="flex:none;padding:4px 10px;" onclick="gotoTime()">Go</button>
+  </div>
+  <div class="open-trade-chip" id="open-trade-chip"></div>
+  <p class="hint" style="font-size:12px;color:var(--text-muted);margin:4px 0 0;">Shortcuts: <b>Space</b> play/pause &middot; <b>&larr; &rarr;</b> step (<b>Shift</b> = 10 bars) &middot; <b>N / P</b> next / previous trade &middot; <b>B / S</b> manual buy / sell &middot; <b>C</b> close manual position &middot; <b>R</b> reset &middot; <b>Home / End</b> first / last bar. Draw with <b>Alt+T</b> trend, <b>Alt+H</b> horizontal, <b>Alt+F</b> fib, <b>Alt+M</b> measure, <b>Alt+L / S</b> long / short planner. The replay shows the exact trades the backtest produced.</p>
 
   <div class="stat-grid">
     <div class="stat"><div class="label">Bar</div><div class="value" id="s-bar">0 / 0</div></div>
@@ -170,11 +197,21 @@
       <div><label>Daily loss limit %</label><input type="number" step="0.1" name="daily_loss" id="rf-daily-loss"></div>
       <div><label>Max drawdown %</label><input type="number" step="0.1" name="max_dd" id="rf-max-dd"></div>
     </div>
+    <div class="field-row">
+      <div><label>Drawdown type</label>
+        <select name="drawdown_type" id="rf-dd-type"><option value="trailing">Trailing (intraday)</option><option value="eod">Trailing (end of day)</option><option value="static">Static</option></select></div>
+      <div><label>Consistency: best day &le; %</label><input type="number" step="1" name="consistency_pct" id="rf-consistency"></div>
+    </div>
+    <div class="field-row">
+      <div><label>Min trading days</label><input type="number" step="1" name="min_days" id="rf-min-days"></div>
+      <div><label>Copy a firm's rules</label><select name="preset_key" id="rf-preset"><option value="">Custom</option></select></div>
+    </div>
     <button type="submit" class="mini-btn apply">Apply &amp; Re-run</button>
   {% include "_timeframe_fields.html" %}
 </form>
 
   <div id="prop-limits" style="margin-top:10px;"></div>
+  <p class="side-note" style="margin-top:8px;">Checked live as you step: profit target, daily loss, trailing/static drawdown with its floor, minimum days and the consistency rule, counting the strategy's trades <i>and</i> your manual trades. For the odds of passing and getting paid, use the <a href="/replay#propsim">Prop-firm evaluation simulator</a>.</p>
 </div>
 
 <div class="card side-card">
@@ -228,20 +265,33 @@
   let PROP_RULES = {};
   let STRATEGY_INFO = {};
   let cursor = 0;
+  let lastRendered = -1;
   let playing = false;
   let playTimer = null;
   let speedMs = 250;
 
-  let chart, candleSeries, volumeSeries, equityChart, equitySeries, drawTools;
+  let kit, equityChart, equitySeries;
+
+  // Per-bar lookups, built once after the data loads so a frame costs O(1) instead of O(bars) / O(bars^2).
+  let TIME_TO_IDX = new Map();
+  let EQ_AT = [];          // strategy equity visible at each bar
+  let EQ_PTR = [];         // number of EQUITY points with time <= bar time (for the small equity chart)
+  let CLOSED_AT = [];      // closed trades at each bar
+  let PNL_AT = [];         // cumulative closed strategy P&L at each bar
+  let SORTED_TRADES = [];  // trades sorted by entry time, with entryIdx / exitIdx attached
+  let ALL_MARKERS = [];    // every trade marker, sorted by time (entries and exits)
+  let lastMarkerKey = '';
+  let lastClosed = -1;
 
   // ------------------------------------------------------------------
-  // Manual trading state -- entirely client-side; a position is a plain
-  // {direction, entryPrice, entryTime, size, multiplier} object, closed
-  // trades accumulate in manualTrades. Never touches the server or the
-  // strategy's own trade list.
+  // Manual trading state -- entirely client-side; never touches the server or the strategy's own trade list.
   // ------------------------------------------------------------------
   let manualPosition = null;
   let manualTrades = [];
+  let manualVersion = 0;
+
+  const view = { follow: true, markers: true, lines: true, zones: true, window: 120, step: 1 };
+  const VIEW_KEY = 't58-replay-view-v1';
 
   function fmtMoney(v) {
     if (v === null || v === undefined) return '-';
@@ -257,34 +307,42 @@
     if (v === null || v === undefined || Number.isNaN(v)) return '-';
     return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
   }
+  function px(v) { return Number(v).toFixed(Math.abs(v) >= 100 ? 2 : 5); }
 
   function initCharts() {
-    chart = LightweightCharts.createChart(document.getElementById('replay-chart'), {
-      layout: { background: { color: 'transparent' }, textColor: '#ccc' },
-      grid: { vertLines: { color: 'rgba(255,255,255,0.05)' }, horzLines: { color: 'rgba(255,255,255,0.05)' } },
-      timeScale: { timeVisible: true, secondsVisible: false },
+    const css = getComputedStyle(document.documentElement);
+    kit = T58ChartKit.create({
+      el: document.getElementById('replay-chart'),
+      controlsEl: document.getElementById('replay-controls'),
+      drawToolbarEl: document.getElementById('replay-draw-toolbar'),
+      drawKey: 'replay:' + replayId,
+      title: '',
     });
-    candleSeries = chart.addCandlestickSeries({
-      upColor: '#35e0b0', downColor: '#ff6b6b', borderVisible: false,
-      wickUpColor: '#35e0b0', wickDownColor: '#ff6b6b',
-    });
-    volumeSeries = chart.addHistogramSeries({
-      priceFormat: { type: 'volume' }, priceScaleId: '', color: 'rgba(120,140,160,0.4)',
-    });
-    volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
-
     equityChart = LightweightCharts.createChart(document.getElementById('equity-chart'), {
       layout: { background: { color: 'transparent' }, textColor: '#888' },
       grid: { vertLines: { visible: false }, horzLines: { visible: false } },
-      timeScale: { visible: false }, rightPriceScale: { visible: false },
+      timeScale: { visible: false }, rightPriceScale: { visible: true, borderVisible: false }, autoSize: true,
     });
-    equitySeries = equityChart.addLineSeries({ color: (getComputedStyle(document.documentElement).getPropertyValue('--teal').trim() || '#35e0b0'), lineWidth: 2 });
-
-    if (typeof T58ChartDrawingTools !== 'undefined') {
-      drawTools = T58ChartDrawingTools.attach(
-        chart, candleSeries, document.getElementById('replay-chart'), document.getElementById('replay-draw-toolbar')
-      );
-    }
+    equitySeries = equityChart.addAreaSeries({
+      lineColor: (css.getPropertyValue('--teal').trim() || '#35e0b0'), topColor: 'rgba(53,224,176,0.25)', bottomColor: 'rgba(53,224,176,0.02)', lineWidth: 2,
+    });
+    try {
+      const saved = JSON.parse(localStorage.getItem(VIEW_KEY) || '{}');
+      Object.keys(view).forEach(k => { if (saved[k] !== undefined) view[k] = saved[k]; });
+    } catch (e) { /* ignore */ }
+    const bind = (id, key, isCheck) => {
+      const el = document.getElementById(id); if (!el) return;
+      if (isCheck) el.checked = !!view[key]; else el.value = String(view[key]);
+      el.addEventListener('change', () => {
+        view[key] = isCheck ? el.checked : parseInt(el.value, 10);
+        try { localStorage.setItem(VIEW_KEY, JSON.stringify(view)); } catch (e) { /* ignore */ }
+        lastMarkerKey = ''; renderFrame(true);
+      });
+    };
+    bind('opt-follow', 'follow', true); bind('opt-markers', 'markers', true); bind('opt-lines', 'lines', true);
+    bind('opt-zones', 'zones', true); bind('opt-window', 'window', false);
+    const ss = document.getElementById('step-size'); ss.value = String(view.step);
+    ss.addEventListener('change', () => { view.step = parseInt(ss.value, 10) || 1; try { localStorage.setItem(VIEW_KEY, JSON.stringify(view)); } catch (e) { /* ignore */ } });
   }
 
   function fillRerunForm() {
@@ -296,6 +354,31 @@
     document.getElementById('rf-profit-target').value = PROP_RULES.profit_target_pct ?? '';
     document.getElementById('rf-daily-loss').value = PROP_RULES.daily_loss_pct ?? '';
     document.getElementById('rf-max-dd').value = PROP_RULES.max_drawdown_pct ?? '';
+    document.getElementById('rf-dd-type').value = PROP_RULES.drawdown_type || 'trailing';
+    document.getElementById('rf-consistency').value = PROP_RULES.consistency_pct ?? '';
+    document.getElementById('rf-min-days').value = PROP_RULES.min_days ?? '';
+    loadPresets();
+  }
+
+  let PRESETS = [];
+  function loadPresets() {
+    const sel = document.getElementById('rf-preset');
+    if (sel.options.length > 1) return;
+    fetch('/api/prop-sim/presets').then(r => r.json()).then(d => {
+      PRESETS = d.presets || [];
+      PRESETS.forEach(p => { const o = document.createElement('option'); o.value = p.key; o.textContent = p.label; sel.appendChild(o); });
+      if (PROP_RULES.preset_key) sel.value = PROP_RULES.preset_key;
+    }).catch(() => {});
+    sel.addEventListener('change', () => {
+      const p = PRESETS.find(x => x.key === sel.value); if (!p) return;
+      document.getElementById('rf-account-size').value = p.account_size;
+      document.getElementById('rf-profit-target').value = p.target_pct;
+      document.getElementById('rf-daily-loss').value = p.daily_loss_pct;
+      document.getElementById('rf-max-dd').value = p.max_dd_pct;
+      document.getElementById('rf-dd-type').value = p.drawdown_type === 'static' ? 'static' : (p.dd_basis === 'eod' ? 'eod' : 'trailing');
+      document.getElementById('rf-consistency').value = p.consistency_pct ?? '';
+      document.getElementById('rf-min-days').value = p.min_days ?? '';
+    });
   }
 
   function renderStrategyInfo() {
@@ -304,9 +387,50 @@
       ['Name', STRATEGY_INFO.name || '-'],
       ['Source', (STRATEGY_INFO.source_type || '-').toUpperCase()],
       ['Timeframe', STRATEGY_INFO.timeframe || '-'],
-      ['Risk', `${STRATEGY_INFO.risk_mode || '-'} \u00b7 ${STRATEGY_INFO.risk_value ?? '-'}`],
+      ['Risk', `${STRATEGY_INFO.risk_mode || '-'} · ${STRATEGY_INFO.risk_value ?? '-'}`],
     ];
     el.innerHTML = rows.map(([k, v]) => `<div style="display:flex;justify-content:space-between;"><span>${k}</span><b style="color:var(--text);">${v}</b></div>`).join('');
+  }
+
+  function lowerBound(arr, t) { // first index with arr[i] >= t
+    let lo = 0, hi = arr.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] < t) lo = m + 1; else hi = m; }
+    return lo;
+  }
+
+  function buildIndexes() {
+    const n = BARS.length;
+    TIME_TO_IDX = new Map(); BARS.forEach((b, i) => TIME_TO_IDX.set(b.time, i));
+    const times = BARS.map(b => b.time);
+    // equity at / before each bar
+    EQ_AT = new Array(n); EQ_PTR = new Array(n);
+    let ep = 0, last = null;
+    for (let i = 0; i < n; i++) {
+      while (ep < EQUITY.length && EQUITY[ep].time <= times[i]) { last = EQUITY[ep]; ep++; }
+      EQ_AT[i] = last ? last.equity : STARTING_BALANCE; EQ_PTR[i] = ep;
+    }
+    // trades with bar indexes
+    SORTED_TRADES = TRADES.slice().sort((a, b) => a.entry_time - b.entry_time).map(t => {
+      let ei = TIME_TO_IDX.get(t.entry_time); if (ei === undefined) ei = Math.min(lowerBound(times, t.entry_time), n - 1);
+      let xi = TIME_TO_IDX.get(t.exit_time); if (xi === undefined) xi = Math.min(lowerBound(times, t.exit_time), n - 1);
+      return Object.assign({}, t, { entryIdx: ei, exitIdx: xi });
+    });
+    // closed count / cumulative pnl per bar
+    const byExit = SORTED_TRADES.slice().sort((a, b) => a.exitIdx - b.exitIdx);
+    CLOSED_AT = new Array(n); PNL_AT = new Array(n);
+    let k = 0, cnt = 0, pnl = 0;
+    for (let i = 0; i < n; i++) {
+      while (k < byExit.length && byExit[k].exitIdx <= i) { cnt++; pnl += byExit[k].pnl; k++; }
+      CLOSED_AT[i] = cnt; PNL_AT[i] = pnl;
+    }
+    ALL_MARKERS = [];
+    SORTED_TRADES.forEach(t => {
+      ALL_MARKERS.push({ idx: t.entryIdx, kind: 'in', m: { time: BARS[t.entryIdx].time, position: t.direction > 0 ? 'belowBar' : 'aboveBar',
+        color: t.direction > 0 ? '#35e0b0' : '#ff6b6b', shape: t.direction > 0 ? 'arrowUp' : 'arrowDown', text: t.direction > 0 ? 'BUY' : 'SELL' } });
+      ALL_MARKERS.push({ idx: t.exitIdx, kind: 'out', m: { time: BARS[t.exitIdx].time, position: 'inBar', color: t.pnl >= 0 ? '#35e0b0' : '#ff6b6b',
+        shape: 'circle', text: (t.pnl >= 0 ? '+' : '') + t.pnl.toFixed(0) } });
+    });
+    ALL_MARKERS.sort((a, b) => a.m.time - b.m.time);
   }
 
   function loadData() {
@@ -325,8 +449,8 @@
         STARTING_BALANCE = data.prop_account_size || data.initial_balance || 0;
         document.getElementById('side-starting-balance').textContent = fmtMoney(STARTING_BALANCE);
         document.getElementById('scrubber').max = Math.max(BARS.length - 1, 0);
-        candleSeries.setData(BARS);
-        volumeSeries.setData(BARS.map(b => ({ time: b.time, value: b.volume, color: b.close >= b.open ? 'rgba(53,224,176,0.4)' : 'rgba(255,107,107,0.4)' })));
+        kit.setTitle((data.label || STRATEGY_INFO.name || '').toString().split('/').pop().replace(/\.csv$/i, ''));
+        buildIndexes();
         renderStrategyInfo();
         fillRerunForm();
         if (!BARS.length) {
@@ -340,18 +464,10 @@
             + 'conditions and timeframe against this dataset on the Full Pipeline page, or try a longer/different '
             + 'window on the Replay setup page.</p>';
         }
-        cursor = 0;
-        renderFrame();
+        // Start where the first trade is about to happen (or bar 0) so the first thing you see is something.
+        cursor = Math.max(0, Math.min(BARS.length - 1, 60));
+        renderFrame(true);
       });
-  }
-
-  function equityAtOrBefore(unixTime) {
-    let last = null;
-    for (const e of EQUITY) {
-      if (e.time > unixTime) break;
-      last = e;
-    }
-    return last;
   }
 
   // ------------------------------------------------------------------
@@ -364,16 +480,14 @@
   function manualOrder(direction) {
     const price = currentClose();
     if (price == null) return;
-    if (manualPosition && manualPosition.direction === direction) return; // already in this direction -- use Close to flatten first
-    if (manualPosition && manualPosition.direction !== direction) {
-      closeManualPosition(); // opposite-direction click flips: close, then open the new side
-    }
+    if (manualPosition && manualPosition.direction === direction) return;
+    if (manualPosition && manualPosition.direction !== direction) closeManualPosition();
     const size = parseFloat(document.getElementById('manual-size').value) || 1;
     const multiplier = parseFloat(document.getElementById('manual-multiplier').value) || 1;
-    manualPosition = {
-      direction, entryPrice: price, entryTime: BARS[cursor].time, size, multiplier,
-    };
-    renderManualPanel();
+    manualPosition = { direction, entryPrice: price, entryTime: BARS[cursor].time, entryIdx: cursor, size, multiplier };
+    manualVersion++;
+    renderManualPanel(); propTracker.invalidate(); renderPropLimits();
+    drawManualLines();
   }
 
   function closeManualPosition() {
@@ -382,20 +496,25 @@
     const pnl = (price - manualPosition.entryPrice) * manualPosition.direction * manualPosition.size * manualPosition.multiplier;
     manualTrades.push({
       direction: manualPosition.direction, entryPrice: manualPosition.entryPrice, exitPrice: price,
-      entryTime: manualPosition.entryTime, exitTime: BARS[cursor].time, pnl,
+      entryTime: manualPosition.entryTime, exitTime: BARS[cursor].time, exitIdx: cursor, pnl,
     });
     manualPosition = null;
-    renderManualPanel();
+    manualVersion++;
+    renderManualPanel(); propTracker.invalidate(); renderPropLimits();
+    drawManualLines();
   }
 
-  function manualRealizedPnl() {
-    return manualTrades.reduce((sum, t) => sum + t.pnl, 0);
-  }
+  function manualRealizedPnl() { return manualTrades.reduce((sum, t) => sum + t.pnl, 0); }
   function manualUnrealizedPnl() {
     if (!manualPosition) return 0;
     const price = currentClose();
     if (price == null) return 0;
     return (price - manualPosition.entryPrice) * manualPosition.direction * manualPosition.size * manualPosition.multiplier;
+  }
+  function drawManualLines() {
+    const lines = [];
+    if (manualPosition) lines.push({ price: manualPosition.entryPrice, color: manualPosition.direction > 0 ? '#35e0b0' : '#ff6b6b', title: 'MANUAL ' + (manualPosition.direction > 0 ? 'LONG' : 'SHORT'), style: 'solid', width: 1 });
+    kit.setPriceLines('manual', lines);
   }
 
   function renderManualPanel() {
@@ -429,95 +548,207 @@
   }
 
   // ------------------------------------------------------------------
-  // Prop Account panel -- computed live from the strategy's own equity
-  // curve PLUS manual trading P&L, against whatever profit target/daily
-  // loss/max drawdown was set on the Risk & Prop Account form above.
-  // Daily loss resets at each new calendar day (by bar timestamp, in the
-  // browser's local time zone) seen in the replayed bars.
+  // Prop account panel. Mirrors the firm rules on the sidebar form, incrementally (O(1) per forward step):
+  //   profit target, daily loss limit (per calendar day), max drawdown as TRAILING (intraday), TRAILING (end of day) or STATIC,
+  //   with the trailing floor locking at the starting balance, minimum trading days, and the best-day consistency rule.
+  // The first breach is remembered (sticky) with the bar it happened on, exactly like a real account would be closed.
   // ------------------------------------------------------------------
+  const propTracker = {
+    idx: -1, st: null,
+    invalidate() { this.idx = -1; this.st = null; },
+    fresh() {
+      const base = PROP_RULES.account_size || STARTING_BALANCE || 1;
+      return { base, peak: base, eodPeak: base, worstDd: 0, dayKey: null, dayStart: base, dayPnl: 0, dayPct: 0, worstDayPct: 0,
+               running: base, days: new Set(), dayPnls: {}, breach: null, passedAt: null, ddFloor: null };
+    },
+    advance(upTo) {
+      if (!BARS.length) return this.st;
+      if (!this.st || upTo < this.idx) { this.st = this.fresh(); this.idx = -1; }
+      const st = this.st, base = st.base, ddPct = PROP_RULES.max_drawdown_pct, ddType = PROP_RULES.drawdown_type || 'trailing';
+      const dlPct = PROP_RULES.daily_loss_pct, target = PROP_RULES.profit_target_pct;
+      for (let i = this.idx + 1; i <= upTo; i++) {
+        const stratPnl = EQ_AT[i] - (STARTING_BALANCE || base);
+        let manualPnl = 0;
+        for (const t of manualTrades) if (t.exitIdx <= i) manualPnl += t.pnl;
+        if (manualPosition && manualPosition.entryIdx <= i) manualPnl += (BARS[i].close - manualPosition.entryPrice) * manualPosition.direction * manualPosition.size * manualPosition.multiplier;
+        const eq = base + stratPnl + manualPnl;
+        st.running = eq;
+        const d = new Date(BARS[i].time * 1000), key = d.getFullYear() + '-' + d.getMonth() + '-' + d.getDate();
+        if (key !== st.dayKey) {
+          if (st.dayKey !== null) { st.eodPeak = Math.max(st.eodPeak, st.prevClose); }
+          st.dayKey = key; st.dayStart = eq; st.days.add(key);
+        }
+        st.prevClose = eq;
+        st.dayPnl = eq - st.dayStart; st.dayPct = st.dayPnl / st.dayStart * 100;
+        st.dayPnls[key] = st.dayPnl;
+        st.worstDayPct = Math.min(st.worstDayPct, st.dayPct);
+        st.peak = Math.max(st.peak, eq);
+        if (ddPct != null) {
+          const ref = ddType === 'eod' ? st.eodPeak : st.peak;
+          const baseFloor = base * (1 - ddPct / 100);
+          const floor = ddType === 'static' ? baseFloor : Math.max(baseFloor, Math.min(base, ref - base * ddPct / 100));   // trailing floor locks at the starting balance
+          st.ddFloor = floor;
+          st.worstDd = Math.max(st.worstDd, Math.max(0, (ref - eq) / base * 100));
+          if (!st.breach && eq <= floor) st.breach = { idx: i, why: 'Max drawdown breached', time: BARS[i].time };
+        }
+        if (!st.breach && dlPct != null && st.dayPct <= -dlPct) st.breach = { idx: i, why: 'Daily loss limit hit', time: BARS[i].time };
+        if (!st.breach && !st.passedAt && target != null && (eq - base) / base * 100 >= target) {
+          const minDays = PROP_RULES.min_days || 0, cons = PROP_RULES.consistency_pct;
+          const profit = eq - base, best = Math.max(...Object.values(st.dayPnls));
+          if (st.days.size >= minDays && (cons == null || profit <= 0 || best / profit <= cons / 100 + 1e-9)) st.passedAt = { idx: i, time: BARS[i].time };
+        }
+      }
+      this.idx = upTo;
+      return st;
+    },
+  };
+
+  function meterHtml(pct, kind) {
+    const w = Math.max(0, Math.min(100, pct));
+    const cls = kind === 'risk' ? (w > 85 ? 'bad' : (w > 60 ? 'warn' : '')) : '';
+    return `<div class="prop-meter"><i class="${cls}" style="width:${w}%"></i></div>`;
+  }
+
   function renderPropLimits() {
     const el = document.getElementById('prop-limits');
-    const target = PROP_RULES.profit_target_pct;
-    const dailyLoss = PROP_RULES.daily_loss_pct;
-    const maxDd = PROP_RULES.max_drawdown_pct;
+    const target = PROP_RULES.profit_target_pct, dailyLoss = PROP_RULES.daily_loss_pct, maxDd = PROP_RULES.max_drawdown_pct;
     if (target == null && dailyLoss == null && maxDd == null) {
       el.innerHTML = '<p class="side-note">No prop-firm rules set on the setup form -- nothing to check against.</p>';
       return;
     }
-    const base = PROP_RULES.account_size || STARTING_BALANCE || 1;
-
-    let peak = base, worstDd = 0;
-    let dayKey = null, dayStartEquity = base, dailyPnlPct = 0, running = base;
-    for (let i = 0; i <= cursor && i < BARS.length; i++) {
-      const eq = equityAtOrBefore(BARS[i].time);
-      const stratPnl = eq ? (eq.equity - (STARTING_BALANCE || base)) : 0;
-      running = base + stratPnl + manualRealizedPnlUpTo(BARS[i].time) + (i === cursor ? manualUnrealizedPnl() : 0);
-      peak = Math.max(peak, running);
-      worstDd = Math.max(worstDd, (peak - running) / peak * 100);
-      const key = new Date(BARS[i].time * 1000).toDateString();
-      if (key !== dayKey) { dayKey = key; dayStartEquity = running; }
-      dailyPnlPct = (running - dayStartEquity) / dayStartEquity * 100;
-    }
-    const profitPct = (running - base) / base * 100;
-
-    const rows = [];
+    const st = propTracker.advance(cursor);
+    if (!st) return;
+    const base = st.base, profitPct = (st.running - base) / base * 100, minDays = PROP_RULES.min_days || 0, cons = PROP_RULES.consistency_pct;
+    let banner;
+    if (st.breach) banner = `<div class="prop-banner fail">✖ ACCOUNT FAILED — ${st.breach.why} on ${fmtTime(st.breach.time)}</div>`;
+    else if (st.passedAt) banner = `<div class="prop-banner pass">✔ EVALUATION PASSED on ${fmtTime(st.passedAt.time)} (day ${st.days.size})</div>`;
+    else banner = `<div class="prop-banner live">Evaluation in progress — day ${st.days.size}${minDays ? ' of ' + minDays + ' minimum' : ''}</div>`;
+    const rows = [banner];
     if (target != null) {
-      rows.push(rowHtml('Profit target', `${fmtPct(profitPct)} / ${target}%`, profitPct >= target ? 'ok' : 'na'));
+      const need = base * target / 100 - (st.running - base);
+      rows.push(rowHtml('Profit target', `${fmtPct(profitPct)} / ${target}%`, profitPct >= target ? 'ok' : 'na', meterHtml(profitPct / target * 100) + `<div class="tpsl">${need > 0 ? fmtMoney(need) + ' to go' : 'target reached'}</div>`));
     }
     if (dailyLoss != null) {
-      rows.push(rowHtml("Today's P&L", `${fmtPct(dailyPnlPct)} (limit -${dailyLoss}%)`, dailyPnlPct <= -dailyLoss ? 'breach' : 'ok'));
+      const room = base * dailyLoss / 100 + st.dayPnl;
+      rows.push(rowHtml("Today's P&L", `${fmtPct(st.dayPct)} (limit -${dailyLoss}%)`, st.dayPct <= -dailyLoss ? 'breach' : 'ok',
+        meterHtml(Math.max(0, -st.dayPct) / dailyLoss * 100, 'risk') + `<div class="tpsl">${fmtMoney(Math.max(0, room))} of room left today</div>`));
     }
     if (maxDd != null) {
-      rows.push(rowHtml('Max drawdown so far', `${worstDd.toFixed(2)}% (limit ${maxDd}%)`, worstDd >= maxDd ? 'breach' : 'ok'));
+      const room = st.ddFloor != null ? st.running - st.ddFloor : null;
+      const typeLabel = ({ trailing: 'trailing', eod: 'end-of-day trailing', static: 'static' })[PROP_RULES.drawdown_type || 'trailing'];
+      rows.push(rowHtml('Max drawdown (' + typeLabel + ')', `floor ${st.ddFloor != null ? fmtMoney(st.ddFloor) : '-'}`, st.breach && st.breach.why.startsWith('Max') ? 'breach' : 'ok',
+        meterHtml(room != null ? (1 - room / (base * maxDd / 100)) * 100 : 0, 'risk') + `<div class="tpsl">${room != null ? fmtMoney(Math.max(0, room)) + ' above the floor · worst drawdown so far ' + st.worstDd.toFixed(2) + '%' : ''}</div>`));
+    }
+    if (minDays) rows.push(rowHtml('Trading days', `${st.days.size} / ${minDays}`, st.days.size >= minDays ? 'ok' : 'na', ''));
+    if (cons != null && cons > 0) {
+      const profit = st.running - base, best = Math.max(0, ...Object.values(st.dayPnls));
+      const share = profit > 0 ? best / profit * 100 : 0;
+      rows.push(rowHtml('Consistency (best day)', profit > 0 ? `${share.toFixed(0)}% of profit (max ${cons}%)` : 'no profit yet', share > cons ? 'breach' : 'ok', profit > 0 ? meterHtml(share / cons * 100, 'risk') : ''));
     }
     el.innerHTML = rows.join('');
   }
-  function rowHtml(label, value, state) {
-    const tagText = state === 'breach' ? 'BREACHED' : (state === 'ok' ? 'OK' : '\u2014');
-    return `<div class="prop-limit-row"><span>${label}<br><b style="color:var(--text);">${value}</b></span><span class="tag ${state}">${tagText}</span></div>`;
-  }
-  function manualRealizedPnlUpTo(unixTime) {
-    return manualTrades.filter(t => t.exitTime <= unixTime).reduce((s, t) => s + t.pnl, 0);
+  function rowHtml(label, value, state, extra) {
+    const tagText = state === 'breach' ? 'BREACHED' : (state === 'ok' ? 'OK' : '—');
+    return `<div class="prop-limit-row" style="flex-wrap:wrap;"><span style="flex:1;">${label}<br><b style="color:var(--text);">${value}</b></span><span class="tag ${state}">${tagText}</span><div style="width:100%;">${extra || ''}</div></div>`;
   }
 
-  function renderFrame() {
+  // ------------------------------------------------------------------
+  // Chart drawing of strategy trades
+  // ------------------------------------------------------------------
+  function openTradeAt(i) {
+    // trades are sorted by entry; find the one (if any) open at bar i
+    let lo = 0, hi = SORTED_TRADES.length - 1, found = null;
+    while (lo <= hi) { const m = (lo + hi) >> 1; if (SORTED_TRADES[m].entryIdx <= i) { found = m; lo = m + 1; } else hi = m - 1; }
+    for (let k = found; k !== null && k >= 0 && k > found - 4; k--) {
+      const t = SORTED_TRADES[k];
+      if (t.entryIdx <= i && t.exitIdx > i) return t;
+    }
+    return null;
+  }
+
+  function updateTradeOverlays() {
+    // arrows (only when the number of visible markers changes)
+    let nVis = 0;
+    if (view.markers) {
+      let lo = 0, hi = ALL_MARKERS.length;
+      const t = BARS[cursor].time;
+      while (lo < hi) { const m = (lo + hi) >> 1; if (ALL_MARKERS[m].m.time <= t) lo = m + 1; else hi = m; }
+      nVis = lo;
+    }
+    const key = view.markers + ':' + nVis;
+    if (key !== lastMarkerKey) {
+      lastMarkerKey = key;
+      kit.setMarkers(view.markers ? ALL_MARKERS.slice(Math.max(0, nVis - 400), nVis).filter(x => x.kind === 'in' || x.idx <= cursor).map(x => x.m) : []);
+    }
+    // entry -> exit segments for recent closed trades, and a zone for the open one
+    const ann = [], lines = [];
+    const open = openTradeAt(cursor);
+    if (view.lines) {
+      const closed = CLOSED_AT[cursor];
+      let shown = 0;
+      for (let k = SORTED_TRADES.length - 1; k >= 0 && shown < 60; k--) {
+        const t = SORTED_TRADES[k];
+        if (t.exitIdx > cursor) continue;
+        if (t.exitIdx < cursor - view.window * 3) break;
+        ann.push({ kind: 'segment', t0: BARS[t.entryIdx].time, p0: t.entry_price, t1: BARS[t.exitIdx].time, p1: t.exit_price,
+          color: t.pnl >= 0 ? '#35e0b0' : '#ff6b6b', dash: [4, 3], width: 1.3 });
+        shown++;
+      }
+    }
+    if (open) {
+      lines.push({ price: open.entry_price, color: open.direction > 0 ? '#35e0b0' : '#ff6b6b', title: (open.direction > 0 ? 'LONG ' : 'SHORT ') + 'entry', style: 'solid' });
+      if (open.stop_loss_price) lines.push({ price: open.stop_loss_price, color: '#ff6b6b', title: 'SL', style: 'dashed' });
+      if (open.take_profit_price) lines.push({ price: open.take_profit_price, color: '#35e0b0', title: 'TP', style: 'dashed' });
+      if (view.zones) {
+        if (open.stop_loss_price) ann.push({ kind: 'zone', t0: BARS[open.entryIdx].time, t1: null, p0: open.entry_price, p1: open.stop_loss_price, color: '#ff6b6b', fill: 0.10 });
+        if (open.take_profit_price) ann.push({ kind: 'zone', t0: BARS[open.entryIdx].time, t1: null, p0: open.entry_price, p1: open.take_profit_price, color: '#35e0b0', fill: 0.10 });
+      }
+    }
+    kit.setPriceLines('trade', lines);
+    kit.setAnnotations(ann);
+    const chip = document.getElementById('open-trade-chip');
+    if (open) {
+      const floating = EQ_AT[cursor] - (STARTING_BALANCE + PNL_AT[cursor]);
+      chip.className = 'open-trade-chip show';
+      chip.innerHTML = `<b style="color:${open.direction > 0 ? 'var(--teal)' : 'var(--err-fg4)'}">${open.direction > 0 ? 'LONG' : 'SHORT'}</b> open since ${fmtTime(open.entry_time)} @ ${px(open.entry_price)}`
+        + ` · floating <b style="color:${floating >= 0 ? 'var(--teal)' : 'var(--err-fg4)'}">${floating >= 0 ? '+' : ''}${fmtMoney(floating)}</b>`
+        + (open.stop_loss_price ? ` · SL ${px(open.stop_loss_price)}` : '') + ` · ${cursor - open.entryIdx} bars in`;
+    } else chip.className = 'open-trade-chip';
+  }
+
+  // ------------------------------------------------------------------
+  // Frame rendering. A forward step of one bar appends ONE candle (kit.updateBar); anything else reloads the revealed slice
+  // (setBars). Bars after the cursor are never given to the chart, so indicators and drawings can't see the future.
+  // ------------------------------------------------------------------
+  function renderFrame(force) {
     if (!BARS.length) return;
     cursor = Math.max(0, Math.min(cursor, BARS.length - 1));
     document.getElementById('scrubber').value = cursor;
     const currentBar = BARS[cursor];
+    const forward1 = !force && lastRendered >= 0 && cursor > lastRendered && cursor - lastRendered <= 50;   // a few new bars: append, don't reload
+    const same = !force && cursor === lastRendered;
+    if (!same) {
+      if (forward1) { for (let k = lastRendered + 1; k <= cursor; k++) kit.updateBar(BARS[k]); kit.flushNow(); }
+      else kit.setBars(BARS.slice(0, cursor + 1));
+      if (!forward1 || view.follow) {
+        const w = view.window;
+        kit.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, cursor - w), to: cursor + Math.max(3, Math.round(w * 0.06)) });
+      }
+      const eqPts = EQ_PTR[cursor];
+      if (forward1 && lastRendered >= 0) {
+        for (let k = EQ_PTR[lastRendered]; k < eqPts; k++) equitySeries.update({ time: EQUITY[k].time, value: EQUITY[k].equity });
+      } else {
+        equitySeries.setData(EQUITY.slice(0, eqPts).map(e => ({ time: e.time, value: e.equity })));
+      }
+    }
     document.getElementById('s-bar').textContent = `${cursor + 1} / ${BARS.length}`;
     document.getElementById('s-time').textContent = fmtTime(currentBar.time);
-
-    chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, cursor - 120), to: cursor + 5 });
-    candleSeries.setMarkers(
-      TRADES.filter(t => t.entry_time <= currentBar.time).flatMap(t => {
-        const markers = [{
-          time: t.entry_time, position: t.direction > 0 ? 'belowBar' : 'aboveBar',
-          color: t.direction > 0 ? '#35e0b0' : '#ff6b6b', shape: t.direction > 0 ? 'arrowUp' : 'arrowDown',
-          text: t.direction > 0 ? 'BUY' : 'SELL',
-        }];
-        if (t.exit_time <= currentBar.time) {
-          markers.push({
-            time: t.exit_time, position: 'inBar', color: t.pnl >= 0 ? '#35e0b0' : '#ff6b6b',
-            shape: 'circle', text: (t.pnl >= 0 ? '+' : '') + t.pnl.toFixed(0),
-          });
-        }
-        return markers;
-      })
-    );
-
-    const eq = equityAtOrBefore(currentBar.time);
-    const equityPoints = EQUITY.filter(e => e.time <= currentBar.time);
-    equitySeries.setData(equityPoints.map(e => ({ time: e.time, value: e.equity })));
-    document.getElementById('s-equity').textContent = eq ? fmtMoney(eq.equity) : '-';
-
-    const closedTrades = TRADES.filter(t => t.exit_time <= currentBar.time);
-    document.getElementById('s-trades').textContent = closedTrades.length;
-    const pnlSoFar = closedTrades.reduce((sum, t) => sum + t.pnl, 0);
+    document.getElementById('s-equity').textContent = fmtMoney(EQ_AT[cursor]);
+    const closedCount = CLOSED_AT[cursor], pnlSoFar = PNL_AT[cursor];
+    document.getElementById('s-trades').textContent = closedCount;
     const pnlEl = document.getElementById('s-pnl');
     pnlEl.textContent = fmtMoney(pnlSoFar);
     pnlEl.className = 'value ' + (pnlSoFar >= 0 ? 'up' : 'down');
-
     const currentBalance = STARTING_BALANCE + pnlSoFar;
     document.getElementById('side-balance').textContent = fmtMoney(currentBalance);
     const netChange = currentBalance - STARTING_BALANCE;
@@ -525,55 +756,55 @@
     netChangeEl.textContent = (netChange >= 0 ? '+' : '') + fmtMoney(netChange);
     netChangeEl.style.color = netChange >= 0 ? '#35e0b0' : '#ff6b6b';
 
-    const ticker = document.getElementById('trade-ticker');
+    updateTradeOverlays();
+    if (closedCount !== lastClosed || force) { lastClosed = closedCount; renderTradeLists(closedCount); }
+    renderManualPanel();
+    renderPropLimits();
+    lastRendered = cursor;
+  }
+
+  function renderTradeLists(closedCount) {
+    const closed = [];
+    for (const t of SORTED_TRADES) if (t.exitIdx <= cursor) closed.push(t);
+    closed.sort((a, b) => a.exitIdx - b.exitIdx);
     let runningBalance = STARTING_BALANCE;
-    const rows = closedTrades.map((t) => {
-      runningBalance += t.pnl;
-      return { t, balanceAfter: runningBalance };
-    });
-    ticker.innerHTML = rows.slice().reverse().map(({ t, balanceAfter }) => {
-      const sideClass = t.direction > 0 ? 'long' : 'short';
-      const sideLabel = t.direction > 0 ? 'LONG' : 'SHORT';
-      const pnlClass = t.pnl >= 0 ? 'up' : 'down';
+    const rows = closed.map((t) => { runningBalance += t.pnl; return { t, balanceAfter: runningBalance }; });
+    document.getElementById('trade-ticker').innerHTML = rows.slice(-80).reverse().map(({ t, balanceAfter }) => {
+      const sideClass = t.direction > 0 ? 'long' : 'short', sideLabel = t.direction > 0 ? 'LONG' : 'SHORT', pnlClass = t.pnl >= 0 ? 'up' : 'down';
       let tpsl = '';
       if (t.stop_loss_price) tpsl += `SL ${t.stop_loss_price.toFixed(5)}`;
       if (t.take_profit_price) tpsl += (tpsl ? ' &middot; ' : '') + `TP ${t.take_profit_price.toFixed(5)}`;
-      return `<div class="trade-row">
-        <div>
-          <div class="side ${sideClass}">${sideLabel} ${t.entry_price.toFixed(5)} &rarr; ${t.exit_price.toFixed(5)}</div>
-          <div class="tpsl">${tpsl || t.exit_reason}</div>
-        </div>
-        <div class="right">
-          <div class="pnl ${pnlClass}">${t.pnl >= 0 ? '+' : ''}${fmtMoney(t.pnl)}</div>
-          <div class="bal">bal ${fmtMoney(balanceAfter)}</div>
-        </div>
+      return `<div class="trade-row" style="cursor:pointer" onclick="gotoBar(${t.entryIdx})" title="Jump to this trade's entry">
+        <div><div class="side ${sideClass}">${sideLabel} ${t.entry_price.toFixed(5)} &rarr; ${t.exit_price.toFixed(5)}</div><div class="tpsl">${tpsl || t.exit_reason}</div></div>
+        <div class="right"><div class="pnl ${pnlClass}">${t.pnl >= 0 ? '+' : ''}${fmtMoney(t.pnl)}</div><div class="bal">bal ${fmtMoney(balanceAfter)}</div></div>
       </div>`;
     }).join('') || '<p style="font-size:12px;color:var(--text-dim,#777);">No closed trades yet at this point in the replay.</p>';
-
-    const log = document.getElementById('trade-log');
-    log.innerHTML = closedTrades.slice(-15).reverse().map(t =>
+    document.getElementById('trade-log').innerHTML = closed.slice(-15).reverse().map(t =>
       `${fmtTime(t.exit_time)}  ${t.direction > 0 ? 'LONG' : 'SHORT'}  entry ${t.entry_price.toFixed(5)} -> exit ${t.exit_price.toFixed(5)}  ${t.pnl >= 0 ? '+' : ''}${t.pnl.toFixed(2)}  (${t.exit_reason})`
     ).join('<br>');
-
-    renderManualPanel();
-    renderPropLimits();
   }
 
   function stepFrame(delta) {
-    cursor += delta;
+    const n = Math.max(1, view.step || 1);
+    cursor += delta * n;
     renderFrame();
     if (cursor >= BARS.length - 1) stopPlaying();
   }
+  function gotoBar(i) { stopPlaying(); cursor = i; renderFrame(true); }
+  function gotoTime() {
+    const v = document.getElementById('goto-time').value; if (!v || !BARS.length) return;
+    const t = Math.floor(new Date(v).getTime() / 1000);
+    const times = BARS.map(b => b.time);
+    gotoBar(Math.min(lowerBound(times, t), BARS.length - 1));
+  }
 
   function togglePlay() { playing ? stopPlaying() : startPlaying(); }
-
   function startPlaying() {
     if (cursor >= BARS.length - 1) cursor = 0;
     playing = true;
     document.getElementById('play-pause-btn').innerHTML = '&#9208; Pause';
     playTimer = setInterval(() => stepFrame(1), speedMs);
   }
-
   function stopPlaying() {
     playing = false;
     document.getElementById('play-pause-btn').innerHTML = '&#9654; Play';
@@ -582,33 +813,37 @@
 
   // Jump the cursor to the bar of the next/previous trade ENTRY relative to the current bar.
   function jumpTrade(dir) {
-    if (!BARS.length || !TRADES.length) return;
+    if (!BARS.length || !SORTED_TRADES.length) return;
     stopPlaying();
-    const now = BARS[cursor].time;
-    const times = TRADES.map(t => t.entry_time).sort((a, b) => a - b);
-    const target = dir > 0 ? times.find(t => t > now) : [...times].reverse().find(t => t < now);
-    if (target == null) return;
-    let idx = BARS.findIndex(b => b.time >= target);
-    if (idx < 0) idx = BARS.length - 1;
-    cursor = idx;
-    renderFrame();
+    const target = dir > 0 ? SORTED_TRADES.find(t => t.entryIdx > cursor) : [...SORTED_TRADES].reverse().find(t => t.entryIdx < cursor);
+    if (!target) return;
+    cursor = target.entryIdx;
+    renderFrame(true);
   }
 
   document.addEventListener('keydown', (e) => {
     const tag = (e.target && e.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === ' ') { e.preventDefault(); togglePlay(); }
-    else if (e.key === 'ArrowRight') { e.preventDefault(); stepFrame(1); }
-    else if (e.key === 'ArrowLeft') { e.preventDefault(); stepFrame(-1); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); if (e.shiftKey) { cursor += 10; renderFrame(true); } else stepFrame(1); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); if (e.shiftKey) { cursor -= 10; renderFrame(true); } else stepFrame(-1); }
+    else if (e.key === 'Home') { e.preventDefault(); gotoBar(0); }
+    else if (e.key === 'End') { e.preventDefault(); gotoBar(BARS.length - 1); }
     else if (e.key === 'n' || e.key === 'N') jumpTrade(1);
     else if (e.key === 'p' || e.key === 'P') jumpTrade(-1);
     else if (e.key === 'r' || e.key === 'R') resetReplay();
+    else if (e.key === 'b' || e.key === 'B') manualOrder(1);
+    else if (e.key === 's' || e.key === 'S') manualOrder(-1);
+    else if (e.key === 'c' || e.key === 'C') closeManualPosition();
   });
 
   function resetReplay() {
     stopPlaying();
-    cursor = 0;
-    renderFrame();
+    cursor = Math.min(60, Math.max(BARS.length - 1, 0));
+    lastRendered = -1;
+    manualPosition = null; manualTrades = []; manualVersion++; propTracker.invalidate();
+    drawManualLines();
+    renderFrame(true);
   }
 
   function updateSpeed() {
@@ -619,7 +854,7 @@
   document.getElementById('scrubber').addEventListener('input', (e) => {
     stopPlaying();
     cursor = parseInt(e.target.value, 10);
-    renderFrame();
+    renderFrame(true);
   });
 
   initCharts();

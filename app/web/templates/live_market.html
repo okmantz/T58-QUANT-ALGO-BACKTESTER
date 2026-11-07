@@ -5,6 +5,7 @@
 {% include '_head_common.html' %}
 <script src="/static/lightweight-charts.standalone.production.js"></script>
 <script src="/static/chart_drawing_tools.js"></script>
+<script src="/static/t58-chart-kit.js"></script>
 <style>
   /* Live Market page only -- self-contained light/dark variables so this
      one page can follow the desktop app's theme toggle without touching
@@ -219,20 +220,10 @@
   <span class="lm-status-badge lm-status-replay" id="lm-status-badge"><span class="lm-status-dot"></span><span id="lm-status-text">CONNECTING</span></span>
 </div>
 
+<div id="lm-kit-controls" style="margin-bottom:8px;"></div>
 <div class="lm-grid" id="lm-grid" data-layout="1">
 <div class="lm-chart-wrap lm-pane-1">
-  <div class="lm-hud" id="lm-hud">
-    <div class="sym" id="lm-hud-symbol">{{ initial_symbol }}</div>
-    <div class="row"><span id="lm-hud-ohlc">O -- H -- L -- C --</span></div>
-    <div class="row"><span id="lm-hud-change">-- (--%)</span> <span id="lm-hud-time" style="margin-left:8px;"></span></div>
-  </div>
-  <div class="lm-legend-toggle">
-    <span class="lm-chip on" data-series="ema20">EMA 20</span>
-    <span class="lm-chip on" data-series="ema50">EMA 50</span>
-    <span class="lm-chip on" data-series="vwap">VWAP</span>
-    <span class="lm-chip on" data-series="volume">VOL</span>
-  </div>
-  <div class="t58-draw-toolbar" id="lm-draw-toolbar" style="position:absolute;top:8px;right:8px;z-index:6;background:var(--lm-panel);border:1px solid var(--lm-border);border-radius:8px;padding:4px;"></div>
+  <div class="t58-draw-toolbar" id="lm-draw-toolbar" style="display:flex;gap:4px;flex-wrap:wrap;padding:4px 6px;border-bottom:1px solid var(--lm-border);"></div>
   <div id="lm-chart"></div>
   <img class="lm-watermark" src="/static/t58-mark-transparent.png" alt="">
 </div>
@@ -259,133 +250,41 @@
 
 <script>
 (function () {
-  if (typeof LightweightCharts === 'undefined') {
+  if (typeof LightweightCharts === 'undefined' || typeof T58ChartKit === 'undefined') {
     const wrap = document.querySelector('.lm-chart-wrap');
     if (wrap) {
       wrap.innerHTML = '<div style="padding:40px;text-align:center;color:var(--lm-down);font-size:13px;">'
-        + 'Chart library failed to load (static/lightweight-charts.standalone.production.js is missing or '
+        + 'Chart library failed to load (static/lightweight-charts.standalone.production.js or t58-chart-kit.js is missing or '
         + 'blocked). Reinstall/redownload the app files and try again.</div>';
     }
     return;
   }
-  const theme = document.documentElement.getAttribute('data-theme') || 'dark';
-  const css = getComputedStyle(document.documentElement);
-  const colors = {
-    bg: css.getPropertyValue('--lm-panel').trim(),
-    text: css.getPropertyValue('--lm-text').trim(),
-    textMuted: css.getPropertyValue('--lm-text-muted').trim(),
-    grid: css.getPropertyValue('--lm-grid').trim(),
-    border: css.getPropertyValue('--lm-border').trim(),
-    up: css.getPropertyValue('--lm-up').trim(),
-    down: css.getPropertyValue('--lm-down').trim(),
-  };
 
-  const chartEl = document.getElementById('lm-chart');
-  const chart = LightweightCharts.createChart(chartEl, {
-    layout: { background: { color: colors.bg }, textColor: colors.textMuted },
-    grid: { vertLines: { color: colors.grid }, horzLines: { color: colors.grid } },
-    rightPriceScale: { borderColor: colors.border },
-    timeScale: { borderColor: colors.border, timeVisible: true, secondsVisible: false },
-    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-    watermark: { visible: false },
-    autoSize: true,
+  // The main chart is the SAME configurable chart Interactive Replay uses (indicators, chart types, themes, the full drawing
+  // toolset); its settings are shared with Replay and the extra panes below.
+  const firstTime = (function () { try { return !localStorage.getItem('t58-chart-kit-v1'); } catch (e) { return false; } })();
+  const kit = T58ChartKit.create({
+    el: document.getElementById('lm-chart'),
+    controlsEl: document.getElementById('lm-kit-controls'),
+    drawToolbarEl: document.getElementById('lm-draw-toolbar'),
+    drawKey: 'live:' + ({{ initial_symbol | tojson }} || 'main'),
+    title: {{ initial_symbol | tojson }} || '',
   });
+  if (firstTime && !kit.prefs.indicators.length) { kit.addIndicator('ema'); kit.addIndicator('vwap'); }
+  window.__t58LiveKit = kit;
 
-  const candleSeries = chart.addCandlestickSeries({
-    upColor: colors.up, downColor: colors.down, borderVisible: false,
-    wickUpColor: colors.up, wickDownColor: colors.down,
-  });
-
-  const volumeSeries = chart.addHistogramSeries({
-    priceFormat: { type: 'volume' }, priceScaleId: 'lm-volume', color: colors.textMuted,
-  });
-  chart.priceScale('lm-volume').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
-
-  if (typeof T58ChartDrawingTools !== 'undefined') {
-    T58ChartDrawingTools.attach(chart, candleSeries, chartEl, document.getElementById('lm-draw-toolbar'));
-  }
-
-  const ema20Series = chart.addLineSeries({ color: (getComputedStyle(document.documentElement).getPropertyValue('--teal').trim() || '#35e0b0'), lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
-  const ema50Series = chart.addLineSeries({ color: '#8b7cff', lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
-  const vwapSeries  = chart.addLineSeries({ color: '#f0b429', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false });
-
-  let lastPriceLine = null;
-  let sessionHighLine = null, sessionLowLine = null;
-  let history = []; // full bar history this chart currently holds, for EMA/VWAP recompute
-
-  function ema(values, period) {
-    const k = 2 / (period + 1);
-    let prev = null;
-    return values.map(v => {
-      prev = prev === null ? v : v * k + prev * (1 - k);
-      return prev;
-    });
-  }
-
-  function vwapSeriesFromBars(bars) {
-    let cumPV = 0, cumVol = 0;
-    return bars.map(b => {
-      const typical = (b.high + b.low + b.close) / 3;
-      cumPV += typical * (b.volume || 0);
-      cumVol += (b.volume || 0);
-      return cumVol > 0 ? cumPV / cumVol : b.close;
-    });
-  }
-
-  function recomputeOverlays() {
-    if (history.length === 0) return;
-    const closes = history.map(b => b.close);
-    const ema20 = ema(closes, 20);
-    const ema50 = ema(closes, 50);
-    const vwap = vwapSeriesFromBars(history);
-    ema20Series.setData(history.map((b, i) => ({ time: b.time, value: ema20[i] })));
-    ema50Series.setData(history.map((b, i) => ({ time: b.time, value: ema50[i] })));
-    vwapSeries.setData(history.map((b, i) => ({ time: b.time, value: vwap[i] })));
-
+  function updateStats() {
+    const bars = kit.bars;
+    if (!bars.length) return;
     let high = -Infinity, low = Infinity;
-    history.forEach(b => { high = Math.max(high, b.high); low = Math.min(low, b.low); });
-    document.getElementById('lm-stat-high').textContent = high.toFixed(5).replace(/0+$/, '').replace(/\.$/, '');
-    document.getElementById('lm-stat-low').textContent = low.toFixed(5).replace(/0+$/, '').replace(/\.$/, '');
-    document.getElementById('lm-stat-bars').textContent = history.length;
-
-    if (sessionHighLine) candleSeries.removePriceLine(sessionHighLine);
-    if (sessionLowLine) candleSeries.removePriceLine(sessionLowLine);
-    sessionHighLine = candleSeries.createPriceLine({ price: high, color: colors.textMuted, lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, axisLabelVisible: true, title: 'HIGH' });
-    sessionLowLine = candleSeries.createPriceLine({ price: low, color: colors.textMuted, lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, axisLabelVisible: true, title: 'LOW' });
+    bars.forEach(b => { if (b.high > high) high = b.high; if (b.low < low) low = b.low; });
+    const f = v => v.toFixed(5).replace(/0+$/, '').replace(/\.$/, '');
+    document.getElementById('lm-stat-high').textContent = f(high);
+    document.getElementById('lm-stat-low').textContent = f(low);
+    document.getElementById('lm-stat-bars').textContent = bars.length;
   }
 
-  function updateHud(bar, prevClose) {
-    document.getElementById('lm-hud-ohlc').innerHTML =
-      `O <b>${bar.open}</b> H <b>${bar.high}</b> L <b>${bar.low}</b> C <b>${bar.close}</b>`;
-    const change = prevClose ? bar.close - prevClose : 0;
-    const pct = prevClose ? (change / prevClose) * 100 : 0;
-    const el = document.getElementById('lm-hud-change');
-    el.textContent = `${change >= 0 ? '+' : ''}${change.toFixed(5)} (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`;
-    el.className = change >= 0 ? 'chg-up' : 'chg-down';
-    const d = new Date(bar.time * 1000);
-    document.getElementById('lm-hud-time').textContent = d.toLocaleString();
-  }
-
-  chart.subscribeCrosshairMove(param => {
-    if (!param.time || !param.seriesData) return;
-    const bar = param.seriesData.get(candleSeries);
-    if (!bar) return;
-    const idx = history.findIndex(b => b.time === param.time);
-    const prevClose = idx > 0 ? history[idx - 1].close : null;
-    updateHud(bar, prevClose);
-  });
-
-  document.querySelectorAll('.lm-chip').forEach(chip => {
-    chip.addEventListener('click', () => {
-      const key = chip.dataset.series;
-      const seriesMap = { ema20: ema20Series, ema50: ema50Series, vwap: vwapSeries, volume: volumeSeries };
-      const s = seriesMap[key];
-      const on = chip.classList.toggle('on');
-      s.applyOptions({ visible: on });
-    });
-  });
-
-  document.getElementById('lm-fit').addEventListener('click', () => chart.timeScale().fitContent());
+  document.getElementById('lm-fit').addEventListener('click', () => kit.fit());
 
   // Rough symbol -> TradingView-ticker mapping for the common cases this
   // app already deals with -- mirrors the desktop app's
@@ -430,10 +329,12 @@
 
   let pollTimer = null;
   let seeded = false;
+  let nBars = 0;
 
   function currentSymbolParam() {
     return sourceSel.value === 'replay' ? datasetSel.value : symbolInput.value.trim();
   }
+  function labelFor(symbol) { return symbol.split('/').pop().replace(/\.csv$/i, ''); }
 
   function setStatus(status) {
     const badge = document.getElementById('lm-status-badge');
@@ -455,9 +356,7 @@
     const symbol = currentSymbolParam();
     if (!symbol) {
       setStatus('unavailable');
-      if (sourceSel.value === 'replay') {
-        document.getElementById('lm-hud-symbol').textContent = 'No dataset -- import a CSV on Step 1 first';
-      }
+      if (sourceSel.value === 'replay') kit.setTitle('No dataset -- import a CSV on Step 1 first');
       return;
     }
     const params = new URLSearchParams({
@@ -469,37 +368,20 @@
       .then(data => {
         setStatus(data.status);
         if (!data.bars || data.bars.length === 0) return;
+        const first = !seeded;
         seeded = true;
-        if (history.length === 0 || data.bars.length > 30) {
-          // Full (re)seed -- either first load or a source/symbol change.
-          history = data.bars;
-          candleSeries.setData(history);
-          volumeSeries.setData(history.map(b => ({
-            time: b.time, value: b.volume || 0,
-            color: b.close >= b.open ? colors.up : colors.down,
-          })));
-          chart.timeScale().fitContent();
+        if (nBars === 0 || data.bars.length > 30) {
+          // Full (re)seed -- first load or a source/symbol change.
+          kit.setBars(data.bars);
+          nBars = data.bars.length;
+          kit.fit();
         } else {
-          // Incremental: update only the last bar(s) via the native
-          // series.update() mechanism -- this is the whole point of
-          // Lightweight Charts' real-time API: no full redraw.
-          data.bars.forEach(bar => {
-            const existingIdx = history.findIndex(b => b.time === bar.time);
-            if (existingIdx >= 0) history[existingIdx] = bar; else history.push(bar);
-            candleSeries.update(bar);
-            volumeSeries.update({ time: bar.time, value: bar.volume || 0, color: bar.close >= bar.open ? colors.up : colors.down });
-          });
+          // Incremental: only the last bar(s) change -- no full redraw, indicators extend in place.
+          data.bars.forEach(bar => kit.updateBar(bar));
+          nBars = kit.bars.length;
         }
-        recomputeOverlays();
-        const last = history[history.length - 1];
-        const prev = history.length > 1 ? history[history.length - 2].close : null;
-        updateHud(last, prev);
-        document.getElementById('lm-hud-symbol').textContent = symbol.split('/').pop().replace(/\.csv$/i, '');
-        if (lastPriceLine) candleSeries.removePriceLine(lastPriceLine);
-        lastPriceLine = candleSeries.createPriceLine({
-          price: last.close, color: last.close >= (prev || last.close) ? colors.up : colors.down,
-          lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'LAST',
-        });
+        if (first) kit.setTitle(labelFor(symbol) + (sourceSel.value === 'replay' ? '' : '  ' + timeframeSel.value));
+        updateStats();
       })
       .catch(() => setStatus('unavailable'));
   }
@@ -511,7 +393,7 @@
       .then(r => r.json())
       .then(data => {
         const markers = data.markers || [];
-        candleSeries.setMarkers(markers);
+        kit.setMarkers(markers);
         document.getElementById('lm-stat-trades').textContent = markers.length;
       })
       .catch(() => {});
@@ -519,12 +401,14 @@
 
   function restart() {
     seeded = false;
-    history = [];
-    candleSeries.setMarkers([]);
+    nBars = 0;
+    kit.setBars([]);
+    kit.setMarkers([]);
+    kit.setDrawKey('live:' + (currentSymbolParam() || 'main'));   // drawings are remembered per symbol
     fetchBars();
     fetchTrades();
     if (pollTimer) clearInterval(pollTimer);
-    pollTimer = setInterval(() => { fetchBars(); fetchTrades(); }, 1500);
+    pollTimer = setInterval(() => { if (!document.hidden) { fetchBars(); fetchTrades(); } }, 1500);
   }
 
   document.getElementById('lm-apply').addEventListener('click', restart);
@@ -572,18 +456,13 @@
     this.tf = cloneSelect(tfMain, cfg.timeframe || tfMain.value);
     var go = mk('button', 'lm-btn', 'APPLY'); go.type = 'button';
     [this.title, this.src, this.sym, this.ds, this.tf, go].forEach(function (n) { bar.appendChild(n); });
+    var tools = mk('div', 'lm-pane-bar'); tools.style.gap = '4px';
+    var ctl = mk('div'), dtb = mk('div'); dtb.style.cssText = 'display:flex;gap:4px;flex-wrap:wrap';
+    tools.appendChild(ctl); tools.appendChild(dtb);
     var box = mk('div', 'lm-pane-chart');
-    el.appendChild(bar); el.appendChild(box);
-    this.chart = LightweightCharts.createChart(box, {
-      layout: { background: { color: C.bg }, textColor: C.muted },
-      grid: { vertLines: { color: C.grid }, horzLines: { color: C.grid } },
-      rightPriceScale: { borderColor: C.border },
-      timeScale: { borderColor: C.border, timeVisible: true, secondsVisible: false },
-      crosshair: { mode: LightweightCharts.CrosshairMode.Normal }, autoSize: true,
-    });
-    this.candles = this.chart.addCandlestickSeries({ upColor: C.up, downColor: C.down, borderVisible: false, wickUpColor: C.up, wickDownColor: C.down });
-    this.vol = this.chart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: 'v', color: C.muted });
-    this.chart.priceScale('v').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
+    el.appendChild(bar); el.appendChild(tools); el.appendChild(box);
+    // each extra pane is the same configurable chart as the main one: indicators, chart types, themes, full drawing tools
+    this.kit = T58ChartKit.create({ el: box, controlsEl: ctl, drawToolbarEl: dtb, drawKey: 'live-pane' + idx + ':' + (cfg.symbol || cfg.dataset || ''), title: '' });
     function sync() {
       var replay = self.src.value === 'replay';
       self.sym.style.display = replay ? 'none' : ''; self.ds.style.display = replay ? '' : 'none'; self.tf.style.display = replay ? 'none' : '';
@@ -603,24 +482,16 @@
       var label = symbol.split('/').pop().replace(/\.csv$/i, '');
       if (!data.bars || !data.bars.length) { self.setTitle(label, (data.status || 'no data').toUpperCase()); return; }
       self.seeded = true;
-      if (!self.history.length || data.bars.length > 30) {
-        self.history = data.bars; self.candles.setData(self.history);
-        self.vol.setData(self.history.map(function (b) { return { time: b.time, value: b.volume || 0, color: b.close >= b.open ? C.up : C.down }; }));
-        self.chart.timeScale().fitContent();
-      } else {
-        data.bars.forEach(function (b) {
-          var i = self.history.findIndex(function (x) { return x.time === b.time; });
-          if (i >= 0) self.history[i] = b; else self.history.push(b);
-          self.candles.update(b);
-          self.vol.update({ time: b.time, value: b.volume || 0, color: b.close >= b.open ? C.up : C.down });
-        });
-      }
-      var last = self.history[self.history.length - 1];
+      if (!self.kit.bars.length || data.bars.length > 30) { self.kit.setBars(data.bars); self.kit.fit(); }
+      else data.bars.forEach(function (b) { self.kit.updateBar(b); });
+      var last = self.kit.bars[self.kit.bars.length - 1];
+      self.kit.setTitle(label);
       self.setTitle(label + '  ' + last.close, (data.status || '').toUpperCase());
     }).catch(function () { self.setTitle('Chart ' + self.idx, 'UNAVAILABLE'); });
   };
   Pane.prototype.restart = function () {
-    this.stop(); this.seeded = false; this.history = [];
+    this.stop(); this.seeded = false; this.history = []; this.kit.setBars([]);
+    this.kit.setDrawKey('live-pane' + this.idx + ':' + (this.symbol() || ''));
     saved['p' + this.idx] = { source: this.src.value, symbol: this.sym.value.trim(), dataset: this.ds.value, timeframe: this.tf.value };
     persist();
     var self = this;
