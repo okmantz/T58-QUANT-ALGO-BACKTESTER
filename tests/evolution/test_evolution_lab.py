@@ -339,6 +339,19 @@ def test_generate_population_keeps_minority_families_after_convergence():
         assert counts[fam] >= cfg.min_immigrants_per_family
 
 
+def test_elites_still_breed_children_when_every_family_is_active(tmp_path):
+    """Default config, every family active: the per-family immigrant floor alone (about one per family) fills the population, but the
+    elites must still breed a real share of it (min_elite_children_frac), not one token child each."""
+    cfg = EvolutionConfig(random_seed=1, use_structural_operators=False, knowledge_graph_path=str(tmp_path / "kg.json"))
+    runner = EvolutionRunner(_trending_df(n=500), RiskConfig(), PropRules(), cfg)
+    gen0 = runner._generate_population_core(0, [])
+    elites = [(spec, meta) for _, spec, meta in gen0 if meta.get("family") != "grammar"][:cfg.elite_keep]
+    assert len(elites) == cfg.elite_keep
+    pop = runner._generate_population_core(3, elites)
+    children = [m for _, _, m in pop if m.get("mutated_from")]
+    assert len(children) >= int(cfg.population_size * cfg.min_elite_children_frac) - cfg.elite_keep
+
+
 def test_diversify_elites_caps_any_single_family_share():
     cfg = EvolutionConfig(elite_keep=10, max_elite_frac_per_family=0.5,
                            knowledge_graph_path="/tmp/t58_test_kg_diversify.json")
@@ -475,7 +488,9 @@ def test_evolution_runner_stop_and_wait_returns_true_once_thread_exits(tmp_path)
 def test_auto_excludes_dead_end_families_when_none_pinned(tmp_path, monkeypatch):
     """EvolutionConfig.auto_exclude_dead_end_families (on by default) must
     resolve cfg.families to every family EXCEPT a flagged dead end, exactly
-    once at construction, when the caller didn't pin an explicit list."""
+    once at construction, when the caller didn't pin an explicit list. (Legacy narrowed mode: the default "use every family"
+    mode reports dead ends but never removes them -- see test_use_all_families_mode_keeps_dead_end_families.)"""
+    monkeypatch.setenv("T58_USE_ALL_FAMILIES", "0")
     monkeypatch.setattr("app.search.family_health.get_app_base_dir", lambda: tmp_path / "base")
     from app.search.results_db import ResultsDB
     search_dir = tmp_path / "base" / "reports" / "search"
@@ -491,6 +506,24 @@ def test_auto_excludes_dead_end_families_when_none_pinned(tmp_path, monkeypatch)
     assert runner.cfg.families is not None
     assert "mean_reversion_band" not in runner.cfg.families
     assert "trend_breakout" in runner.cfg.families  # healthy/untested families remain
+
+
+def test_use_all_families_mode_keeps_dead_end_families(tmp_path, monkeypatch):
+    """Default mode ("use everything"): a flagged dead-end family stays in the search; cfg.families is left unresolved."""
+    monkeypatch.delenv("T58_USE_ALL_FAMILIES", raising=False)
+    monkeypatch.setattr("app.search.family_health.get_app_base_dir", lambda: tmp_path / "base")
+    from app.search.results_db import ResultsDB
+    search_dir = tmp_path / "base" / "reports" / "search"
+    with ResultsDB(search_dir / "search_x.db") as db:
+        db.create_run("run1", mode="family", family="mean_reversion_band", instrument="X",
+                       timeframe="Y", total_candidates=40, config={})
+        for i in range(40):
+            db.insert_candidate("run1", f"c{i}", "stage1", {"family": "mean_reversion_band", "passed_stage1": True})
+        db.finish_run("run1")
+
+    cfg = EvolutionConfig(knowledge_graph_path=str(tmp_path / "kg.jsonl"))
+    runner = EvolutionRunner(_trending_df(n=500), RiskConfig(), PropRules(), cfg, progress_cb=None)
+    assert runner.cfg.families is None
 
 
 def test_does_not_override_an_explicit_family_list(tmp_path, monkeypatch):
