@@ -213,17 +213,65 @@ MAC_NOTE = """\
 """
 
 
-def app_readme(platform: str, exe_name: str, desktop: bool) -> str:
+CHROMEBOOK_README = """\
+T58 Quant Algo Backtester  --  READ ME FIRST  (Chromebook)
+============================================
+
+This build runs inside ChromeOS's built-in Linux environment (Crostini, Debian 12).
+It will NOT run in the Android or Chrome-app side of ChromeOS -- turn Linux on first.
+
+0. TURN ON LINUX (once, ~5 minutes)
+   Settings -> About ChromeOS -> Developers -> Linux development environment -> Turn on.
+   Give it at least 15 GB of disk (the app is ~1.5 GB and the market data ~1 GB).
+   Chromebooks need to be 2019 or newer, with 8 GB RAM recommended for real searches.
+
+1. COPY THE ZIP INTO LINUX
+   Download the zip, then in the Files app drag it into "Linux files".
+
+2. OPEN THE LINUX TERMINAL and run:
+
+       cd ~
+       unzip {zip_name} -d T58
+       cd T58
+       bash install_chromebook.sh
+
+   The installer marks the program runnable, adds a "T58 Quant Algo Backtester" icon to your
+   ChromeOS launcher (Linux apps folder) and starts it. {launch_note}
+
+3. MARKET DATA is a separate download (so this zip stays small):
+   download  T58-Market-Data.zip  from the same release/run, drag it into "Linux files",
+   and run   unzip T58-Market-Data.zip -d ~/T58   so you end up with  data/raw/EURUSD/...
+   next to the program. Restart the app.
+
+Troubleshooting
+---------------
+* "Linux" is missing from Settings       -> your Chromebook or school/work account has it disabled.
+* "cannot execute binary file"           -> you downloaded the wrong CPU build. Run  uname -m  :
+                                            x86_64 -> the "Chromebook" zip, aarch64 -> the "Chromebook-ARM" zip.
+* Web app opens a blank tab              -> open  http://penguin.linux.test:5000  (or the address it prints).
+* App is slow / killed during a search   -> Settings -> Developers -> Linux -> Disk size, and close other tabs;
+                                            heavy optimizer runs want 8 GB RAM.
+* MetaTrader 5 Forward Test              -> not available on Chromebook (MT5 needs Windows/Wine); everything else works.
+* The program does not start             -> run it from the terminal and read the message;
+                                            logs are in  data/logs/  next to the program.
+"""
+
+
+def app_readme(platform: str, exe_name: str, desktop: bool, zip_name: str = "T58-Quant-Algo-Backtester-Chromebook.zip") -> str:
     """README_FIRST.txt for the app zip. Windows keeps its long-standing text."""
     if platform == "windows":
         return APP_README
+    if platform == "chromebook":
+        launch = ("It opens the desktop window." if desktop else
+                  "It starts the web app and ChromeOS opens it in Chrome automatically.")
+        return CHROMEBOOK_README.format(zip_name=zip_name, launch_note=launch)
     launch = ("It opens the desktop window." if desktop else
               "It starts the web app and opens it in your browser (or open the address it prints).")
     return UNIX_README.format(platform="macOS" if platform == "macos" else "Linux", exe=exe_name,
                               launch_note=launch, mac_note=("\n" + MAC_NOTE) if platform == "macos" else "")
 
 
-def collect_app_entries(dist: Path, tmp_dir: Path, platform: str = "windows") -> list[Entry]:
+def collect_app_entries(dist: Path, tmp_dir: Path, platform: str = "windows", zip_name: str = "") -> list[Entry]:
     """The app zip: PyInstaller folder at the zip root, plus the small extras."""
     entries = _walk(dist, "")
     # A PyInstaller build folder holds ONLY the exe and _internal/. Anything else
@@ -236,7 +284,7 @@ def collect_app_entries(dist: Path, tmp_dir: Path, platform: str = "windows") ->
             f"shipped (e.g. .flask_secret_key). Test the app from a copy of the build folder, never from it."
         )
     top_level = [a for _, a in entries if "/" not in a]
-    # Windows: NAME.exe; Linux/macOS builds (used for testing): an extension-less binary.
+    # Windows: NAME.exe; Linux/macOS/Chromebook builds (used for testing): an extension-less binary.
     if not any(a.lower().endswith(".exe") or "." not in a for a in top_level):
         raise PackagingError(f"{dist} has no top-level executable -- did the PyInstaller build finish?")
     if not any(a.startswith("_internal/") for _, a in entries):
@@ -254,8 +302,14 @@ def collect_app_entries(dist: Path, tmp_dir: Path, platform: str = "windows") ->
     phone = ROOT / "HOW_TO_OPEN_ON_YOUR_PHONE.md"
     if phone.is_file():
         entries.append((phone, "HOW_TO_OPEN_ON_YOUR_PHONE.md"))
+    if platform == "chromebook":
+        installer = ROOT / "launchers" / "install_chromebook.sh"
+        if not installer.is_file():
+            raise PackagingError(f"{installer} is missing -- the Chromebook zip needs its installer.")
+        entries.append((installer, "install_chromebook.sh"))
     entries.append(_text_entry(tmp_dir, "README_FIRST.txt",
-                               app_readme(platform, dist.name, desktop="Web" not in dist.name)))
+                               app_readme(platform, dist.name, desktop="Web" not in dist.name,
+                                          zip_name=zip_name or "T58-Quant-Algo-Backtester-Chromebook.zip")))
     return entries
 
 
@@ -374,7 +428,7 @@ def main(argv: list[str] | None = None) -> int:
     app_p.add_argument("--out", required=True, type=Path)
     app_p.add_argument("--follow-symlinks", action="store_true",
                        help="testing only: store symlink targets (builds made on Linux/macOS contain symlinks)")
-    app_p.add_argument("--platform", choices=["windows", "macos", "linux"], default="windows",
+    app_p.add_argument("--platform", choices=["windows", "macos", "linux", "chromebook"], default="windows",
                        help="selects the README_FIRST.txt wording (default: windows)")
     data_p = sub.add_parser("data", help="zip data/raw/** as the separate market-data pack")
     data_p.add_argument("--out", required=True, type=Path)
@@ -384,7 +438,7 @@ def main(argv: list[str] | None = None) -> int:
 
     tmp_dir = Path(os.environ.get("RUNNER_TEMP") or ROOT / ".package_tmp") / "t58_pkg_text"
     try:
-        entries = collect_app_entries(args.dist, tmp_dir, args.platform) if args.kind == "app" else collect_data_entries(tmp_dir)
+        entries = collect_app_entries(args.dist, tmp_dir, args.platform, args.out.name) if args.kind == "app" else collect_data_entries(tmp_dir)
         problems = validate_names(entries, zip_stem=args.out.stem)
         if problems:
             print(f"REFUSING to build {args.out.name}: {len(problems)} file-name problem(s) Windows could not extract:",
