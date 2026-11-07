@@ -44,6 +44,9 @@ class NetProfitTestConfig:
     max_p95_drawdown_pct: float = 30.0           # a LIVE account has no firm limit; this is the trader's own tolerance
     ruin_equity_fraction: float = 0.5            # "ruin" = equity at or below this fraction of the starting equity
     max_ruin_probability_pct: float = 5.0
+    min_sharpe: float = 0.75                     # annualised Sharpe of DAILY returns (net of costs); a live account keeps what the curve earns
+    min_psr: float = 0.90                        # Probabilistic Sharpe: P(true Sharpe > 0) given sample length, skew and kurtosis
+    min_calmar: float = 0.5                      # annualised return / max drawdown
     random_seed: int | None = 42
 
 
@@ -205,6 +208,33 @@ def _stability(pnl: np.ndarray, when: pd.DatetimeIndex, start: float) -> dict:
             "top_decile_share_of_profit_pct": (top_decile / total * 100.0) if total > 0 else None}
 
 
+def _risk_adjusted(pnl: np.ndarray, when: pd.DatetimeIndex, start: float, max_dd_frac: float) -> dict:
+    """Return-per-risk statistics a live account lives or dies by (none of these exist in the prop-firm test): annualised Sharpe and Sortino of
+    DAILY returns on starting equity, Calmar (annual return / max drawdown) and the Probabilistic Sharpe Ratio (Bailey & Lopez de Prado:
+    P(true Sharpe > 0) after the sample's length, skew and kurtosis)."""
+    from math import erf
+    daily = pd.Series(pnl, index=when).groupby(when.normalize()).sum()
+    if len(daily) > 1:
+        daily = daily.reindex(pd.bdate_range(daily.index.min(), daily.index.max()), fill_value=0.0)
+    r = daily.to_numpy(dtype=float) / float(start)
+    t = int(r.size)
+    if t < 5 or float(r.std(ddof=1)) <= 0:
+        return {"n_days": t, "sharpe": None, "sortino": None, "calmar": None, "psr": None, "annual_return_pct": None}
+    mu, sd = float(r.mean()), float(r.std(ddof=1))
+    sr_d = mu / sd
+    down = np.minimum(r, 0.0)
+    dsd = float(np.sqrt(np.mean(down ** 2)))
+    skew = float(np.mean(((r - mu) / sd) ** 3))
+    kurt = float(np.mean(((r - mu) / sd) ** 4))
+    denom = 1.0 - skew * sr_d + (kurt - 1.0) / 4.0 * sr_d ** 2
+    z = sr_d * math.sqrt(max(t - 1, 1)) / math.sqrt(denom) if denom > 0 else 0.0
+    psr = 0.5 * (1.0 + erf(z / math.sqrt(2.0)))
+    ann_ret = mu * 252.0
+    return {"n_days": t, "sharpe": sr_d * math.sqrt(252.0), "sortino": (mu / dsd * math.sqrt(252.0)) if dsd > 0 else None,
+            "calmar": (ann_ret / max_dd_frac) if max_dd_frac > 0 else None, "psr": float(psr), "annual_return_pct": ann_ret * 100.0,
+            "skew": skew, "kurtosis": kurt}
+
+
 def run_net_profit_test(trades, cfg: NetProfitTestConfig | None = None, restress=None) -> NetProfitTestResult:
     """Run the live-account test on ``trades``. ``restress(multiple) -> trades`` optionally re-runs the backtest at stressed costs."""
     cfg = cfg or NetProfitTestConfig()
@@ -231,6 +261,8 @@ def run_net_profit_test(trades, cfg: NetProfitTestConfig | None = None, restress
     mc = _monte_carlo(pnl, groups, cfg, rng)
     stress = _cost_stress(ts, pnl, cfg.cost_stress_multiples, restress)
     stab = _stability(pnl, when, start)
+    risk_adj = _risk_adjusted(pnl, when, start, dd_frac)
+    edge["risk_adjusted"] = risk_adj
 
     reasons: list = []
     hard: list = []
@@ -249,6 +281,13 @@ def run_net_profit_test(trades, cfg: NetProfitTestConfig | None = None, restress
         reasons.append(f"95th-percentile drawdown {mc['dd_p95_pct']:.0f}% exceeds your {cfg.max_p95_drawdown_pct:.0f}% tolerance")
     if mc["p_ruin_pct"] > cfg.max_ruin_probability_pct:
         reasons.append(f"{mc['p_ruin_pct']:.1f}% chance of losing half the account (cap {cfg.max_ruin_probability_pct:.0f}%)")
+    if risk_adj.get("sharpe") is not None:
+        if risk_adj["sharpe"] < cfg.min_sharpe:
+            reasons.append(f"annualised Sharpe {risk_adj['sharpe']:.2f} < {cfg.min_sharpe:.2f}")
+        if risk_adj["psr"] is not None and risk_adj["psr"] < cfg.min_psr:
+            reasons.append(f"Probabilistic Sharpe {risk_adj['psr']:.0%} < {cfg.min_psr:.0%}: the Sharpe is not distinguishable from luck at this sample size")
+        if risk_adj["calmar"] is not None and risk_adj["calmar"] < cfg.min_calmar:
+            reasons.append(f"Calmar {risk_adj['calmar']:.2f} < {cfg.min_calmar:.2f}: return does not pay for the drawdown")
     s15 = stress.get(1.5)
     if s15 is not None and s15["net_profit"] <= 0 and net > 0:
         hard.append("profit disappears at 1.5x costs: the edge is smaller than the cost uncertainty")
