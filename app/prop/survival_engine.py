@@ -692,7 +692,10 @@ def run_prop_survival_analysis(
 
     rng = np.random.default_rng(cfg.random_seed)
     base_pnls = np.array([t.pnl for t in trades], dtype=float)
-    base_dates = [pd.Timestamp(t.entry_time).normalize() for t in trades]
+    # 2026-11-07 canonical-engine fix: raw entry timestamps (NOT midnight-normalised) so the 17:00 CT session roll buckets every
+    # trade into the same session day as the direct simulate_account call -- see app.prop.lifecycle.canonical_trade_dates.
+    from app.prop.lifecycle import canonical_trade_dates
+    base_dates = canonical_trade_dates(trades)
     day_structure = precompute_day_structure(base_dates)
 
     evaluation, funded, funnel = _run_single_attempt_survival(base_pnls, base_dates, rules, cfg, day_structure, rng)
