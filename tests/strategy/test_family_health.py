@@ -14,6 +14,13 @@ from app.search.family_health import (
 from app.search.results_db import ResultsDB
 
 
+@pytest.fixture(autouse=True)
+def _legacy_narrowed_mode(monkeypatch):
+    """These tests exercise the dead-end EXCLUSION logic, which only runs in the legacy narrowed mode. The default ("use every
+    family", 2026-11-07) reports dead ends but never removes them; test_use_all_families_mode_reports_but_never_excludes covers that."""
+    monkeypatch.setenv("T58_USE_ALL_FAMILIES", "0")
+
+
 def _make_search_db(path, family, n_tested, n_passed, run_id="run1"):
     with ResultsDB(path) as db:
         db.create_run(run_id, mode="family", family=family, instrument="X", timeframe="Y",
@@ -207,3 +214,15 @@ def test_apply_family_exclusions_allows_exclusion_when_plenty_of_survivors_remai
     assert families is not None
     assert dead_family not in families
     assert excluded == [dead_family]
+
+
+def test_use_all_families_mode_reports_but_never_excludes(tmp_path, monkeypatch):
+    """Default mode: a dead-end family is reported in `excluded` for the UI but the search space is never narrowed."""
+    monkeypatch.delenv("T58_USE_ALL_FAMILIES", raising=False)
+    search_dir = tmp_path / "search"
+    evo_dir = tmp_path / "evolution"
+    _make_search_db(search_dir / "search_a.db", "mean_reversion_band", n_tested=40, n_passed=0)
+    _make_search_db(search_dir / "search_b.db", "trend_breakout", n_tested=40, n_passed=2, run_id="run2")
+    families, excluded = apply_family_exclusions(search_dir, evo_dir, min_samples=30)
+    assert families is None
+    assert excluded == ["mean_reversion_band"]
