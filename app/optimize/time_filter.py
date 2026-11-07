@@ -84,8 +84,8 @@ def grid_from_trades(trades) -> tuple[list, list]:
     for t in trades or []:
         try:
             ts = pd.Timestamp(t.entry_time)
-            pnl[int(ts.dayofweek)][int(ts.hour)] += float(t.pnl)
-            cnt[int(ts.dayofweek)][int(ts.hour)] += 1
+            pnl[int(ts.day_of_week)][int(ts.hour)] += float(t.pnl)
+            cnt[int(ts.day_of_week)][int(ts.hour)] += 1
         except Exception:  # noqa: BLE001
             continue
     return pnl, cnt

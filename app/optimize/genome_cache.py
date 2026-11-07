@@ -37,5 +37,9 @@ class MemoTable:
             self.misses += 1
             return self._d.setdefault(key, value)
 
+    def has(self, key: Any) -> bool:
+        with self._lock:
+            return key in self._d
+
     def __len__(self) -> int:
         return len(self._d)
