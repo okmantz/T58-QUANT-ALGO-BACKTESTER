@@ -212,12 +212,12 @@ def _calendar_lookup(f: pd.DataFrame, fn) -> pd.Series:
 
 
 def weekday_number(f, p, c, l):
-    return _ts(f).dt.dayofweek.astype(float)
+    return _ts(f).dt.day_of_week.astype(float)
 
 
 def _third_friday(y: int, m: int) -> pd.Timestamp:
     first = pd.Timestamp(year=y, month=m, day=1)
-    return first + pd.Timedelta(days=(4 - first.dayofweek) % 7 + 14)
+    return first + pd.Timedelta(days=(4 - first.day_of_week) % 7 + 14)
 
 
 def month_end_window(f, p, c, l):
@@ -286,7 +286,7 @@ def pre_holiday(f, p, c, l):
         if not bd.is_on_offset(d):
             return 0.0
         nxt = d + pd.Timedelta(days=1)
-        while nxt.dayofweek >= 5:
+        while nxt.day_of_week >= 5:
             nxt += pd.Timedelta(days=1)
         return 0.0 if bd.is_on_offset(nxt) else 1.0
     return _calendar_lookup(f, fn)

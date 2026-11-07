@@ -146,7 +146,7 @@ def signals_from_conditions(
 # specific strategy trade on Sundays" without needing to touch that
 # strategy's actual entry/exit logic at all.
 #
-# Convention: 0=Monday .. 6=Sunday, matching pandas' own Series.dt.dayofweek
+# Convention: 0=Monday .. 6=Sunday, matching pandas' own Series.dt.day_of_week
 # (and Manual Strategy Builder's pre-existing `day_of_week` condition, for
 # consistency across the app) -- NOT Python's calendar.weekday() (same
 # numbering, mentioned only to rule out confusion) and NOT a 1-indexed or
@@ -278,7 +278,7 @@ def apply_days_of_week_exclusion(df: pd.DataFrame, signals: pd.Series, strategy)
     excluded = resolve_excluded_days_of_week(strategy)
     if not excluded or "timestamp" not in df.columns:
         return signals
-    dow = pd.to_datetime(df["timestamp"]).dt.dayofweek.to_numpy()
+    dow = pd.to_datetime(df["timestamp"]).dt.day_of_week.to_numpy()
     mask = np.isin(dow, list(excluded))
     if not mask.any():
         return signals

@@ -416,7 +416,7 @@ class ManualStrategy(Strategy):
             return self._session_mask(ts, session_start, session_end).astype(int)
 
         if kind == "day_of_week":
-            # 0=Monday..6=Sunday, matching pandas' own dt.dayofweek -- lets
+            # 0=Monday..6=Sunday, matching pandas' own dt.day_of_week -- lets
             # a family bet on a specific calendar-effect day rather than an
             # intraday clock window (see `time_of_day` above for that case).
             ts = self._operand_local_ts(work["timestamp"], operand, work)
@@ -425,7 +425,7 @@ class ManualStrategy(Strategy):
                 target = operand.get("day", 0)
                 days = [target]
             days = {int(d) for d in days}
-            return ts.dt.dayofweek.isin(days).astype(int)
+            return ts.dt.day_of_week.isin(days).astype(int)
 
         if kind == "candle_direction":
             bullish = work["close"] > work["open"]

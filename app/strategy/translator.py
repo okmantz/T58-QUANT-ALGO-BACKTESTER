@@ -2862,10 +2862,10 @@ def _python_declare_indicators(indicators: dict[tuple, _Operand]) -> tuple[list[
             elif op.kind == "day_of_week":
                 if op.days:
                     name = "day_of_week_" + "_".join(str(d) for d in op.days)
-                    lines.append(f"{name} = _ts.dt.dayofweek.isin([{', '.join(str(d) for d in op.days)}]).astype(int)")
+                    lines.append(f"{name} = _ts.dt.day_of_week.isin([{', '.join(str(d) for d in op.days)}]).astype(int)")
                     reg(op, name)
                 else:
-                    lines.append("day_of_week_all = _ts.dt.dayofweek")
+                    lines.append("day_of_week_all = _ts.dt.day_of_week")
                     reg(op, "day_of_week_all")
 
     # Classic single-series indicators.

@@ -198,7 +198,7 @@ def _seasonal(f: pd.DataFrame) -> pd.DataFrame:
     from app.strategy.indicators_v11 import _minute_of_day, _ts
     t = _ts(f)
     m = _minute_of_day(t).astype(float)
-    dow = t.dt.dayofweek
+    dow = t.dt.day_of_week
     cols = {"s1": np.sin(2 * np.pi * m / 1440.0), "c1": np.cos(2 * np.pi * m / 1440.0),
             "s2": np.sin(4 * np.pi * m / 1440.0), "c2": np.cos(4 * np.pi * m / 1440.0)}
     for d in range(4):

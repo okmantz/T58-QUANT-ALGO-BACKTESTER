@@ -684,7 +684,7 @@ def _builtins() -> dict:
     def _(rt, dt, st):
         ts = pd.Timestamp(int(dt), unit="s")
         st.year, st.mon, st.day, st.hour, st.min, st.sec = ts.year, ts.month, ts.day, ts.hour, ts.minute, ts.second
-        st.day_of_week, st.day_of_year = (ts.dayofweek + 1) % 7, ts.dayofyear
+        st.day_of_week, st.day_of_year = (ts.day_of_week + 1) % 7, ts.dayofyear
         return True
 
     @reg("StructToTime")
@@ -702,10 +702,10 @@ def _builtins() -> dict:
             return ts.strftime("%Y.%m.%d")
         return ts.strftime("%H:%M")
 
-    B["TimeDayOfWeek"] = lambda rt, dt: (pd.Timestamp(int(dt), unit="s").dayofweek + 1) % 7
+    B["TimeDayOfWeek"] = lambda rt, dt: (pd.Timestamp(int(dt), unit="s").day_of_week + 1) % 7
     B["TimeHour"] = lambda rt, dt: pd.Timestamp(int(dt), unit="s").hour
     B["TimeMinute"] = lambda rt, dt: pd.Timestamp(int(dt), unit="s").minute
-    B["DayOfWeek"] = lambda rt: (pd.Timestamp(int(B["TimeCurrent"](rt)), unit="s").dayofweek + 1) % 7
+    B["DayOfWeek"] = lambda rt: (pd.Timestamp(int(B["TimeCurrent"](rt)), unit="s").day_of_week + 1) % 7
     B["Hour"] = lambda rt: pd.Timestamp(int(B["TimeCurrent"](rt)), unit="s").hour
     B["Minute"] = lambda rt: pd.Timestamp(int(B["TimeCurrent"](rt)), unit="s").minute
 

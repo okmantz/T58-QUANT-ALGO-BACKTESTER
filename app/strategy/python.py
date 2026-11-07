@@ -22,7 +22,7 @@ exits, so a "one breakout per day" system declares
 
 RESTRICTING TRADING TO CERTAIN WEEKDAYS (OPTIONAL)
 ----------------------------------------------------
-    EXCLUDE_DAYS_OF_WEEK = [6]     # 0=Monday..6=Sunday (pandas dt.dayofweek
+    EXCLUDE_DAYS_OF_WEEK = [6]     # 0=Monday..6=Sunday (pandas dt.day_of_week
                                     # convention) -- forces this strategy's
                                     # signal flat (0) on every listed
                                     # weekday, regardless of what

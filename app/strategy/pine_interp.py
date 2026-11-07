@@ -632,7 +632,7 @@ class PineRuntime:
         self.TS = (idx.values.astype("datetime64[s]").astype("int64") * 1000).astype(float)
         self.HOUR = idx.hour.to_numpy()
         self.MIN = idx.minute.to_numpy()
-        self.DOW = ((idx.dayofweek.to_numpy() + 1) % 7 + 1)      # Pine: Sunday=1 .. Saturday=7
+        self.DOW = ((idx.day_of_week.to_numpy() + 1) % 7 + 1)      # Pine: Sunday=1 .. Saturday=7
         self.MONTH = idx.month.to_numpy()
         self.YEAR = idx.year.to_numpy()
         self.DAY = idx.day.to_numpy()
