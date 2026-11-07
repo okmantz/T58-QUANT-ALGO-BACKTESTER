@@ -1917,4 +1917,6 @@ def run_execution(
             RuntimeWarning,
         )
 
+    from app.backtest.invariants import enforce as _enforce_invariants
+    _enforce_invariants(trades, "run_execution")      # 2026-11-06: impossible-trade self-check (policy: T58_INVARIANTS)
     return trades, equity_df
