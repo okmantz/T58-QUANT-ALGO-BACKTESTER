@@ -33,6 +33,8 @@ jobs:
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
+    container: ${{ matrix.container }}
+    continue-on-error: ${{ matrix.experimental == true }}
     strategy:
       fail-fast: false
       matrix:
@@ -40,6 +42,11 @@ jobs:
           - { os: windows-latest, label: Windows, platform: windows, exe: ".exe", symlinks: "" }
           - { os: macos-latest,   label: macOS,   platform: macos,   exe: "",     symlinks: "--follow-symlinks" }
           - { os: ubuntu-24.04,  label: Linux,   platform: linux,   exe: "",     symlinks: "--follow-symlinks" }
+          # Chromebook = ChromeOS "Linux development environment" (Crostini, Debian 12 bookworm). A binary built on
+          # ubuntu-24.04 needs glibc 2.39 and will NOT start on bookworm (glibc 2.36), so these legs build INSIDE a
+          # bookworm container. x86_64 covers most Chromebooks; the ARM64 leg covers Snapdragon/MediaTek models.
+          - { os: ubuntu-24.04,     label: Chromebook,     platform: chromebook, exe: "", symlinks: "--follow-symlinks", container: "python:3.11-bookworm" }
+          - { os: ubuntu-24.04-arm, label: Chromebook-ARM, platform: chromebook, exe: "", symlinks: "--follow-symlinks", container: "python:3.11-bookworm", experimental: true }
     defaults:
       run:
         shell: bash
@@ -56,6 +63,7 @@ jobs:
         with:
           lfs: false   # market data (LFS) is not part of the app build
       - uses: actions/setup-python@v6
+        if: matrix.platform != 'chromebook'
         with:
           python-version: "3.11"
           cache: pip
@@ -66,6 +74,9 @@ jobs:
       - name: Install Tk (Linux)
         if: matrix.platform == 'linux'
         run: sudo apt-get update && sudo apt-get install -y python3-tk tk
+      - name: Install system libraries (Chromebook / Debian 12 container)
+        if: matrix.platform == 'chromebook'
+        run: apt-get update && apt-get install -y --no-install-recommends python3-tk tk libgomp1 zip binutils
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
