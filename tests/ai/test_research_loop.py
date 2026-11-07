@@ -282,6 +282,13 @@ def test_runner_start_and_stop_and_wait(monkeypatch):
 
     runner.start()
     assert runner.is_running
+    # The loop only checks the cancel flag between iterations, so a stop sent before the thread has finished its first one
+    # legitimately records none. Wait for that first iteration (bounded) instead of racing it -- on a loaded CI box the
+    # old immediate stop() left iterations empty.
+    import time
+    deadline = time.monotonic() + 60.0
+    while not runner.iterations and runner.is_running and time.monotonic() < deadline:
+        time.sleep(0.02)
     stopped = runner.stop_and_wait(timeout=15.0)
     assert stopped
     assert not runner.is_running
