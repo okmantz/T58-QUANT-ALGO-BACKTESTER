@@ -440,7 +440,19 @@ def _resample_indices(rng: np.random.Generator, n: int, method: str, block_size:
     this function never sees session labels, so blocks are plain
     contiguous slices. Returning indices (rather than values) lets
     callers resample parallel per-trade arrays (P&L + initial risk) with
-    the same draw."""
+    the same draw.
+
+    2026-11-06 audit: ``"day_block_bootstrap"`` / ``"regime_shuffle"`` need session labels this function never sees. They used to
+    fall through to the i.i.d. branch below WITHOUT SAYING SO (app.prop.scaling did exactly that with the Monte Carlo default).
+    Engines that need day-level resampling now use ``app.monte_carlo.day_resample.PathSampler``; reaching this branch with one of
+    those names is a bug in the caller, so it warns instead of silently degrading to i.i.d."""
+    if method in ("day_block_bootstrap", "regime_shuffle"):
+        import warnings
+        warnings.warn(
+            f"_resample_indices got method={method!r}, which needs session-day labels it does not have; falling back to an i.i.d. "
+            "bootstrap. Use app.monte_carlo.day_resample.PathSampler for day-level resampling.",
+            RuntimeWarning, stacklevel=2,
+        )
     if method == "shuffle":
         return rng.permutation(n)
     if method == "block_bootstrap":

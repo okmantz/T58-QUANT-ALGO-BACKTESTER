@@ -68,8 +68,12 @@ class BankrollConfig:
     # matters most -- a bad week smeared randomly across the simulated chain
     # understates how often a trader actually runs out of money during one
     # continuous rough patch.
-    method: str = "block_bootstrap"          # "shuffle" | "bootstrap" | "block_bootstrap"
-    block_size: int = 5
+    # 2026-11-06 audit: the default is now WHOLE-SESSION-DAY resampling (same as run_monte_carlo). The old default, 5-TRADE blocks,
+    # cut straight across trading days, so the daily-loss / consistency structure the prop rules test was still being broken up.
+    # method="block_bootstrap" restores the old numbers exactly.
+    method: str = "day_block_bootstrap"      # "day_block_bootstrap" | "shuffle" | "bootstrap" | "block_bootstrap"
+    block_size: int = 5                      # trade-block size, used only when method == "block_bootstrap"
+    day_block_days: int = 1                  # consecutive session days per block, used only when method == "day_block_bootstrap"
     slippage_stress_pct: float = 1.0  # non-zero default since 2026-10-19 (see MonteCarloConfig)
     random_seed: int | None = 42
     # If True, a life's chain stops the instant it reaches its first
@@ -138,6 +142,11 @@ def _methodology_note(cfg: BankrollConfig, n_trades: int) -> str:
             f"{n_trades} historical trades so a real bad stretch stays clustered together "
             "across the chain's attempts, the way it would in one continuous plausible future)"
         ),
+        "day_block_bootstrap": (
+            f"whole-session-day bootstrap (every trade of a trading day stays together on that day, "
+            f"{n_trades} historical trades; a bad day that really hit the daily loss limit stays a bad "
+            "day in the simulation instead of being scattered across the chain)"
+        ),
     }
     method_text = method_descriptions.get(cfg.method, f"resampling (method: {cfg.method})")
     stop_text = (
@@ -181,7 +190,8 @@ def simulate_bankroll_survival(
     base_pnls = np.array([t.pnl for t in trades], dtype=float)
     base_dates = [pd.Timestamp(t.entry_time).normalize() for t in trades]
     day_structure = precompute_day_structure(base_dates)
-    resample_cfg = _ResampleCfg(cfg.method, cfg.block_size)
+    from app.monte_carlo.day_resample import PathSampler
+    sampler = PathSampler(base_dates, rules, cfg.method, cfg.block_size, getattr(cfg, "day_block_days", 1))
     econ = cfg.reset_economics
     base_mae = base_mfe = None
     if cfg.use_excursions:
@@ -200,7 +210,7 @@ def simulate_bankroll_survival(
     low_points: list[float] = []
 
     for _ in range(cfg.n_simulations):
-        _idx = _resample_indices(rng, len(base_pnls), cfg.method, _effective_block_size(resample_cfg, len(base_pnls), None))
+        _idx, _sim_ds = sampler.draw(rng)
         sim_pnls = base_pnls[_idx]
         sim_pnls = _apply_slippage_stress(sim_pnls, cfg.slippage_stress_pct)
         _kw = {}
@@ -211,7 +221,8 @@ def simulate_bankroll_survival(
                 trade_mfe=np.maximum(base_mfe[_idx] + np.maximum(_d, 0.0), np.maximum(sim_pnls, 0.0)),
             )
         result = simulate_account(
-            sim_pnls, base_dates, rules, _day_structure=day_structure, reset_on_breach=True, **_kw,
+            sim_pnls, base_dates, rules, _day_structure=_sim_ds if _sim_ds is not None else day_structure,
+            reset_on_breach=True, **_kw,
         )
 
         bankroll = cfg.starting_bankroll
