@@ -87,8 +87,18 @@ def test_instrument_tied_families_are_marked_for_stricter_validation():
     assert "weekly_range_breakout" not in tied and "halflife_gated_reversion" not in tied
 
 
+def test_use_all_families_is_the_default_and_includes_every_runnable_family(monkeypatch):
+    monkeypatch.delenv("T58_USE_ALL_FAMILIES", raising=False)
+    active = set(ss.active_family_names())
+    assert set(ss.RETIRED_FAMILIES) <= active
+    ready = {n for n, m in f13.V13_META.items() if m.status == "ready"}
+    assert ready <= active
+    assert not (set(f13.V13_META) - ready) & active   # families that need data nobody supplied cannot run
+
+
 def test_new_batches_stay_out_of_all_family_searches_until_the_surrogate_gate_opens(monkeypatch):
     from app.discovery_engine import surrogate
+    monkeypatch.setenv("T58_USE_ALL_FAMILIES", "0")   # legacy narrowed mode
     monkeypatch.setattr(surrogate, "enabled_batches", lambda path=None: [])
     active = set(ss.active_family_names())
     assert not active & set(f13.V13_FAMILIES)
