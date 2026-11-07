@@ -185,7 +185,7 @@ def looks_like_cme_session_data(df: pd.DataFrame) -> bool:
             return False
         if ts.dt.tz is not None:
             ts = ts.dt.tz_convert("UTC")
-        wk = ts[ts.dt.dayofweek < 5]
+        wk = ts[ts.dt.day_of_week < 5]
         counts = wk.dt.hour.value_counts().reindex(range(24), fill_value=0)
         quiet = int(counts.idxmin())
         return quiet in (21, 22) and counts.min() < 0.25 * float(counts.median())

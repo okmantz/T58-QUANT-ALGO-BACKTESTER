@@ -86,10 +86,10 @@ def half_days(year: int) -> list[pd.Timestamp]:
     tg = USThanksgivingDay.dates(f"{year}-11-01", f"{year}-11-30")[0]
     out = [tg + pd.Timedelta(days=1)]
     d24 = pd.Timestamp(year=year, month=12, day=24)
-    if d24.dayofweek < 5:
+    if d24.day_of_week < 5:
         out.append(d24)
     j3 = pd.Timestamp(year=year, month=7, day=3)
-    if j3.dayofweek < 5 and pd.Timestamp(year=year, month=7, day=4).dayofweek < 5:
+    if j3.day_of_week < 5 and pd.Timestamp(year=year, month=7, day=4).day_of_week < 5:
         out.append(j3)
     return out
 
@@ -116,8 +116,8 @@ def add_session_marks(df: pd.DataFrame, tz_offset_hours: float = 0.0) -> pd.Data
     for y in range(t.min().year, t.max().year + 1):
         mar = pd.Timestamp(year=y, month=3, day=1)
         nov = pd.Timestamp(year=y, month=11, day=1)
-        sun_mar = mar + pd.Timedelta(days=(6 - mar.dayofweek) % 7 + 7)
-        sun_nov = nov + pd.Timedelta(days=(6 - nov.dayofweek) % 7)
+        sun_mar = mar + pd.Timedelta(days=(6 - mar.day_of_week) % 7 + 7)
+        sun_nov = nov + pd.Timedelta(days=(6 - nov.day_of_week) % 7)
         for s in (sun_mar, sun_nov):
             dst_days.update(s + pd.Timedelta(days=k) for k in range(0, 6))
     out["dst_week"] = day.isin(dst_days)

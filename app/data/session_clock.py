@@ -298,7 +298,7 @@ def rth_volume_share(frame: pd.DataFrame, *, zone: str | None = None) -> float |
     ex = frame_exchange_time(frame, zone=zone) if zone else frame_exchange_time(frame)
     vol = pd.to_numeric(frame["volume"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
     m = (ex.dt.hour * 60 + ex.dt.minute).to_numpy()
-    wk = (ex.dt.dayofweek < 5).to_numpy()
+    wk = (ex.dt.day_of_week < 5).to_numpy()
     tot = float(vol[wk].sum())
     if tot <= 0:
         return None
@@ -314,7 +314,7 @@ def peak_volume_minute(frame: pd.DataFrame, *, bucket_minutes: int = 1, start_mi
     ex = frame_exchange_time(frame)
     vol = pd.to_numeric(frame["volume"], errors="coerce").fillna(0.0)
     mod = ex.dt.hour * 60 + ex.dt.minute
-    keep = (ex.dt.dayofweek < 5) & (mod >= start_minute) & (mod < end_minute)
+    keep = (ex.dt.day_of_week < 5) & (mod >= start_minute) & (mod < end_minute)
     m = (mod // bucket_minutes * bucket_minutes)[keep]
     g = vol[keep].groupby(m).sum()
     return int(g.idxmax()) if len(g) and g.max() > 0 else None
@@ -325,7 +325,7 @@ def minute_volume(frame: pd.DataFrame, minute_of_day: int) -> float:
     ex = frame_exchange_time(frame)
     vol = pd.to_numeric(frame["volume"], errors="coerce").fillna(0.0)
     mod = ex.dt.hour * 60 + ex.dt.minute
-    return float(vol[(ex.dt.dayofweek < 5) & (mod == minute_of_day)].sum())
+    return float(vol[(ex.dt.day_of_week < 5) & (mod == minute_of_day)].sum())
 
 
 def detect_fx_server_offset(frame: pd.DataFrame) -> dict | None:
@@ -345,7 +345,7 @@ def detect_fx_server_offset(frame: pd.DataFrame) -> dict | None:
             return None
         hours = reopen.dt.hour.value_counts()
         h = int(hours.idxmax())
-        dow = int(reopen.dt.dayofweek.mode().iloc[0])
+        dow = int(reopen.dt.day_of_week.mode().iloc[0])
         if dow == 6 and h in (21, 22):
             kind = "utc"
         elif dow == 0 and h in (0, 1):

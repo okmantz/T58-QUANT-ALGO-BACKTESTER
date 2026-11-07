@@ -856,7 +856,7 @@ def _futures_timezone_warning(df: pd.DataFrame, source_name: str, issues: list) 
         ts = pd.to_datetime(df["timestamp"], errors="coerce").dropna()
         if len(ts) < 5000 or ts.diff().median() > pd.Timedelta(minutes=15):
             return
-        wk = ts[ts.dt.dayofweek < 5]
+        wk = ts[ts.dt.day_of_week < 5]
         counts = wk.dt.hour.value_counts().reindex(range(24), fill_value=0)
         quietest = int(counts.idxmin())
         if quietest not in (21, 22):
