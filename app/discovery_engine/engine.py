@@ -128,6 +128,13 @@ def resolve_families(requested, preset: Preset, *, store=None) -> tuple[list, di
             if n not in ss.FAMILIES:
                 gated[n] = "unknown family"
     out = []
+    if ss.use_all_families():
+        # "use everything": the kill-condition ledger is bookkeeping, so write it for the person instead of gating the family out.
+        try:
+            from app.discovery.hypothesis import preregister_v13_families
+            preregister_v13_families(store)
+        except Exception:  # noqa: BLE001
+            pass
     for n in names:
         try:
             ok = is_preregistered(n, store)
