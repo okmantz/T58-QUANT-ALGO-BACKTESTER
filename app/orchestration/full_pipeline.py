@@ -217,6 +217,11 @@ class FullPipelineConfig:
     # payout_horizon_days (30 + a few days margin), on the in-sample dev slice AND on the
     # untouched holdout. The gate uses the holdout when it is long enough, else dev.
     payout_window_days: int = 30
+    # 2026-11-07: after the verdict, forecast pass/payout/EV at every algo-allowed firm preset (app.validation.payout_forecast) and attach it to
+    # audit_evidence["payout_forecast"]. Informational: it ranks firms by conservative expected payout and never changes the verdict.
+    payout_forecast: bool = True
+    payout_forecast_sims: int = 800
+    payout_forecast_max_firms: int = 8
     payout_horizon_days: int = 35
     # 2026-10-27 audit (fix 4/5 + speed objective): prop traders are happy with a first payout in 30-45 days, so the replay also counts
     # payouts inside a longer window (horizon is stretched to cover it). A strategy under the 30-day target but over
@@ -3758,6 +3763,22 @@ def run_full_pipeline(
                     scorecard.gate_vector = _gv
         except Exception as exc:  # noqa: BLE001
             log(f"  Unseen-DSR score input skipped: {exc}")
+        if isinstance(_audit_ev, dict) and getattr(cfg, "payout_forecast", True):
+            try:
+                from app.validation.payout_forecast import forecast_across_firms as _faf, summarize as _fsum
+                _src_acct = float(getattr(risk, "initial_balance", 0.0) or 0.0) or None
+                _unseen = []
+                if dev_df is not None and df is not None and len(dev_df) < len(df):
+                    from app.orchestration.audit_layers import holdout_trades_for as _htf
+                    _unseen = list(_htf(df, dev_df, final_strategy, risk, adaptive_risk))
+                _oos = len(_unseen) >= 30
+                _ftrades = _unseen if _oos else list(final_bt.trades)
+                _fs = _faf(_ftrades, source_account_size=_src_acct, sims=int(getattr(cfg, "payout_forecast_sims", 800)),
+                           max_firms=int(getattr(cfg, "payout_forecast_max_firms", 8)), out_of_sample=_oos)
+                _audit_ev["payout_forecast"] = {"summary": _fsum(_fs), "firms": [f.to_dict() for f in _fs]}
+                log("  Payout forecast (" + ("unseen holdout" if _oos else "in-sample, optimistic") + "): " + _audit_ev["payout_forecast"]["summary"]["headline"])
+            except Exception as exc:  # noqa: BLE001 -- informational layer; never blocks a run
+                log(f"  Payout forecast skipped: {exc}")
         if isinstance(_audit_ev, dict):
             _audit_ev["gate_vector"] = getattr(scorecard, "gate_vector", None)
             _audit_ev["pooled_status"] = getattr(oos_validation, "pooled_status", None) if oos_validation is not None else None
