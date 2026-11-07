@@ -6,7 +6,7 @@ from types import SimpleNamespace as NS
 import pandas as pd
 
 from app.scoring.edge_bounds import r_multiples, trade_r
-from app.validation.rulebook import binary_screen
+from app.validation.rulebook import _series
 
 
 def _t(pnl, *, direction=1, entry=100.0, exit_=101.0, stop=1.0, size=70.0, intended=100.0):
@@ -26,11 +26,11 @@ def test_rulebook_mean_r_matches_core_definition():
         win = k % 2 == 0
         trades.append(_t(70.0 if win else -70.0, direction=1 if k % 4 < 2 else -1,
                          exit_=101.0 if win else 99.0, intended=100.0))
-    out = binary_screen(trades)
+    rs, _ts, _dirs, _cost = _series(trades)
     core = sum(r_multiples(trades)) / len(trades)
-    assert abs(out["mean_r"] - core) < 1e-9            # both 0.0 here; the old code reported 0.0 only by luck, test the scale below
+    assert abs(float(rs.mean()) - core) < 1e-9            # both 0.0 here; the scale is tested below
     scaled = [_t(70.0, intended=100.0) for _ in range(40)]
-    assert abs(binary_screen(scaled)["mean_r"] - 1.0) < 1e-9   # 70 / (1 x 70) = 1.0R, not 0.70R
+    assert abs(float(_series(scaled)[0].mean()) - 1.0) < 1e-9   # 70 / (1 x 70) = 1.0R, not 0.70R
 
 
 def test_director_conditional_expectancy_is_real_r():
