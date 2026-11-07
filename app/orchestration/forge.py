@@ -119,6 +119,7 @@ class ForgeConfig:
     rolling_survivors: int = 2
     locked_holdout_frac: float = 0.15   # reserved BEFORE any stage runs, never searched over
     locked_oos_min_pass_rate: float = 25.0  # % -- below this, the holdout check kills the candidate
+    objective_mode: str = "prop_lifecycle"  # "net_profit": Stage 2 / CPCV / PBO rank on net profit instead of prop-eval pass probability
 
     # UPGRADE (prop-firm reset-on-breach as the search basis): threaded
     # through to every stage below (Stages 1-3 via SearchStageConfig,
@@ -460,7 +461,7 @@ def run_forge(
         full_mc_sims=config.stage3_mc_sims,
         walk_forward_folds=config.walk_forward_folds,
         robustness_neighbors=config.robustness_neighbors,
-        fitness_metric="eval_pass_probability",
+        fitness_metric=("net_profit_adjusted" if str(config.objective_mode) == "net_profit" else "eval_pass_probability"),
         workers=config.workers,
         random_seed=config.random_seed,
         reset_on_breach=config.reset_on_breach,
@@ -540,7 +541,7 @@ def run_forge(
             cpcv_result = run_cpcv(
                 search_df, _strategy_builder(spec), risk,
                 n_groups=config.cpcv_n_groups, n_test_groups=config.cpcv_n_test_groups,
-                metric="eval_pass_probability", prop_rules=prop_rules,
+                metric=("net_profit" if str(config.objective_mode) == "net_profit" else "eval_pass_probability"), prop_rules=prop_rules,
             )
         except CPCVError as exc:
             log(f"  CPCV skipped for {rec.get('candidate_id')}: {exc}")
@@ -588,7 +589,7 @@ def run_forge(
             pbo_result = compute_pbo(
                 search_df, [_rebuild_spec(r) for r in cpcv_shortlist], risk,
                 n_groups=config.cpcv_n_groups, n_test_groups=config.cpcv_n_test_groups,
-                metric="eval_pass_probability", prop_rules=prop_rules,
+                metric=("net_profit" if str(config.objective_mode) == "net_profit" else "eval_pass_probability"), prop_rules=prop_rules,
             )
             cohort_pbo = pbo_result.pbo
             log(f"  Cohort Probability of Backtest Overfitting (selecting among this shortlist): {cohort_pbo:.0%}.")

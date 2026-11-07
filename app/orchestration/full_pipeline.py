@@ -3808,15 +3808,38 @@ def run_full_pipeline(
             _audit_ev["gate_vector"] = getattr(scorecard, "gate_vector", None)
             _audit_ev["pooled_status"] = getattr(oos_validation, "pooled_status", None) if oos_validation is not None else None
             _audit_ev["edge_decay"] = edge_decay
-            try:  # Rulebook Stage 2 (binary screen) on the development trades, at the honest number of looks (effective trials)
-                from app.validation.rulebook import binary_screen as _bs
-                _n_looks = int(getattr(dsr_gate_result, "effective_trials", None) or getattr(dsr_gate_result, "n_trials", None) or 1)
-                _rb = _bs(list(getattr(final_bt, "trades", []) or []), n_looks=max(_n_looks, 1))
-                _audit_ev["rulebook_screen"] = _rb
-                log("  Rulebook screen (Stage 2): " + ("PASS" if _rb.get("passed") else ("not testable -- " + _rb["reason"] if not _rb.get("testable") else "does not clear all checks"))
-                    + f" (z bar {_rb['z_bar']} at N = {_rb['n_looks']})")
+            try:  # Rulebook v2: G3 development evidence, G4 day behaviour, G5 lifecycle (prop mode only: net-profit mode has its own tests)
+                _mode_now = str(_audit_ev.get("objective_mode") or "prop_lifecycle")
+                if _mode_now == "prop_lifecycle" and prop_rules is not None and len(getattr(final_bt, "trades", []) or []) >= 20:
+                    from app.validation import rulebook as _rbk
+                    _n_looks = int(getattr(dsr_gate_result, "effective_trials", None) or getattr(dsr_gate_result, "n_trials", None) or 1)
+                    _plat = (getattr(ga_result, "plateau_robustness", None) or {}) if ga_result is not None else {}
+                    _nb = None
+                    if _plat.get("chosen_neighbor_fitnesses") and cfg.fitness_metric in ("edge_lb_r", "mean_r", "plan_edge_r"):
+                        _cf = float(_plat.get("chosen_fitness") or 0.0)
+                        if _cf > 0:   # each +/-20% neighbour as a share of the chosen pick's fitness (an edge-based score)
+                            _nb = [float(x) / _cf for x in _plat["chosen_neighbor_fitnesses"]]
+                    _sheet = _rbk.load_rules_sheet()
+                    _skip = ["G6", "G7"] + ([] if _sheet else ["G0"]) + ([] if _rbk.load_register().get("rows") else ["G2"])
+                    _rbp = _rbk.evaluate_pipeline(
+                        list(final_bt.trades), prop_rules, n_looks=max(_n_looks, 1), family=str(getattr(cfg, "family", "") or ""),
+                        sheet=_sheet or None, neighbours=None,
+                        lookahead_ok=not (lookahead_hard_fail or lookahead_check_crashed), n_paths=int(getattr(cfg, "lifecycle_sims", 1500)) * 4,
+                        seed=int(getattr(cfg, "random_seed", 42) or 42), skip_gates=tuple(_skip))
+                    # the +/-20% neighbour test reads the optimizer's plateau probe (ratio of neighbour fitness to the chosen pick's)
+                    _g3 = _rbp["gates"].get("G3")
+                    if _g3 and _nb is not None:
+                        for _c in _g3["checks"]:
+                            if _c["name"].startswith("+/-20% parameter neighbours"):
+                                _ok = all(x >= _rbk.G3_NEIGHBOUR_KEEP for x in _nb)
+                                _c["ok"], _c["detail"] = _ok, f"worst neighbour keeps {min(_nb):.0%} of the pick's fitness"
+                        _g3["passed"] = all(c["ok"] is True for c in _g3["checks"])
+                        _g3["incomplete"] = (not _g3["passed"]) and any(c["ok"] is None for c in _g3["checks"]) and not any(c["ok"] is False for c in _g3["checks"])
+                    _audit_ev["rulebook_v2"] = _rbp
+                    for _ln in _rbk.render(_rbp):
+                        log("  " + _ln)
             except Exception as exc:  # noqa: BLE001 -- informational; never blocks a run
-                log(f"  Rulebook screen skipped: {exc}")
+                log(f"  Rulebook v2 gates skipped: {exc}")
             from app.orchestration.verdict_ladder import ladder_stage as _ls
             from app.orchestration.verdict_ladder import is_hard_failed as _ihf
             _hard = _ihf(verdict, verdict_reasons, ev_label=_ev.label, ruin_hard_fail=risk_of_ruin_hard_fail,
@@ -3825,7 +3848,7 @@ def run_full_pipeline(
                 _audit_ev["edge_evidence"] = {}
             _audit_ev["ladder"] = _ls(verdict, _ev.label, pooled_status=_audit_ev["pooled_status"],
                                       hard_failed=_hard,
-                                      edge_evidence=_audit_ev.get("edge_evidence"),
+                                      edge_evidence=_audit_ev.get("edge_evidence"), rulebook=_audit_ev.get("rulebook_v2"),
                                       caps=[r for r in verdict_reasons if isinstance(r, str) and ("CAPPED" in r or "NOT PROVEN" in r.upper())][:4]).to_dict()
             verdict_reasons = list(verdict_reasons) + ["LADDER: " + _audit_ev["ladder"]["stage"] + " | EV: " + str(_ev.label)]
         verdict_reasons = list(verdict_reasons) + [_ev.render().replace("\n", " | ")]

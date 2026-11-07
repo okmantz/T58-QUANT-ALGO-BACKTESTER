@@ -51,7 +51,7 @@ def is_hard_failed(verdict: str, reasons=None, *, ev_label: str | None = None, r
     return False
 
 
-def ladder_stage(verdict: str, ev_label: str | None, *, pooled_status: str | None = None, hard_failed: bool = False,
+def _ladder_stage_core(verdict: str, ev_label: str | None, *, pooled_status: str | None = None, hard_failed: bool = False,
                  forward_state: str | None = None, per_attempt_pass_lb_pct: float | None = None,
                  high_confidence_pct: float = 70.0, edge_evidence: dict | None = None, caps: list | None = None) -> LadderResult:
     """Map the legacy verdict + EV label (+ pooled OOS status, + recorded forward-test state) onto the ladder.
@@ -96,4 +96,24 @@ def ladder_stage(verdict: str, ev_label: str | None, *, pooled_status: str | Non
         res.reasons.append("Not rejected outright, but not ready: treat as a lead to refine or to collect more trades for.")
     else:
         res.reasons.append("Evidence is positive but not proven (pooled lower bound, EV evidence or trade count still short).")
+    return res
+
+
+def ladder_stage(verdict: str, ev_label: str | None, *, rulebook: dict | None = None, **kw) -> LadderResult:
+    """The ladder with Rulebook v2 applied on top: the backtest gates (G3 development evidence, G4 day behaviour, G5 lifecycle) can only LOWER
+    the stage, never raise it. A failed gate files the idea with the failing number (it is archived, not tuned and re-run); the stage is
+    capped at LEAD, or stays REJECT if a hard failure already put it there. EVALUATE / FUNDED still come only from recorded forward facts."""
+    res = _ladder_stage_core(verdict, ev_label, **kw)
+    if not rulebook or res.stage in ("REJECT", "EVALUATE", "FUNDED"):
+        return res
+    gates = rulebook.get("gates", {}) or {}
+    for g in ("G3", "G4", "G5"):
+        r = gates.get(g)
+        if r is None or r.get("skipped"):
+            continue
+        if not r.get("passed"):
+            if res.stage == "FORWARD-TEST CANDIDATE":
+                res.stage = "LEAD"
+            res.reasons.append(f"RULEBOOK v2 {g} ({r.get('name')}) NOT MET: {r.get('failing_number') or 'incomplete'} -- archive with this number; do not tune and re-run.")
+            break
     return res
