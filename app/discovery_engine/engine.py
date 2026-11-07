@@ -52,6 +52,7 @@ class EngineRequest:
     work_dir: str | Path | None = None
     overrides: dict = field(default_factory=dict)
     promotion: PromotionConfig | None = None
+    objective_mode: str = "prop"                 # "prop" (Rulebook v2 gates, default) | "net_profit" (no prop rules / gates)
     max_promote: int | None = None
     max_candidates: int | None = None            # override the preset's candidate budget
     use_memory: bool = True                      # searched-variant ledger: skip known variants, breed from past leaders, record this run
@@ -219,7 +220,8 @@ class DiscoveryEngine:
         if out.promoted_inside:
             promotions = [c.get("promotion") or {} for c in champs]
         elif req.promote and champs:
-            cfg = req.promotion or PromotionConfig()
+            import dataclasses as _dc
+            cfg = _dc.replace(req.promotion or PromotionConfig(), objective_mode=str(getattr(req, "objective_mode", "prop") or "prop"))
             budget = HoldoutBudget()
             res = self.promote(champs, dev_df=dev_gate, sealed_df=sealed, risk=req.risk, frames=req.frames, risks=req.risks,
                                pool_matrix=out.pool_matrix, n_trials=ti.n_tests, cfg=cfg, budget=budget, loop=preset.loop)

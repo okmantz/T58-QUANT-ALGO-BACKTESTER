@@ -110,6 +110,24 @@ def build_steps(*, dev_df: pd.DataFrame, sealed_df: pd.DataFrame | None, risk, f
         rr = prov.verify_reproduction(p, edge_record(trades, spec), df=dev_df, abs_tol=cfg.repro_abs_tol, rel_tol=cfg.repro_rel_tol)
         return StepResult("reproduction", rr.reproduced, detail=rr.reason, data=rr.to_dict())
 
+    def rulebook_g3(c, ctx):
+        if str(getattr(cfg, "objective_mode", "prop")) == "net_profit":
+            return StepResult("rulebook_g3", True, skipped=True, detail="not applicable: net-profit objective (prop-firm rules and Rulebook gates are not applied)")
+        from app.validation import rulebook as rb
+        trades = evaluate_spec(c.get("spec"), dev_df, risk, 1.0)
+        g = rb.g3_development_evidence(trades, n_looks=max(1, int(n_trials)))
+        # Neighbour robustness and lookahead are produced later (GA plateau probe, full pipeline); here a check that has not run yet is
+        # PENDING, not failed -- but any check that ran and failed stops the candidate, and a pending check is named in the detail.
+        pending = [k.name for k in g.checks if k.ok is None]
+        failing = g.failing
+        detail = (f"E_plan {g.data.get('e_plan', float('nan')):+.3f}R after N={int(n_trials)} looks (needs +0.05R; observed must reach "
+                  f"{g.data.get('required_observed_edge', float('nan')):+.3f}R)" if g.data else "too few trades with a planned risk")
+        if failing:
+            detail = f"{failing[0].name}: {failing[0].detail}. " + detail
+        if pending and not failing:
+            detail += f" Pending: {'; '.join(pending)}."
+        return StepResult("rulebook_g3", not failing, detail=detail, data={**(g.data or {}), "pending": pending, "failing": [f.name for f in failing]})
+
     def sequence_deflated(c, ctx):
         trades = evaluate_spec(c.get("spec"), dev_df, risk, 1.0)
         s = daily_series_from_trades(trades, unit="r")
@@ -150,5 +168,5 @@ def build_steps(*, dev_df: pd.DataFrame, sealed_df: pd.DataFrame | None, risk, f
         rs, days = trade_r_and_days(tr) if tr else ([], [])
         return sealed_step(rs, days, tied=ctx["tied"], cfg=cfg, looks=looks)
 
-    return Steps(reproduction=reproduction, sequence_deflated=sequence_deflated, null_gate=null_gate,
+    return Steps(reproduction=reproduction, rulebook_g3=rulebook_g3, sequence_deflated=sequence_deflated, null_gate=null_gate,
                  pooled_edge=pooled_edge, sealed_slice=sealed_slice)

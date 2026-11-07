@@ -121,6 +121,16 @@ def edge_lb_r(trades, min_trades: int = 30, conf: float = 0.95, n_boot: int = 40
     return edge_fitness_from_trades(trades, min_trades=min_trades, conf=conf, n_boot=n_boot)
 
 
+def plan_edge_r(trades, n_looks: int = 1) -> float:
+    """Rulebook v2 planning edge E_plan = observed edge - E[max N] x day-block SE, in R per trade (-inf when unmeasurable).
+
+    The prop-firm objective the discovery engine ranks on once N (effective lifetime trials) is known; G3 requires it >= +0.05R."""
+    from app.validation import rulebook as rb
+    g = rb.g3_development_evidence(trades, n_looks=max(1, int(n_looks)))
+    ep = (g.data or {}).get("e_plan")
+    return float(ep) if ep is not None and math.isfinite(ep) else float("-inf")
+
+
 # --------------------------------------------------------------------------------------------------- complexity charge
 @dataclass(frozen=True)
 class Complexity:

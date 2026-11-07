@@ -4,6 +4,9 @@ A candidate that the search loop likes is NOT a result. Before it can be called 
 order and with no step skippable:
 
   1. reproduction        re-run with the stored provenance (seed, data fingerprint, git hash, config); dropped if it does not reproduce
+  1b. rulebook G3        T58 Prop Firm Rulebook v2 gate G3: E_plan = observed edge - E[max N] x SE (N = lifetime EFFECTIVE trial count)
+                         must be >= +0.05R, on >= 400 trades over >= 150 days, with the long/short, top-3, quarter and year checks.
+                         PROP objective only: a NET-PROFIT run never applies prop rules, so this step is recorded as not applicable.
   2. sequence-deflated   Deflated Sharpe against the LIFETIME ledger count clustered to effective trials, using the Sharpe spread of
                          the whole evaluated pool
   3. null gate           beats random entry timing (``run_null_edge_gate``)
@@ -28,7 +31,7 @@ from typing import Callable
 
 import numpy as np
 
-STEP_ORDER = ("reproduction", "sequence_deflated", "null_gate", "pooled_edge", "sealed_slice")
+STEP_ORDER = ("reproduction", "rulebook_g3", "sequence_deflated", "null_gate", "pooled_edge", "sealed_slice")
 
 # Substrings that mark a spec as tied to ONE instrument's auxiliary data (cannot be pooled across markets).
 INSTRUMENT_TIED_MARKERS = [
@@ -125,6 +128,7 @@ class PromotionConfig:
     sealed_min_trades_tied: int = 50
     sealed_max_lifetime_looks: int = 6        # reads of ONE sealed slice (per data fingerprint, across runs) before it is refused
     cost_multiplier: float = 2.0
+    objective_mode: str = "prop"              # "prop" (Rulebook v2 gates apply) | "net_profit" (no prop rules, no Rulebook gates)
     repro_abs_tol: float = 0.02
     repro_rel_tol: float = 0.10
 
@@ -134,6 +138,7 @@ class Steps:
     """Injectable step implementations. Each returns ``StepResult``. ``None`` falls back to the default implementation."""
 
     reproduction: Callable | None = None
+    rulebook_g3: Callable | None = None
     sequence_deflated: Callable | None = None
     null_gate: Callable | None = None
     pooled_edge: Callable | None = None
