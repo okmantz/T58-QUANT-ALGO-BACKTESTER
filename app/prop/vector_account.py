@@ -388,6 +388,9 @@ def simulate_paths(
             if fresh:
                 bal = np.where(cond, acct, bal)
                 peak = np.where(cond, acct, peak)
+                # 2026-11-06 AUDIT twin of PropAccount's fix: re-base today's start to the fresh funded balance, otherwise the floating
+                # daily-loss floor (day_start - limit) sits above it and any later same-day trade kills the just-funded account.
+                day_start = np.where(cond, acct, day_start)
             baseline = np.where(cond, bal, baseline)
             best_since = np.where(cond, 0.0, best_since)
             last_payout = np.where(cond, sl, last_payout)

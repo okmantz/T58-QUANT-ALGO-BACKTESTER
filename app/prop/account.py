@@ -540,6 +540,12 @@ class PropAccount:
                         # AUDIT 2026-10-12: fresh funded account (Topstep XFA).
                         self.balance = float(r.account_size)
                         self.trailing_peak = float(r.account_size)
+                        # 2026-11-06 AUDIT (found by the invariant checks): the snap-back above happens MID-DAY when the passing trade is
+                        # not the day's last, but ``day_start_balance[cur]`` still held the pre-pass balance (~target level). The floating
+                        # daily-loss floor is "day-start balance - limit", so it sat ABOVE the fresh balance and EVERY later trade that
+                        # same day -- even a winner -- breached 'daily_loss_limit' and killed the just-funded account. Re-base the day to
+                        # the fresh balance, exactly as the reset-on-breach path already does. (vector_account.py carries the twin fix.)
+                        self.day_start_balance[cur] = self.balance
                     self.payout_baseline_balance = self.balance
                     self.best_day_since_baseline = 0.0
                     self.funded_start_day_index = cur

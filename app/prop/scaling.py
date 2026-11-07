@@ -235,10 +235,20 @@ def run_scaling_stress_test(
     unscaled_payouts: list[float] = []
     scaled_payouts: list[float] = []
 
+    # 2026-11-06 audit: this used to call _resample_pnls(rng, pnls, cfg) even though cfg.method defaults to "day_block_bootstrap", a
+    # method _resample_pnls has no session labels for -- it silently fell through to an i.i.d. bootstrap, so the scaling stress test
+    # was the one Monte Carlo in the app NOT resampling whole days. The shared PathSampler does it properly; for every other method
+    # it draws exactly what _resample_pnls drew (same RNG stream).
+    from app.monte_carlo.day_resample import PathSampler
+    sampler = PathSampler(dates, rules, cfg.method, cfg.block_size, getattr(cfg, "day_block_days", 1))
+
     for _ in range(cfg.n_simulations):
-        resampled = _resample_pnls(rng, pnls, cfg)
+        _idx, _sim_ds = sampler.draw(rng)
+        resampled = pnls[_idx]
         resampled = _apply_slippage_stress(resampled, cfg.slippage_stress_pct)
-        result = simulate_account_with_scaling(list(resampled), dates, rules, plan)
+        # simulate_account_with_scaling takes dates, not a DayStructure: a day-block path's trades sit on the SLOT days drawn.
+        sim_dates = sampler.path_dates(_sim_ds) if _sim_ds is not None else dates
+        result = simulate_account_with_scaling(list(resampled), sim_dates, rules, plan)
         scale_up_flags.append(result.total_scale_ups > 0)
         scale_up_counts.append(result.total_scale_ups)
         final_sizes.append(result.final_account_size)

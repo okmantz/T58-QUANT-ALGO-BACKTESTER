@@ -119,8 +119,12 @@ class ResetEconomics:
 @dataclass
 class PropSurvivalConfig:
     n_simulations: int = 5_000
-    method: str = "bootstrap"          # "shuffle" | "bootstrap" | "block_bootstrap" -- see app.monte_carlo.engine
-    block_size: int = 5
+    # 2026-11-06 audit: default is now WHOLE-SESSION-DAY resampling, like run_monte_carlo. The old i.i.d. "bootstrap" default scattered a
+    # bad day's trades across many days, so a cluster that really breached the daily-loss limit almost never co-occurred in the
+    # simulation and every pass / payout probability was flattered whenever that rule bites. method="bootstrap" restores the old numbers.
+    method: str = "day_block_bootstrap"   # "day_block_bootstrap" | "shuffle" | "bootstrap" | "block_bootstrap" -- see app.monte_carlo.engine
+    block_size: int = 5                   # trade-block size, used only when method == "block_bootstrap"
+    day_block_days: int = 1               # consecutive session days per block, used only when method == "day_block_bootstrap"
     slippage_stress_pct: float = 1.0  # non-zero default since 2026-10-19 (see MonteCarloConfig)
     random_seed: int | None = 42
     reset_economics: ResetEconomics = field(default_factory=ResetEconomics)
@@ -364,12 +368,19 @@ def _run_single_attempt_survival(
     # changing an unrelated config value.
     approval_rng = np.random.default_rng((cfg.random_seed or 0) + 999_983)
 
-    for _ in range(n):
-        sim_pnls = _resample_pnls(rng, base_pnls, _ResampleCfg(cfg.method, cfg.block_size))
-        sim_pnls = _apply_slippage_stress(sim_pnls, cfg.slippage_stress_pct)
+    from app.monte_carlo.day_resample import PathSampler
+    sampler = PathSampler(base_dates, rules, cfg.method, cfg.block_size, getattr(cfg, "day_block_days", 1))
 
-        result = simulate_account(sim_pnls, base_dates, rules, _day_structure=day_structure)
-        day_end = _day_end_balances(sim_pnls, rules.account_size, day_structure)
+    for _ in range(n):
+        # Day-block methods draw whole session days and hand back the path's own DayStructure; every other method draws exactly
+        # what _resample_pnls always drew (same RNG stream) and uses the shared historical structure.
+        _idx, _sim_ds = sampler.draw(rng)
+        sim_pnls = base_pnls[_idx]
+        sim_pnls = _apply_slippage_stress(sim_pnls, cfg.slippage_stress_pct)
+        path_ds = _sim_ds if _sim_ds is not None else day_structure
+
+        result = simulate_account(sim_pnls, base_dates, rules, _day_structure=path_ds)
+        day_end = _day_end_balances(sim_pnls, rules.account_size, path_ds)
 
         reached_target_flags.append(bool(np.any(day_end >= target_balance)))
         passed_eval_flags.append(result.passed_evaluation)
@@ -389,8 +400,8 @@ def _run_single_attempt_survival(
             days_required.append(result.days_to_pass)
         worst_streaks.append(_max_losing_streak(sim_pnls))
         lifetime_days.append(result.trading_days_count)
-        if day_structure.n_days > 0:
-            daily_pnl_means.append(float(np.sum(sim_pnls)) / day_structure.n_days)
+        if path_ds.n_days > 0:
+            daily_pnl_means.append(float(np.sum(sim_pnls)) / path_ds.n_days)
 
         recovery = _worst_drawdown_recovery_days(day_end)
         if recovery is None:
@@ -465,6 +476,9 @@ def _run_single_attempt_survival(
 class _ResampleCfg:
     method: str
     block_size: int
+    # 2026-11-06 audit: a day-aware app.monte_carlo.day_resample.PathSampler. None (the default, and what any caller that builds
+    # this with two arguments gets) keeps the old trade-level _resample_pnls draw exactly.
+    sampler: object | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -516,9 +530,15 @@ def simulate_reset_chain(
         fee = reset.evaluation_fee if attempt == 1 else reset.resolved_reset_fee()
         fees_paid += fee
 
-        sim_pnls = _resample_pnls(rng, base_pnls, resample_cfg)
+        _sampler = getattr(resample_cfg, "sampler", None)
+        if _sampler is not None:
+            _idx, _sim_ds = _sampler.draw(rng)
+            sim_pnls = base_pnls[_idx]
+        else:                                    # legacy caller / two-argument _ResampleCfg: the old trade-level draw
+            sim_pnls = _resample_pnls(rng, base_pnls, resample_cfg)
+            _sim_ds = None
         sim_pnls = _apply_slippage_stress(sim_pnls, slippage_stress_pct)
-        result = simulate_account(sim_pnls, base_dates, rules, _day_structure=day_structure)
+        result = simulate_account(sim_pnls, base_dates, rules, _day_structure=_sim_ds if _sim_ds is not None else day_structure)
 
         total_days += result.trading_days_count
         payout_count += len(result.payouts)
@@ -559,7 +579,11 @@ def _run_reset_economics(
     rng: np.random.Generator,
 ) -> ResetEconomicsResult:
     reset = cfg.reset_economics
-    resample_cfg = _ResampleCfg(cfg.method, cfg.block_size)
+    from app.monte_carlo.day_resample import PathSampler
+    resample_cfg = _ResampleCfg(
+        cfg.method, cfg.block_size,
+        sampler=PathSampler(base_dates, rules, cfg.method, cfg.block_size, getattr(cfg, "day_block_days", 1)),
+    )
 
     net_profits: list[float] = []
     attempts_list: list[int] = []
