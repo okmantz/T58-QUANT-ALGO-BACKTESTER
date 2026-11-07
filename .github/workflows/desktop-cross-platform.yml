@@ -59,7 +59,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: config/requirements.txt
+          cache-dependency-path: config/requirements*.txt
       - name: Install libomp (macOS, needed by lightgbm)
         if: matrix.platform == 'macos'
         run: brew install libomp
