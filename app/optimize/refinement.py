@@ -225,7 +225,7 @@ class RefinementConfig:
     # whichever raw single point happened to score highest. Set to False to
     # restore the old raw-best-fitness behavior.
     plateau_robust_selection: bool = True
-    plateau_neighbor_step_frac: float = 0.08
+    plateau_neighbor_step_frac: float = 0.20   # Rulebook v2 G3: the +/-20% parameter neighbours must keep >= 70% of E_plan
     plateau_finalist_pool: int = 5
     # Fitness-noise re-evaluation of elites (app.optimize.elite_reeval): the top `elite_reeval_count` candidates are re-scored on
     # `elite_reeval_repeats` fresh Monte-Carlo seeds and the winner is the best AVERAGE, so a lucky draw cannot crown a candidate.
@@ -1183,6 +1183,7 @@ def _select_plateau_robust(
 
     best_candidate = raw_best
     best_score = float("-inf")
+    best_neighbors: list = []
     probe_count = 0
     # Finalists sit close together, so their neighbourhoods overlap heavily.
     # Memoize probes by rounded genome: identical genomes score identically
@@ -1202,6 +1203,7 @@ def _select_plateau_robust(
         if score > best_score:
             best_score = score
             best_candidate = candidate
+            best_neighbors = list(neighbor_fitnesses)
 
     report = {
         "raw_best_fitness": raw_best.fitness,
@@ -1210,6 +1212,8 @@ def _select_plateau_robust(
         "neighbor_step_frac": cfg.plateau_neighbor_step_frac,
         "finalist_pool_size": len(pool),
         "probe_count": probe_count,
+        # Rulebook v2 G3: the chosen pick's neighbour fitnesses (finite only), so the report can test 'neighbours keep >= 70%'
+        "chosen_neighbor_fitnesses": [float(x) for x in best_neighbors if math.isfinite(x)],
     }
     return best_candidate, report, probe_count
 
