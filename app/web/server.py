@@ -161,7 +161,7 @@ from app.orchestration.overnight_autopilot import AutopilotConfig, run_overnight
 from app.portfolio.portfolio import InstrumentLeg, PortfolioConfig, PortfolioError, run_portfolio_backtest
 from app.portfolio import library as portfolio_library
 from app.prop.simulator import PropRules, simulate_account
-from app.prop.presets import get_preset as get_prop_firm_preset, list_presets as list_prop_firm_presets
+from app.prop.presets import get_preset as get_prop_firm_preset, list_presets as list_presets
 from app.prop.recommender import recommend_prop_firms
 from app.prop.scaling import ScalingPlan, run_scaling_stress_test
 from app.prop.survival_engine import PropSurvivalConfig, ResetEconomics, run_prop_survival_analysis
@@ -546,11 +546,12 @@ def _inject_profile_avatar():
     """Every page's sidebar include draws the small always-visible profile circle (top right). It needs the person's
     name (for the initials) and whether a picture is saved. Read from the same account settings the Account page
     edits; any failure just falls back to a plain "T" circle -- the avatar must never break a page."""
-    profile = {"name": "Trader", "initials": "T", "has_picture": False, "version": ""}
+    profile = {"name": "Trader", "initials": "T", "has_picture": False, "version": "", "mode": "demo"}
     try:
         from app.accounts.settings import load_account_settings
 
         acct = load_account_settings()
+        profile["mode"] = "live" if (acct.account_mode or "demo") == "live" else "demo"
         name = (acct.display_name or acct.username or "").strip()
         if name:
             parts = [p for p in name.replace("_", " ").split() if p]
@@ -1458,48 +1459,109 @@ def _prop_presets_json() -> str:
     app.prop.presets' module docstring for why these numbers are
     approximate and dated.
     """
-    return json.dumps([p.to_dict() for p in list_prop_firm_presets()])
+    return json.dumps([p.to_dict() for p in list_presets()])
 
 
 @app.route("/rulebook")
 def rulebook_page():
-    """The Edge Rulebook as a working page: stage map, deflation lookup, alpha ledger, frame check and kill-line calculator."""
+    """The T58 Prop Firm Rulebook v2 as a working page: gate pipeline, G3 table, rules sheet (G0), trial register (G2), attempt score (G7)."""
     from app.validation import rulebook as rb
+    from app.prop.presets import list_presets
     return render_template("rulebook.html", active_page="rulebook", snap=rb.snapshot(), gate_map=rb.GATE_NAME_MAP,
+                           presets=[{"key": p.key, "label": p.label} for p in list_presets()],
                            notice=request.args.get("notice"), notice_ok=request.args.get("ok"))
 
 
-@app.route("/rulebook/hypothesis", methods=["POST"])
-def rulebook_add_hypothesis():
+@app.route("/rulebook/trial", methods=["POST"])
+def rulebook_register_trial():
+    """G2: pre-register a trial (family, counterparty, sign, breadth, seal dates) BEFORE any run. Refuses past 3 looks per family."""
     from app.validation import rulebook as rb
     f = request.form
+    insts = [x.strip().upper() for x in (f.get("instruments") or "").replace(";", ",").split(",") if x.strip()]
+    seal = {i: f.get("seal_date", "").strip() for i in insts if f.get("seal_date", "").strip()}
     try:
-        b = float(f.get("payoff") or 2)
-        c = float(f.get("cost_r") or rb.DEFAULT_COST_R)
+        variants = max(int(f.get("variants") or 1), 1)
+        mechs = max(int(f.get("mechanisms") or 1), 1)
     except ValueError:
-        return redirect(url_for("rulebook_page", notice="Payoff and cost must be numbers.", ok="0"))
-    frame = rb.Frame(mechanism=f.get("mechanism", ""), sign=f.get("sign", ""), payoff_b=b, cost_r=c).check()
-    if not frame["passed"]:
-        return redirect(url_for("rulebook_page", notice="Stage 0 (Frame) not met: " + " ".join(frame["problems"]), ok="0"))
-    res = rb.add_hypothesis(f.get("mechanism", ""), f.get("segment", ""), b, c)
+        return redirect(url_for("rulebook_page", notice="Variants and mechanisms must be whole numbers.", ok="0"))
+    res = rb.register_trial(family=f.get("family", ""), mechanism=f.get("mechanism", ""), counterparty=f.get("counterparty", ""),
+                            sign=f.get("sign", ""), instruments=insts, mechanisms=mechs, variants=variants, code_text=f.get("code", ""), sealed=seal)
     if not res["ok"]:
-        return redirect(url_for("rulebook_page", notice=res["error"], ok="0"))
+        return redirect(url_for("rulebook_page", notice="G2 not met: " + " ".join(res["problems"]), ok="0"))
     row = res["row"]
-    return redirect(url_for("rulebook_page", ok="1", notice=f"Logged {row['id']}. N is now {row['n_after']}, so the bar for this quarter is z = {row['z_bar']}."))
+    return redirect(url_for("rulebook_page", ok="1", notice=f"Registered {row['id']} (code hash {row['code_hash']}). N is now {row['n_after']}, so E[max N] = {row['e_max']}."))
+
+
+@app.route("/rulebook/trial/<tid>/archive", methods=["POST"])
+def rulebook_archive_trial(tid):
+    from app.validation import rulebook as rb
+    ok = rb.archive_trial(tid, request.form.get("gate", "G3"), request.form.get("failing_number", "archived by hand"))
+    return redirect(url_for("rulebook_page", ok="1" if ok else "0", notice=("Archived " + tid + ". A revival is a new registration and counts as new looks.") if ok else "No such trial."))
+
+
+@app.route("/rulebook/rules-sheet", methods=["POST"])
+def rulebook_save_rules_sheet():
+    """G0: save the rules sheet. Every field carries its value, a source and the date it was checked; one blank stops everything."""
+    from app.validation import rulebook as rb
+    f = request.form
+    sheet = rb.load_rules_sheet()
+    today = datetime.now().date().isoformat()
+    for key, _label in rb.RULES_SHEET_FIELDS:
+        val = (f.get(key) or "").strip()
+        if val == "":
+            sheet.pop(key, None)
+            continue
+        old = sheet.get(key) or {}
+        changed = str(old.get("value", "")) != val
+        sheet[key] = {"value": val, "source": (f.get(key + "__source") or old.get("source") or "").strip(),
+                      "checked_on": (f.get(key + "__date") or (today if changed else old.get("checked_on")) or today).strip()}
+    for key, _label in rb.RULES_SHEET_CONFIRMATIONS:
+        if f.get(key):
+            sheet[key] = {"value": True, "source": (f.get(key + "__source") or "written confirmation").strip(), "checked_on": today}
+        else:
+            sheet.pop(key, None)
+    rb.save_rules_sheet(sheet)
+    g0 = rb.g0_rules_sheet(sheet)
+    return redirect(url_for("rulebook_page", ok="1" if g0.passed else "0", notice="G0 passed: the rules sheet is complete and fresh." if g0.passed else "Saved. G0 still open: " + g0.failing_number()))
+
+
+@app.route("/rulebook/rules-sheet/preset", methods=["POST"])
+def rulebook_rules_sheet_from_preset():
+    from app.validation import rulebook as rb
+    key = request.form.get("preset", "")
+    try:
+        sheet = rb.load_rules_sheet()
+        sheet.update(rb.rules_sheet_from_preset(key))
+        rb.save_rules_sheet(sheet)
+    except KeyError:
+        return redirect(url_for("rulebook_page", ok="0", notice="Unknown preset."))
+    return redirect(url_for("rulebook_page", ok="1", notice="Filled the rules the preset carries (with its source and check date). Payout terms, fees and written confirmations stay blank until you source them."))
 
 
 @app.route("/api/rulebook/calc")
 def api_rulebook_calc():
-    """?sr=0.10&looks=10  ->  z bar + trades needed;  ?b=2&c=0.05 -> required lift."""
+    """?n=600&looks=10[&sigma=1.46][&edge=0.12] -> E[max N], the observed edge G3 needs, the derived trade floor and the planning edge."""
     from app.validation import rulebook as rb
     try:
-        sr = float(request.args.get("sr", 0.10)); looks = int(request.args.get("looks", 1))
-        b = float(request.args.get("b", 2)); c = float(request.args.get("c", rb.DEFAULT_COST_R))
+        n = int(request.args.get("n", 600)); looks = int(request.args.get("looks", 1))
+        sigma = float(request.args.get("sigma", rb.SIGMA_R_AT_2_TO_1)); edge = request.args.get("edge")
+        edge = float(edge) if edge not in (None, "") else None
     except ValueError:
         return jsonify({"ok": False, "error": "numbers only"}), 400
-    return jsonify({"ok": True, "z_bar": round(rb.z_bar(looks), 3), "trades_needed": rb.trades_needed(sr, looks) if sr > 0 else None,
-                    "required_lift_pts": round(rb.required_lift(b, rb.TARGET_EDGE_R, c) * 100, 2),
-                    "breakeven_win_rate": round(rb.breakeven_win_rate(b, c) * 100, 2)})
+    out = {"ok": True, "e_max": round(rb.expected_max_z(looks), 3), "z_bar": round(rb.z_bar(looks), 3),
+           "required_observed_edge": round(rb.required_observed_edge(n, looks, sigma), 4)}
+    if edge is not None:
+        out["e_plan"] = round(rb.e_plan(edge, looks, sigma / max(n, 1) ** 0.5), 4)
+        out["trade_floor"] = rb.trade_floor(looks, edge, sigma) if edge > rb.E_PLAN_FLOOR_R else None
+    return jsonify(out)
+
+
+@app.route("/api/rulebook/attempts")
+def api_rulebook_attempts():
+    """?outcomes=1,0,0,1 (1 = paid) -> the G7 attempt score and decision."""
+    from app.validation import rulebook as rb
+    outs = [x.strip() == "1" for x in (request.args.get("outcomes") or "").split(",") if x.strip() in ("0", "1")]
+    return jsonify({"ok": True, **rb.g7_capped_attempts(outs).to_dict()})
 
 
 @app.route("/api/prop-presets/<key>/acknowledge", methods=["POST"])
@@ -2367,7 +2429,7 @@ def api_prop_firm_presets():
     max drawdown, ...) get a working preset shortcut without every one
     of ~60 render_template() call sites across this file needing to
     remember to thread the data through by hand."""
-    return jsonify([p.to_dict() for p in list_prop_firm_presets()])
+    return jsonify([p.to_dict() for p in list_presets()])
 
 
 @app.route("/current-strategy/set", methods=["POST"])
@@ -2486,7 +2548,7 @@ def _simple_pickers(form=None) -> dict:
         # v9.8: pickers group by instrument-symbol prefix (ES1! -> its
         # files, NQ1! -> its files), not by data/raw subfolder.
         "dataset_groups": list_datasets_grouped_for_picker(),
-        "prop_presets": list_prop_firm_presets(),
+        "prop_presets": list_presets(),
         "prop_presets_json": _prop_presets_json(),
         "saved_strategies_json": _saved_strategies_json(),
         "timeframe_choices": TIMEFRAME_CHOICES,
@@ -8594,7 +8656,7 @@ def serve_payout_report(filename):
 def prop_firm_recommender_form():
     return render_template(
         "prop_firm_recommender.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-        saved_strategies_json=_saved_strategies_json(), all_presets=list_prop_firm_presets(), **_alpaca_template_context())
+        saved_strategies_json=_saved_strategies_json(), all_presets=list_presets(), **_alpaca_template_context())
 
 
 @app.route("/prop-firm-recommender/run", methods=["POST"])
@@ -8602,7 +8664,7 @@ def prop_firm_recommender_run():
     form = request.form
     ctx = lambda **kw: dict(
         stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-        saved_strategies_json=_saved_strategies_json(), all_presets=list_prop_firm_presets(), **kw,
+        saved_strategies_json=_saved_strategies_json(), all_presets=list_presets(), **kw,
     )
     try:
         df, active_label, import_note, dataset_error = _resolve_dataset(form, request.files)
@@ -11167,6 +11229,15 @@ def _deploy_auth_state():
     return has_password, bool(session.get("t58_unlocked"))
 
 
+def _demo_mode_block():
+    """Real broker credentials / real trading are for Live mode only. Every user starts in Demo."""
+    from app.demo_account import get_mode
+    if get_mode() != "live":
+        return jsonify({"ok": False, "demo_mode": True, "error": "You are in Demo mode. Switch to Live in Account settings before "
+                        "connecting a real prop-firm account. Demo runs on the T58 demo account (Demo account page)."}), 409
+    return None
+
+
 def _connect_guard():
     """Saving/testing broker credentials needs the app lock (when a password
     exists, the browser must be unlocked) but NOT the live-deploy enable
@@ -11220,7 +11291,7 @@ def deploy_live_connect_json():
 
 @app.route("/deploy-live/connect/save", methods=["POST"])
 def deploy_live_connect_save():
-    guard = _connect_guard()
+    guard = _connect_guard() or _demo_mode_block()
     if guard:
         return guard
     from app.live_deploy import connect_flow
@@ -11356,7 +11427,7 @@ def deploy_live_start():
     RiskConfig the engine actually reads -- the old code set it only on
     PropRules, so web-launched sessions had NO daily-loss halt at all.
     """
-    guard = _web_live_deploy_guard()
+    guard = _web_live_deploy_guard() or _demo_mode_block()
     if guard:
         return guard
     _no_pick = _deploy_requires_saved_strategy(request.form)
@@ -11579,6 +11650,95 @@ def _pnl_row(kind: str, label: str, s) -> dict:
         "halted_reason": s.halted_reason, "alert": getattr(s, "alert", None),
         "drift_flag": s.drift_flag,
     }
+
+
+# ---- T58 Demo / Live account -------------------------------------------------------------------------------------------------
+@app.route("/api/header-pnl")
+def api_header_pnl():
+    """The top-right P&L tracker: Demo = the T58 demo prop account, Live = running real sessions. Read-only."""
+    from app.demo_account import header_payload
+    rows = []
+    try:
+        rows = [r for r in (api_live_pnl().get_json() or {}).get("sessions", []) if r.get("kind") == "live"]
+    except Exception:  # noqa: BLE001
+        rows = []
+    return jsonify(header_payload(rows))
+
+
+@app.route("/api/demo-account")
+def api_demo_account():
+    from app.demo_account import get_mode, load
+    return jsonify({"mode": get_mode(), "account": load().to_dict()})
+
+
+@app.route("/settings/account/mode", methods=["POST"])
+def account_mode_save():
+    """Demo / Live toggle in Account settings. Demo is the default; Live is required to connect a real prop-firm account."""
+    from app.demo_account import set_mode
+    wants_json = request.is_json or "application/json" in (request.headers.get("Accept") or "")
+    body = request.get_json(silent=True) or {}
+    mode = (body.get("mode") or request.form.get("mode") or "").strip().lower()
+    try:
+        set_mode(mode)
+    except ValueError as exc:
+        if wants_json:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return render_template("account_settings.html", **_account_settings_page_context(error=str(exc))), 400
+    if wants_json:
+        return jsonify({"ok": True, "mode": mode})
+    return render_template("account_settings.html", **_account_settings_page_context(saved="mode"))
+
+
+@app.route("/demo-account")
+def demo_account_page():
+    from app.demo_account import TIERS, get_mode, load
+    from app.webhook_relay.config import get_public_url
+    return render_template("demo_account.html", active_page="demo_account", mode=get_mode(), acct=load().to_dict(), tiers=TIERS,
+                           public_url=get_public_url())
+
+
+@app.route("/demo-account/tier", methods=["POST"])
+def demo_account_tier():
+    from app.demo_account import set_tier
+    try:
+        set_tier(float(request.form.get("size") or (request.get_json(silent=True) or {}).get("size") or 0))
+    except (ValueError, TypeError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    return redirect(url_for("demo_account_page")) if not request.is_json else jsonify({"ok": True})
+
+
+@app.route("/demo-account/reset", methods=["POST"])
+def demo_account_reset():
+    from app.demo_account import reset
+    reset()
+    return redirect(url_for("demo_account_page"))
+
+
+@app.route("/demo-account/deploy", methods=["POST"])
+def demo_account_deploy():
+    """Forward test / deploy a validated strategy to the T58 demo account: returns the TradingView webhook URL + alert message."""
+    from app.demo_account import deploy_strategy
+    body = request.get_json(silent=True) or request.form
+    tickers = [t.strip() for t in str(body.get("tickers") or "").replace(";", ",").split(",") if t.strip()]
+    out = deploy_strategy(str(body.get("strategy") or ""), size=float(body.get("size") or 0) or None, tickers=tickers or None)
+    return jsonify({"ok": True, **out})
+
+
+@app.route("/demo-account/sim-trade", methods=["POST"])
+def demo_account_sim_trade():
+    """Book a closed trade by hand (testing the book end to end, or journaling a fill the alert missed). Demo mode only."""
+    from app.demo_account import get_mode, record_trade
+    if get_mode() != "demo":
+        return jsonify({"ok": False, "error": "Switch to Demo mode in Account settings first."}), 409
+    body = request.get_json(silent=True) or request.form
+    try:
+        row = record_trade(float(body.get("pnl")), root=str(body.get("root") or ""), side=str(body.get("side") or ""), source="manual")
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "pnl must be a number."}), 400
+    if row is None:
+        return jsonify({"ok": False, "error": "The demo evaluation is finished (passed or breached). Start a new attempt."}), 409
+    return jsonify({"ok": True, "trade": row})
+
 
 
 @app.route("/api/live-pnl")
@@ -12649,6 +12809,7 @@ def forge_start():
             locked_holdout_frac=float(form.get("locked_holdout_frac", 0.15) or 0.15) if advanced else 0.15,
             workers=int(workers_raw) if workers_raw else None,
             random_seed=seed,
+            objective_mode=_form_objective_mode(form),
             reset_on_breach=form.get("reset_on_breach", "on") == "on",
         )
         risk = RiskConfig(

@@ -347,7 +347,8 @@ def start():
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         req = EngineRequest(preset=preset_name, df=df, risk=risk, prop_rules=rules, instrument=label, timeframe=tf, families=families, seed=seed,
                             frames=None, risks=None, progress_cb=lambda m: JOB_MANAGER.log(job_id, str(m)), cancel_event=cancel,
-                            use_memory=(request.form.get("fresh_start") != "on"))
+                            use_memory=(request.form.get("fresh_start") != "on"),
+                            objective_mode="net_profit" if (form.get("objective_mode") or "").strip().lower() in ("net_profit", "net", "live") else "prop")
         threading.Thread(target=_run_engine_job, args=(job_id, req, JOB_DISCOVERY_ENGINE, (label, df, risk)), daemon=True).start()
         return redirect(f"/discovery-engine/job/{job_id}")
     except Exception as exc:  # noqa: BLE001

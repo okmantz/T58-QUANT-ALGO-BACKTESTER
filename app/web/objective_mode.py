@@ -16,6 +16,8 @@ from werkzeug.datastructures import ImmutableMultiDict
 from app.optimize.refinement import fitness_for_objective_mode
 from app.prop.lifecycle import DEFAULT_OBJECTIVE_MODE, OBJECTIVE_MODE_LABELS, OBJECTIVE_NET_PROFIT, normalize_objective_mode
 
+_PROP_ONLY_METRICS = ("eval_pass_probability", "first_payout_probability", "expected_payout")
+_NET_OBJECTIVES = ("net_profit", "sharpe_ratio", "max_drawdown_pct")
 _FORM_TYPES = ("application/x-www-form-urlencoded", "multipart/form-data")
 
 
@@ -34,6 +36,17 @@ def apply_objective_mode_to_form() -> None:
         rewritten = form.copy()
         rewritten["fitness_metric"] = fitness_for_objective_mode(mode, form.get("fitness_metric"))
         rewritten["objective_mode"] = mode
+        # Engines that do not read ``fitness_metric`` use their own selectors; rewrite those too so no prop-firm metric survives.
+        if rewritten.get("fitness_goal_preset", "") not in ("", "custom"):
+            rewritten["fitness_goal_preset"] = "net_profit"           # Evolution Lab goal presets (single + multi-instrument)
+        if rewritten.get("metric", "") in _PROP_ONLY_METRICS:
+            rewritten["metric"] = "net_profit"                        # Parameter-robustness map etc.
+        if "objectives" in form:                                      # Multi-objective NSGA-II
+            kept = [o for o in form.getlist("objectives") if o not in _PROP_ONLY_METRICS]
+            for o in _NET_OBJECTIVES:
+                if o not in kept:
+                    kept.append(o)
+            rewritten.setlist("objectives", kept)
         request.form = ImmutableMultiDict(rewritten)
     except Exception:  # noqa: BLE001 -- a hook that fails must never take a page down
         return
