@@ -221,6 +221,11 @@ class FullPipelineConfig:
     # audit_evidence["payout_forecast"]. Informational: it ranks firms by conservative expected payout and never changes the verdict.
     payout_forecast: bool = True
     payout_forecast_sims: int = 800
+    # 2026-11-07: "prop_lifecycle" (DEFAULT) attaches the account-lifecycle simulation (evaluation stage, funded stage, payout, time to
+    # target in CALENDAR days -- app.prop.lifecycle) to audit_evidence["lifecycle"]. "net_profit" is the live-account alternative: the
+    # prop-firm lifecycle is skipped and the Net Profit Tester (app.validation.net_profit_tester) is attached as audit_evidence["net_profit_test"].
+    objective_mode: str = "prop_lifecycle"
+    lifecycle_sims: int = 1500
     payout_forecast_max_firms: int = 8
     payout_horizon_days: int = 35
     # 2026-10-27 audit (fix 4/5 + speed objective): prop traders are happy with a first payout in 30-45 days, so the replay also counts
@@ -3779,6 +3784,26 @@ def run_full_pipeline(
                 log("  Payout forecast (" + ("unseen holdout" if _oos else "in-sample, optimistic") + "): " + _audit_ev["payout_forecast"]["summary"]["headline"])
             except Exception as exc:  # noqa: BLE001 -- informational layer; never blocks a run
                 log(f"  Payout forecast skipped: {exc}")
+        if isinstance(_audit_ev, dict):
+            try:
+                from app.prop.lifecycle import OBJECTIVE_NET_PROFIT as _ONP, normalize_objective_mode as _nom
+                _mode = _nom(getattr(cfg, "objective_mode", None))
+                _audit_ev["objective_mode"] = _mode
+                _ltrades = list(final_bt.trades)
+                if _mode == _ONP:
+                    from app.validation.net_profit_tester import NetProfitTestConfig as _NC, run_net_profit_test as _rnp
+                    _npt = _rnp(_ltrades, _NC(starting_equity=float(getattr(risk, "initial_balance", 10_000.0) or 10_000.0),
+                                              random_seed=int(getattr(cfg, "random_seed", 42) or 42)))
+                    _audit_ev["net_profit_test"] = _npt.to_dict()
+                    log("  Net profit test (live account): " + _npt.headline())
+                elif len(_ltrades) >= 20 and prop_rules is not None:
+                    from app.prop.lifecycle import LifecycleConfig as _LC, run_lifecycle as _rlc
+                    _lc = _rlc(_ltrades, prop_rules, _LC(n_simulations=int(getattr(cfg, "lifecycle_sims", 1500)),
+                                                         random_seed=int(getattr(cfg, "random_seed", 42) or 42)))
+                    _audit_ev["lifecycle"] = _lc.to_dict()
+                    log("  Account lifecycle: " + _lc.headline())
+            except Exception as exc:  # noqa: BLE001 -- informational layer; never blocks a run
+                log(f"  Lifecycle / net-profit evidence skipped: {exc}")
         if isinstance(_audit_ev, dict):
             _audit_ev["gate_vector"] = getattr(scorecard, "gate_vector", None)
             _audit_ev["pooled_status"] = getattr(oos_validation, "pooled_status", None) if oos_validation is not None else None
