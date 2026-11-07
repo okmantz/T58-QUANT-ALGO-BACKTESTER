@@ -324,3 +324,14 @@ def test_exactly_one_web_and_one_desktop_workflow_each_covering_three_oses():
         # Linux runners are pinned to ubuntu-24.04 in the workflows (ubuntu-latest is also accepted).
         for os_names in (("windows-latest",), ("macos-latest",), ("ubuntu-latest", "ubuntu-24.04")):
             assert any(n in text for n in os_names), f"{rel} must build on {os_names[0]}"
+
+
+def test_chromebook_platform_is_packaged(tmp_path):
+    dist = tmp_path / "dist" / "T58-Web-App"
+    (dist / "_internal").mkdir(parents=True)
+    (dist / "T58-Web-App").write_bytes(b"\x7fELF")
+    (dist / "_internal" / "base_library.zip").write_bytes(b"PK")
+    entries = pr.collect_app_entries(dist, tmp_path / "txt", "chromebook", "T58-Web-App-Chromebook")
+    names = {a for _, a in entries}
+    assert "install_chromebook.sh" in names or any(n.endswith("install_chromebook.sh") for n in names)
+    assert pr.validate_names(entries, zip_stem="T58-Web-App-Chromebook") == []
