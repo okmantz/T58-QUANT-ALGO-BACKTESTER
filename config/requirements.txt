@@ -1,3 +1,5 @@
+# NOTE (2026-11-07): this file is still the FULL install used by CI and release builds. For a lighter dev install use
+# requirements-core.txt (runtime essentials); requirements-extras.txt lists the optional packages. Keep all three in sync.
 pandas>=2.0.0
 numpy>=1.24.0
 pytest>=7.4.0

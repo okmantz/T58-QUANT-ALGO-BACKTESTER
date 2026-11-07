@@ -1,0 +1,18 @@
+# Optional extras (broker/data connectors, ML families, reports, alt optimizers). Each is optional in spirit: the feature that needs it
+# raises one clear 'pip install ...' error if it is missing. Installed on top of requirements-core.txt via requirements.txt.
+# The full commented list (with the reason for every package) stays in the previous requirements.txt history; names below.
+pytest>=7.4.0
+alpaca-py>=0.33.0
+py7zr>=0.20.0
+pypdf>=4.0.0
+scikit-learn>=1.3.0
+lightgbm>=4.0.0
+MetaTrader5>=5.0.45; platform_system == "Windows"
+rpyc>=5.3,<7
+lse-data>=0.14.0
+ctrader-open-api>=0.9.0
+reportlab>=4.0.0
+optuna>=3.0.0
+cma>=3.0.0
+pynescript>=0.3.0
+numba>=0.59.0
