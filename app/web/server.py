@@ -4836,6 +4836,8 @@ def run_pipeline():
             }
 
         bt_result = run_backtest(df, strategy, risk, adaptive_risk=adaptive_risk)
+        from app.validation.trial_chain import note_looks as _note_looks
+        _note_looks("backtest", "single_backtest", 1, src="web:/run")      # 2026-11-06: every look counts, even a plain backtest
         if adaptive_risk is not None:
             # Surfaced in the report's own warnings section (not just the
             # server log) so the setting that produced these numbers is
@@ -12791,6 +12793,24 @@ def trial_ledger_api():
         return jsonify(plain_summary())
     except TrialLedgerError as exc:
         return jsonify({"error": str(exc), "ledger_corrupt": True}), 500
+
+
+@app.route("/api/preset-provenance")
+def preset_provenance_api():
+    """Every prop preset's source URL, verification date/tier, UNVERIFIED flag and the rules it does not model."""
+    from app.prop.provenance import provenance_table
+    return jsonify(provenance_table())
+
+
+@app.route("/api/trial-chain/verify")
+def trial_chain_verify_api():
+    """Verify the append-only hash chain of every trial booking and report the pure-noise t ceiling for the looks it holds."""
+    from app.validation import trial_chain as tc
+    from app.validation import trial_ledger as tl
+    cp = tl._PATH.with_name("trial_chain.jsonl")      # noqa: SLF001
+    st = tc.verify(cp)
+    sm = tc.summary(cp)
+    return jsonify({"status": st.to_dict(), "summary": sm, "noise": tc.judge(None, max(1, sm["raw_total"]))}), (200 if st.ok else 409)
 
 
 @app.route("/graveyard")
