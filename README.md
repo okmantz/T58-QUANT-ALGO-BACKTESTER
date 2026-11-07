@@ -56,6 +56,7 @@ T58-Market-Data**); extract it next to the `.exe`. Tagged releases (`v*`) attach
 | Windows | double-click `launchers\run_web.bat` |
 | macOS | double-click `launchers/run_web.command` (first time: right-click, Open; if it will not run, `chmod +x launchers/run_web.command launchers/run_web.sh`) |
 | Linux | `bash launchers/run_web.sh` |
+| Chromebook (Linux/Crostini on) | download the *Chromebook* (or *Chromebook-ARM*) zip, then `bash install_chromebook.sh`; see [docs/INSTALL_CHROMEBOOK.md](docs/INSTALL_CHROMEBOOK.md) |
 | Manual | `pip install -r config/requirements.txt` then `python launchers/run_web.py` |
 
 The first run creates a private `.venv`. If port 5000 is busy the app picks the next free one and prints the address and a QR code.
@@ -67,7 +68,7 @@ For your phone, scan the QR code on the same Wi-Fi, or use [Tailscale](https://t
 (`--help` lists every flag). Reports land in `reports/report.{json,html}`; the HTML is self-contained and prints to PDF.
 
 `python scripts/web_smoke_test.py` starts the real server and checks every main page. The **web-cross-platform** and
-**desktop-cross-platform** Actions run the tests and the smoke test on Windows, macOS and Linux.
+**desktop-cross-platform** Actions run the tests and the smoke test on Windows, macOS, Linux and Chromebook (Debian 12 container).
 
 New buyers: [docs/buyer/INSTALL.md](docs/buyer/INSTALL.md), then [docs/buyer/QUICKSTART.md](docs/buyer/QUICKSTART.md).
 
@@ -320,3 +321,15 @@ Brand colors: `assets/brand/palette.md`.
 ## Disclaimer
 
 Simulated results are estimates derived from historical data and resampling. Past performance and simulated outcomes do not guarantee future results.
+
+
+## What changed on 2026-11-07
+
+- **Chromebook build** (x86_64 and ARM64), built in a Debian 12 container so it matches ChromeOS's Linux (Crostini).
+- **Investing tab** (Hedge Fund Manager > Investing): search stocks, indices and crypto; SEC EDGAR financial statements and filings; an undervaluation
+  screen; manual orders; automated investing tuned by a 6-question profile; backtests; paper mode by default. See [docs/INVESTING.md](docs/INVESTING.md).
+- **Prop-firm lifecycle is the default objective everywhere**: P(pass evaluation), P(funded), P(funded survival), P(pass AND payout), time to target in
+  *calendar* days. A **net-profit** mode for live accounts is a selectable option on every form. See [docs/PROP_LIFECYCLE.md](docs/PROP_LIFECYCLE.md).
+- **Hypothesis-first discovery** (Discovery Engine > families > "Hypothesis-first") and **all families enabled by default** (`T58_USE_ALL_FAMILIES=0` restores the narrowed set).
+- **Canonical engine reconciliation** (`app/backtest/reconcile.py`): the fast path is checked trade-by-trade against the scalar reference engine.
+- **SEC EDGAR live filings** (8-K / 10-Q / 10-K) in Global Events.
