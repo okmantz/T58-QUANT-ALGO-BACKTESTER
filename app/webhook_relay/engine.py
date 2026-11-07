@@ -87,6 +87,12 @@ def handle(relay: RelayConfig, signal: Signal, *, wait_for_broker: bool = False,
     except ValueError as exc:
         return done("error", str(exc), False)
 
+    try:                       # Demo mode: a relay linked to the T58 demo account books each closed leg as a win / loss there
+        from app.demo_account.account import record_relay_actions
+        record_relay_actions(relay.id, actions)
+    except Exception:  # noqa: BLE001 - the demo book must never break alert handling
+        pass
+
     if not actions:
         message = f"Already {signal.target}; nothing to do." if signal.target != "flat" else "Already flat; nothing to do."
         status = "no_change"
