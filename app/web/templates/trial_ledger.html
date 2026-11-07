@@ -34,6 +34,9 @@
   </div>
   <p style="margin:10px 0 0">{{ s.headline }}</p>
   <ul class="tl-explain">{% for e in s.explain %}<li>{{ e }}</li>{% endfor %}</ul>
+  {% if s.chain %}<p style="margin:10px 0 0"><strong>Tamper-evident log:</strong> {{ s.chain.text }}
+    {% if s.chain.ok %}<span style="color:var(--text-muted)">Chain intact (head {{ s.chain.head }}).</span>
+    {% else %}<span style="color:#c0392b"><strong>Chain BROKEN:</strong> {{ s.chain.reason }}</span>{% endif %}</p>{% endif %}
 </div>
 
 {% if s.breakdown %}
