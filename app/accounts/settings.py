@@ -52,6 +52,8 @@ class AccountSettings:
     # (this file may move between machines/backups) and never the image
     # bytes themselves (this is a small JSON file, not a blob store).
     profile_picture_filename: str = ""
+    # "demo" (default for every new user: the T58 Prop Firm demo account) or "live" (real connected prop-firm account).
+    account_mode: str = "demo"
 
     @property
     def has_password(self) -> bool:
@@ -75,6 +77,7 @@ def load_account_settings() -> AccountSettings:
             company=str(data.get("company", "")),
             password_hash=str(data.get("password_hash", "")),
             profile_picture_filename=str(data.get("profile_picture_filename", "")),
+            account_mode="live" if str(data.get("account_mode", "demo")).lower() == "live" else "demo",
         )
     except Exception:  # noqa: BLE001 -- a corrupt/unreadable file must never crash the Account tab
         return AccountSettings()
