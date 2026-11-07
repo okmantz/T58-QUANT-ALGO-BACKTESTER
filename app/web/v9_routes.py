@@ -205,7 +205,7 @@ def prop_sim_strategy_edge():
 
 @v9_bp.route("/api/prop-sim/presets")
 def prop_sim_presets():
-    from app.prop.presets import list_presets
+    from app.prop.presets import get_fee_info, list_presets
 
     out = []
     for p in list_presets():
@@ -217,5 +217,70 @@ def prop_sim_presets():
             "payout_threshold_pct": p.payout_threshold_pct,
             "funded_consistency_pct": getattr(p, "funded_consistency_rule_pct", None),
             "payout_frequency_days": p.payout_frequency_days,
+            "dd_basis": getattr(p, "dd_basis", "legacy"), "trailing_lock": getattr(p, "trailing_lock", False),
+            "daily_loss_action": getattr(p, "daily_loss_action", "fail"),
+            "max_eval_days": getattr(p, "max_eval_calendar_days", None),
+            "algo_allowed": getattr(p, "algo_trading_allowed", False),
+            "fee": (lambda f: None if f is None else {"price": f.challenge_price, "reset": f.reset_price, "split_pct": f.profit_split_pct,
+                                                      "activation": f.activation_fee, "monthly": f.monthly_subscription})(get_fee_info(p.key)),
         })
     return jsonify({"ok": True, "presets": out})
+
+
+# ----------------------------------------------------------- payout forecast (2026-11-07)
+@v9_bp.route("/api/payout-forecast/run", methods=["POST"])
+def payout_forecast_run():
+    """Will this saved strategy pass an evaluation AND get paid, at which firm, and is the fee worth it?
+
+    Backtests the strategy on a stored dataset, then forecasts every algo-allowed firm preset from its real trades (Monte Carlo + real
+    start-date replay), ranked by conservative expected payout per month. ``holdout_frac`` (0-0.5, default 0) forecasts only on the LAST
+    share of the trades -- use it when the strategy was NOT tuned on that period; the result is then graded out-of-sample."""
+    import pandas as pd
+    from app.prop.edge_probe import backtest_saved_strategy
+    from app.validation.payout_forecast import forecast_across_firms, summarize
+
+    body = request.get_json(silent=True) or {}
+    stype, name = (body.get("type") or "").strip(), (body.get("name") or "").strip()
+    if not stype or not name:
+        return _err("Pick a saved strategy first.")
+    try:
+        trades, info = backtest_saved_strategy(stype, name, (body.get("dataset") or "").strip() or None)
+        frac = min(max(float(body.get("holdout_frac") or 0.0), 0.0), 0.5)
+        oos = False
+        if frac > 0:
+            cut = pd.Timestamp(trades[0].entry_time) + (pd.Timestamp(trades[-1].entry_time) - pd.Timestamp(trades[0].entry_time)) * (1 - frac)
+            later = [t for t in trades if pd.Timestamp(t.entry_time) > cut]
+            if len(later) >= 30:
+                trades, oos = later, True
+            else:
+                info["note"] = f"Only {len(later)} trades in the last {frac * 100:.0f}% of the history; forecast uses all trades (in-sample)."
+        fs = forecast_across_firms(trades, source_account_size=info["source_account_size"], sims=int(body.get("sims") or 1000),
+                                   max_firms=int(body.get("max_firms") or 12), out_of_sample=oos, algo_only=bool(body.get("algo_only", True)))
+        return jsonify({"ok": True, "info": info, "summary": summarize(fs), "firms": [f.to_dict() for f in fs]})
+    except ValueError as exc:
+        return _err(str(exc))
+    except Exception as exc:  # noqa: BLE001
+        return _err(f"Could not build the forecast: {type(exc).__name__}: {exc}", 500)
+
+
+@v9_bp.route("/api/payout-forecast/outcome", methods=["POST"])
+def payout_forecast_outcome():
+    """Record what really happened to a forecast (passed / paid) so future forecasts are calibrated against reality."""
+    from app.validation.payout_forecast import calibration_summary, record_outcome
+
+    b = request.get_json(silent=True) or {}
+    try:
+        rec = record_outcome(str(b.get("strategy") or ""), str(b.get("preset_key") or ""), float(b.get("forecast_p_pass")),
+                             passed=b.get("passed"), paid=b.get("paid"),
+                             forecast_p_paid=None if b.get("forecast_p_paid") is None else float(b.get("forecast_p_paid")),
+                             note=str(b.get("note") or ""))
+    except (TypeError, ValueError):
+        return _err("forecast_p_pass is required (a fraction between 0 and 1).")
+    return jsonify({"ok": True, "record": rec, "calibration": calibration_summary()})
+
+
+@v9_bp.route("/api/payout-forecast/calibration")
+def payout_forecast_calibration():
+    from app.validation.payout_forecast import calibration_summary, read_ledger, shrink_factor
+
+    return jsonify({"ok": True, "calibration": calibration_summary(), "shrink_factor": shrink_factor(), "records": read_ledger()[-50:]})

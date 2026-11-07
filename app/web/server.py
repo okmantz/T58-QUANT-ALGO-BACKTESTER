@@ -4217,11 +4217,17 @@ def _parse_replay_prop_rules(form) -> dict:
             return float(raw)
         except ValueError:
             return default
+    dd_type = (form.get("drawdown_type") or "").strip().lower()
     return {
         "account_size": _f("account_size"),
         "profit_target_pct": _f("profit_target"),
         "daily_loss_pct": _f("daily_loss"),
         "max_drawdown_pct": _f("max_dd"),
+        # 2026-11-07 (replay prop panel accuracy): the rules the panel needs to mirror a real firm instead of a bare trailing peak-to-trough
+        "drawdown_type": dd_type if dd_type in ("trailing", "eod", "static") else "trailing",
+        "consistency_pct": _f("consistency_pct"),
+        "min_days": _f("min_days"),
+        "preset_key": (form.get("preset_key") or "").strip() or None,
     }
 
 
