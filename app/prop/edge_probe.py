@@ -216,3 +216,46 @@ def measure_edge(strategy_type: str, name: str, dataset: str | None = None,
             cache.pop(k, None)
     _save_cache(cache)
     return out
+
+
+def backtest_saved_strategy(strategy_type: str, name: str, dataset: str | None = None, max_raw_bars: int = DEFAULT_MAX_RAW_BARS,
+                            initial_balance: float = 100000.0) -> tuple[list, dict[str, Any]]:
+    """Backtest one saved library strategy exactly as ``measure_edge`` does and return ``(trades, info)`` -- the real trade list the
+    payout forecast needs (``measure_edge`` only returns summary numbers). ``info`` carries the dataset, the account size the trades
+    were sized on, and the covered period. Raises ValueError with a readable message for anything the person can act on."""
+    from app.backtest.engine import run_backtest
+    from app.backtest.risk import RiskConfig, suggest_pip_size
+    from app.data.importer import import_csv
+    from app.data.instrument_specs import apply_instrument_spec, get_instrument_spec, guess_instrument_symbol
+    from app.data.storage import resolve_stored_dataset
+    from app.strategy.library import list_saved_strategies
+    from app.strategy.library_loader import load_strategy_object
+
+    stored = next((s for s in list_saved_strategies(strategy_type) if s.name == name), None)
+    if stored is None:
+        raise ValueError(f"Saved strategy '{name}' ({strategy_type}) was not found in the library.")
+    dataset = dataset or suggest_dataset(strategy_type, name, stored.metadata)
+    if not dataset:
+        raise ValueError("No market data is available to run this strategy on. Add data under Account > Data Center first.")
+    path = resolve_stored_dataset(dataset)
+    if path is None:
+        raise ValueError(f"Dataset '{dataset}' could not be found.")
+    imported = import_csv(path)
+    if not imported.is_valid:
+        raise ValueError("That dataset could not be read: " + "; ".join(imported.errors))
+    df = imported.dataframe
+    if len(df) > max_raw_bars:
+        df = df.tail(max_raw_bars).reset_index(drop=True)
+    strategy = load_strategy_object(stored)
+    symbol = guess_instrument_symbol(dataset)
+    risk = RiskConfig(initial_balance=float(initial_balance), risk_mode="percent", risk_value=0.5,
+                      pip_size=suggest_pip_size(df), contract_size=None)
+    if symbol and get_instrument_spec(symbol) is not None:
+        risk = apply_instrument_spec(risk, symbol)
+    result = run_backtest(df, strategy, risk, lookahead_check="skip")
+    trades = list(result.trades)
+    if not trades:
+        raise ValueError(f"'{name}' took no trades on {dataset}. Try a different dataset.")
+    first, last = pd.to_datetime(trades[0].entry_time), pd.to_datetime(trades[-1].exit_time)
+    return trades, {"dataset": dataset, "source_account_size": float(initial_balance), "period": f"{first.date()} -> {last.date()}",
+                    "trades": len(trades)}
