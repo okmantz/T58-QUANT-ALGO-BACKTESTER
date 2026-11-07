@@ -1319,8 +1319,12 @@ def run_monte_carlo(
 
     rng = np.random.default_rng(cfg.random_seed)
     base_pnls = apply_session_volatility_slippage(trades, cfg.session_slippage)
-    base_dates = [pd.Timestamp(t.entry_time).normalize() for t in trades]
-    n_trading_days = len(set(base_dates))
+    # 2026-11-07 canonical-engine fix: raw entry timestamps (NOT midnight-normalised) so the 17:00 CT session roll buckets every
+    # trade into the same session day as the direct simulate_account call -- see app.prop.lifecycle.canonical_trade_dates.
+    from app.prop.lifecycle import canonical_trade_dates
+    base_dates = canonical_trade_dates(trades)
+    # distinct SESSION days (the dates are raw timestamps now, so len(set(base_dates)) would count trades, not days)
+    n_trading_days = len(set(precompute_day_structure(base_dates).day_dates))
     # P1-5: effective block size scaled to typical trades/day (see
     # _effective_block_size); resolved once here so the methodology note
     # reports the number actually used.
@@ -1582,7 +1586,7 @@ def run_monte_carlo(
                         if sum_total_attempts else 0.0)
     funded_breach_frac = (float(np.count_nonzero(_funded_days <= float(_horizon)) / sum_attempts_passed)
                           if sum_attempts_passed else 0.0)
-    _cal_span = (max(base_dates) - min(base_dates)).days + 1 if base_dates else 0
+    _cal_span = (max(base_dates).normalize() - min(base_dates).normalize()).days + 1 if base_dates else 0
     _horizon_covered = _cal_span >= _horizon
 
     # SPEED (2026-11-05): the same few arrays are asked for many percentiles; sort each once and reuse it (np.percentile of a
