@@ -62,7 +62,7 @@ class Indicators:
                 xt = None
         if xt is not None and hasattr(xt, "dt"):
             self.xhour = xt.dt.hour.to_numpy()
-            self.xdow = xt.dt.dayofweek.to_numpy()
+            self.xdow = xt.dt.day_of_week.to_numpy()
         else:
             self.xhour = self.hour
             self.xdow = ts.dt.day_of_week.to_numpy() if hasattr(ts, "dt") else np.zeros(self.n, int)
