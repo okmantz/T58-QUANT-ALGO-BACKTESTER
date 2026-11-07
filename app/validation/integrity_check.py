@@ -418,6 +418,14 @@ def run_integrity_check(
             ),
         ),
     ]
+    # 2026-11-06: measure the real spread on this tape and say so when the configured one is optimistic (informational, never blocks)
+    try:
+        from app.data.spread_from_tape import measure_spread
+        _sp = measure_spread(df, float(risk.pip_size), float(risk.spread_pips))
+        if _sp["verdict"] != "unmeasured":
+            account_lines.append(IntegrityCheckLine(_sp["verdict"] in ("covers_stress", "measured"), "Spread vs your own data", _sp["text"]))
+    except Exception:  # noqa: BLE001 -- a measurement failure must never break the pre-flight
+        pass
     sections["ACCOUNT"] = account_lines
 
     # ---------------------------------------------------------------

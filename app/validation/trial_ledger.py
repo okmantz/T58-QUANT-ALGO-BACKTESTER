@@ -184,6 +184,16 @@ def decay_report(label, half_life_days: float | None = DEFAULT_HALF_LIFE_DAYS, n
 CLOCK_EPOCHS_KEY = "_clock_epochs"
 
 
+def _chain_append(kind, label, n, **kw):
+    """2026-11-06: mirror every booking into the append-only hash chain (app.validation.trial_chain) BEFORE the counter is rewritten, so
+    a booking can never be in the counter and missing from the log. The chain lives beside the ledger file. Informational: it changes no count."""
+    from app.validation import trial_chain as _tc
+    try:
+        return _tc.append(kind, label, n, path=_PATH.with_name("trial_chain.jsonl"), **kw)
+    except _tc.TrialChainError as exc:
+        raise TrialLedgerError(str(exc)) from exc
+
+
 def mark_clock_epoch(epoch_id: str, note: str, now: float | None = None) -> None:
     """Annotate (never delete) the ledger: every trial recorded before ``now`` ran on the misaligned session clock.
 
@@ -194,6 +204,7 @@ def mark_clock_epoch(epoch_id: str, note: str, now: float | None = None) -> None
         eps = data.get(CLOCK_EPOCHS_KEY) if isinstance(data.get(CLOCK_EPOCHS_KEY), list) else []
         if any(isinstance(e, dict) and e.get("epoch") == epoch_id for e in eps):
             return
+        _chain_append("epoch", epoch_id, 0, src="mark_clock_epoch", meta={"note": str(note)}, now=now)
         eps.append({"epoch": str(epoch_id), "t": time.time() if now is None else float(now), "note": str(note)})
         data[CLOCK_EPOCHS_KEY] = eps
         _write(data)
@@ -210,6 +221,7 @@ def record(label, n: int, now: float | None = None, data_fp: str | None = None) 
         data = _load()
         k = _key(label)
         ents = _entries(data.get(k, 0))
+        _chain_append("record", label, n, fp=data_fp, src="record", now=now)
         ent = {"t": time.time() if now is None else float(now), "n": n}
         if data_fp:
             ent["fp"] = str(data_fp)
@@ -258,6 +270,7 @@ def book_run(run_key: str, counts: dict, now: float | None = None, data_fp: str 
             return {}
         t = time.time() if now is None else float(now)
         for label, n in clean.items():
+            _chain_append("book_run", label, n, fp=data_fp, run_key=run_key, src="book_run", meta={"kinds": kinds} if kinds else None, now=t)
             k = _key(label)
             ents = _entries(data.get(k, 0))
             ent = {"t": t, "n": n}

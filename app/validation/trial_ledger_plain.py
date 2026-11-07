@@ -35,6 +35,20 @@ def _age_text(t: float | None, now: float) -> str:
     return f"{d / 365:.1f} years ago"
 
 
+def _chain_block() -> dict:
+    """Append-only hash-chained log of every booking (app.validation.trial_chain): raw looks, integrity, and the pure-noise t ceiling."""
+    from app.validation import trial_chain as tc
+    cp = tl._PATH.with_name("trial_chain.jsonl")      # noqa: SLF001
+    st = tc.verify(cp)
+    sm = tc.summary(cp)
+    j = tc.judge(None, max(1, sm["raw_total"]))
+    return {"ok": st.ok, "reason": st.reason, "notes": st.notes, "head": st.head_hash[:12], "n_events": sm["n_events"], "raw_looks": sm["raw_total"],
+            "by_kind": sm["by_kind"], "noise_ceiling_t": j["noise_ceiling_t"], "bonferroni_t": j["bonferroni_t"],
+            "text": (f"{sm['raw_total']:,} looks are in the tamper-evident log. Pure noise alone reaches a best t-statistic of about "
+                     f"{j['noise_ceiling_t']:.2f} after that many tries; a result needs to beat that to mean anything.") if sm["raw_total"] else
+                    "Nothing booked in the tamper-evident log yet."}
+
+
 def plain_summary(now: float | None = None, top: int = 40) -> dict:
     now = time.time() if now is None else float(now)
     data = tl._load()                      # noqa: SLF001 -- read-only view of the same file the verdict reads
@@ -76,13 +90,15 @@ def plain_summary(now: float | None = None, top: int = 40) -> dict:
     else:
         headline = (f"Across all runs, {total_tried:,} ideas have been tried. Older tries on different data count for less over time, so the "
                     f"Deflated Sharpe check currently corrects for about {total_counted:,} of them.")
+    chain = _chain_block()
     return {
+        "chain": chain,
         "headline": headline, "total_tried": total_tried, "total_counted": total_counted, "families": fam[:top], "strategies": strat[:top],
         "n_families": len(fam), "n_strategies": len(strat), "breakdown": breakdown,
         "explain": [
             "Every time a search, optimizer or discovery run scores a candidate, one trial is written to this ledger.",
             "The Deflated Sharpe check asks: given this many tries, how good would the BEST one look by pure luck? Your strategy has to beat that.",
-            "A try on the exact same data never fades, because it adds the same luck. A try on older, different data fades with a two-year half-life.",
+            "Tries fade with age, because old luck matters less on fresh data. How fast depends on whether they were run on the same data window you are judging today (see the half-life settings in the trial ledger); the Raw log below never fades.",
             "Similar tries are grouped when their daily results move together, so ten near-identical variants do not count as ten separate ideas.",
         ],
         "half_life_days": tl.DEFAULT_HALF_LIFE_DAYS,
