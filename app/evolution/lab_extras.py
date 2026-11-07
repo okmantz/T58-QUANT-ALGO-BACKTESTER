@@ -355,7 +355,7 @@ class HourOfWeekSpread:
         ts = pd.DatetimeIndex(df["timestamp"])
         if ts.tz is not None:
             ts = ts.tz_convert("UTC").tz_localize(None)
-        how = (ts.dayofweek * 24 + ts.hour).to_numpy()
+        how = (ts.day_of_week * 24 + ts.hour).to_numpy()
         rng = (df["high"].to_numpy(float) - df["low"].to_numpy(float))
         vol = df["volume"].to_numpy(float) if "volume" in df.columns else np.ones(len(df))
         vol = np.where(np.isfinite(vol) & (vol > 0), vol, 1.0)
@@ -374,7 +374,7 @@ class HourOfWeekSpread:
         t = pd.Timestamp(ts)
         if t.tzinfo is not None:
             t = t.tz_convert("UTC").tz_localize(None)
-        return float(flat_pips) * float(self.mult[t.dayofweek * 24 + t.hour])
+        return float(flat_pips) * float(self.mult[t.day_of_week * 24 + t.hour])
 
 
 def recost_trades(trades: Iterable, model: HourOfWeekSpread, flat_spread_pips: float, pip_size: float) -> dict:
