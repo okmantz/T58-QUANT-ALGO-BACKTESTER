@@ -1,0 +1,10 @@
+/* Header P&L chip (next to bell + avatar): Demo/Live badge and running P&L */
+.t58-pnl-chip { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border-radius: 18px; text-decoration: none;
+  font: 600 13px/1 var(--font-mono, ui-monospace, monospace); color: var(--text, #e8eaf0); background: var(--surface-2, rgba(255,255,255,.06));
+  border: 1px solid var(--border, rgba(255,255,255,.12)); }
+.t58-pnl-chip .t58-pnl-mode { font-size: 10px; letter-spacing: .08em; padding: 3px 6px; border-radius: 6px; background: rgba(245,185,66,.18); color: #f5b942; }
+.t58-pnl-chip[data-mode="live"] .t58-pnl-mode { background: rgba(240,89,106,.18); color: #f0596a; }
+.t58-pnl-chip.up .t58-pnl-val { color: var(--lm-up, #3ed685); }
+.t58-pnl-chip.down .t58-pnl-val { color: var(--lm-down, #f0596a); }
+.t58-pnl-chip.bad { border-color: #f0596a; }
+@media (max-width: 560px) { .t58-pnl-chip .t58-pnl-mode { display: none; } }
