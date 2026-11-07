@@ -262,7 +262,12 @@ def test_new_strategies_load_and_emit_valid_signals(name):
     from app.strategy.python import PythonStrategy
     root = Path(__file__).resolve().parents[2] / "strategies" / "python" / name
     st = PythonStrategy(str(root))
-    ts = pd.date_range("2025-03-03 14:00", periods=2 * 288 * 3, freq="5min", tz="UTC")
+    # Feed the bar size the file name declares ("... 1m.py", "... 5m.py", "... 15m.py"); some strategies (the 1m Gap Aligned Drive)
+    # refuse any other bar size on purpose. No size in the name -> 5-minute bars. Same six-day span for every size.
+    import re
+    m = re.search(r"(?<![0-9A-Za-z])(\d+)m(?![0-9A-Za-z])", name)
+    bar_minutes = int(m.group(1)) if m else 5
+    ts = pd.date_range("2025-03-03 14:00", periods=(6 * 24 * 60) // bar_minutes, freq=f"{bar_minutes}min", tz="UTC")
     rng = np.random.default_rng(1)
     px = 5000 + np.cumsum(rng.normal(0, 1.0, len(ts)))
     df = pd.DataFrame({"timestamp": ts, "open": px, "high": px + 1, "low": px - 1, "close": px, "volume": 100})
