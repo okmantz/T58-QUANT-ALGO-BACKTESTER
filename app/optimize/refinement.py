@@ -88,10 +88,31 @@ CODE_EXTENSIONS = {"python": ".py", "pinescript": ".pine", "mql5": ".mq5"}
 # ONE default fitness for every optimizer / pipeline entry point (2026-10 audit: the code defaulted to eval_pass_probability while the
 # labels said pass_gradient was recommended). pass_gradient = pass odds + a small smooth edge term, so the search always has a slope.
 # Speed Run is the one deliberate exception: it ranks on the shared Discovery objective (edge_lb_r).
-DEFAULT_FITNESS = "pass_gradient"
+# 2026-11-07: the prop-firm default is now the LIFECYCLE objective -- P(pass the evaluation AND reach a payout) per purchased
+# attempt, with the same smooth edge gradient, a speed term and a funded-stage breach penalty. "pass_gradient" (pass odds only) stays
+# available by name. "net_profit_adjusted" is the live-account alternative selected by objective_mode="net_profit".
+DEFAULT_FITNESS = "lifecycle_gradient"
+NET_PROFIT_FITNESS = "net_profit_adjusted"
 SPEED_RUN_FITNESS = "edge_lb_r"
 
+
+def fitness_for_objective_mode(mode, explicit: str | None = None) -> str:
+    """The fitness metric a request should use. ``mode`` is the objective mode ('prop_lifecycle' = default, 'net_profit').
+
+    net_profit mode ALWAYS means a net-profit metric (an explicit non-net-profit metric is replaced, because mixing a prop-firm metric
+    into a live-account test would silently put the prop rules back in); an explicit 'net_profit' / 'net_profit_adjusted' is kept.
+    Prop mode keeps whatever metric was explicitly chosen and otherwise uses DEFAULT_FITNESS."""
+    from app.prop.lifecycle import OBJECTIVE_NET_PROFIT, normalize_objective_mode
+    mode = normalize_objective_mode(mode)
+    explicit = (explicit or "").strip() or None
+    if mode == OBJECTIVE_NET_PROFIT:
+        return explicit if explicit in ("net_profit", NET_PROFIT_FITNESS) else NET_PROFIT_FITNESS
+    return explicit or DEFAULT_FITNESS
+
 FITNESS_METRICS: dict[str, str] = {
+    # 2026-11-07: the prop-firm lifecycle objective (default) and its live-account counterpart.
+    "lifecycle_gradient": "Prop lifecycle -- probability of passing the evaluation AND reaching a payout, faster and with funded-stage survival rewarded (default)",
+    "net_profit_adjusted": "Net profit, risk-adjusted -- net P&L after costs shrunk by drawdown and a thin trade sample (live accounts, no prop rules)",
     "eval_pass_probability": "Eval Pass Probability -- reach target before hitting a limit (pure pass odds; flat at 0% for strategies not yet close)",
     # 2026-10-28: per-attempt pass probability PLUS a small smooth edge term (Sharpe / profit factor). Plain
     # eval_pass_probability is 0.0 for every candidate of a strategy that is not yet close to passing, so the search had
@@ -707,6 +728,56 @@ def _payout_window_fitness(
     return 0.60 * (n_pay / n_win) + 0.25 * (n_pass / n_win) + 0.15 * mc_pass
 
 
+def _net_profit_adjusted(stats: dict) -> float:
+    """Net profit after costs, shrunk by drawdown and by a thin sample: net x n/(n+30) / (1 + max_drawdown_fraction).
+    Never reads PropRules or the Monte Carlo account simulation -- a live account has no evaluation to pass."""
+    try:
+        net = float(stats.get("net_profit", 0.0) or 0.0)
+        n = float(stats.get("total_trades", 0) or 0)
+        dd = float(stats.get("max_drawdown_pct", 0.0) or 0.0) / 100.0
+    except (TypeError, ValueError):
+        return float("-inf")
+    if not (math.isfinite(net) and math.isfinite(n) and math.isfinite(dd)):
+        return float("-inf")
+    if n <= 0:
+        return float("-inf")
+    return net * (n / (n + 30.0)) / (1.0 + max(dd, 0.0))
+
+
+def _lifecycle_gradient(stats: dict, mc) -> float:
+    """The prop lifecycle objective, cheap enough for the optimizer's inner loop (everything comes from the Monte Carlo it already ran).
+
+    base     per-attempt P(pass AND paid) in percent -- ``per_attempt_paid_probability`` (pass x paid-given-funded), the answer to
+             "will this configuration complete the evaluation and qualify for a payout?". Falls back to pass odds x 0.5 when absent.
+    gradient the same smooth Sharpe / profit-factor term pass_gradient uses, so a strategy that is not yet close still has a slope.
+    speed    up to +4 points for a short CALENDAR time to pass (30 days -> full credit; 120 days -> 1/2).
+    funded   up to -8 points for funded accounts that breach after passing (passing and then dying is not getting paid)."""
+    _paid = getattr(mc, "per_attempt_paid_probability", None)
+    if _paid is None or (not _paid and getattr(mc, "per_attempt_pass_probability", 0.0)):
+        _per = getattr(mc, "per_attempt_pass_probability", None)
+        _pass = float(_per if _per is not None else getattr(mc, "evaluation_pass_probability", 0.0))
+        _paid_in = getattr(mc, "per_attempt_payout_probability", None)
+        base = _pass * (float(_paid_in) / 100.0) if _paid_in is not None else 0.5 * _pass
+    else:
+        base = float(_paid)
+    _sh = stats.get("sharpe_ratio", 0.0)
+    _pf = stats.get("profit_factor", 0.0)
+    _sh = float(_sh) if isinstance(_sh, (int, float)) and math.isfinite(_sh) else 0.0
+    _pf = 3.0 if _pf == float("inf") else (float(_pf) if isinstance(_pf, (int, float)) and math.isfinite(_pf) else 0.0)
+    grad = 4.0 * math.tanh(_sh / 3.0) + 4.0 * math.tanh(_pf - 1.0)
+    _net = stats.get("net_profit", 0.0)
+    if isinstance(_net, (int, float)) and _net <= 0:
+        grad = min(grad, 0.0)
+    med = getattr(mc, "median_calendar_days_to_pass", None)
+    speed = 0.0
+    if base > 0 and med:
+        speed = 4.0 * (30.0 / max(float(med), 30.0)) ** 0.5
+    funded_pen = 0.0
+    if base > 0:
+        funded_pen = 8.0 * min(max(float(getattr(mc, "funded_breach_within_horizon_pct", 0.0) or 0.0), 0.0), 100.0) / 100.0
+    return base + grad + speed - funded_pen
+
+
 def edge_drawdown_penalty(p95_dd_pct, limit_pct, free_frac: float = 0.5, weight: float = 0.5) -> float:
     """R-units docked from the edge objective for drawdown. Free up to ``free_frac`` of the prop rule's max-drawdown limit (the same 'about half
     the limit' comfort band the prop guide score uses); beyond that it grows linearly, reaching ``weight`` R at the limit and rising past it.
@@ -761,6 +832,10 @@ def compute_fitness(
         fitness = float(sum(_rs) / len(_rs)) if _rs else float("-inf")
     elif metric == "net_profit":
         fitness = float(stats.get("net_profit", 0.0))
+    elif metric == "net_profit_adjusted":
+        fitness = _net_profit_adjusted(stats)
+    elif metric == "lifecycle_gradient":
+        fitness = _lifecycle_gradient(stats, mc)
     elif metric == "profit_factor":
         pf = stats.get("profit_factor", 0.0)
         fitness = 10.0 if pf == float("inf") else float(pf)
@@ -828,7 +903,7 @@ def compute_fitness(
     _n_src = getattr(mc, "n_source_trades", 0)
     if (
         isinstance(_n_src, (int, float)) and 0 < _n_src < 15
-        and metric in ("eval_pass_probability", "pass_gradient", "first_payout_probability", "composite_prop_score",
+        and metric in ("eval_pass_probability", "pass_gradient", "lifecycle_gradient", "first_payout_probability", "composite_prop_score",
                        "payout_30d", "fastest_payout", "expected_payout", "prop_guide_score")
         and math.isfinite(fitness) and fitness > 0
     ):
