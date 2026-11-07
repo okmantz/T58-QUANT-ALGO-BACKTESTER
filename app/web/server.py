@@ -69,6 +69,7 @@ from app.web.ai_assistant_routes import ai_assistant_bp
 from app.global_events.routes import global_events_bp
 from app.web.options_outlook_routes import options_outlook_bp
 from app.web.hedge_fund_routes import hedge_fund_bp
+from app.web.investing_routes import investing_bp
 from app.web.pages_routes import pages_bp
 from app.web.risk_sweep_routes import risk_sweep_bp
 from app.web.project_routes import project_bp
@@ -122,7 +123,7 @@ from app.optimize.multi_objective import (    DEFAULT_OBJECTIVES, MultiObjective
 )
 from app.backtest.adaptive_risk import build_limit_aware_preset
 from app.optimize.distribution_summary import compute_distribution_summary
-from app.optimize.refinement import DEFAULT_FITNESS, FITNESS_METRICS, OPTIMIZER_MODES, SPEED_RUN_FITNESS, RefinementConfig, RefinementError, run_iterative_refinement
+from app.optimize.refinement import DEFAULT_FITNESS, FITNESS_METRICS, OPTIMIZER_MODES, SPEED_RUN_FITNESS, RefinementConfig, RefinementError, fitness_for_objective_mode, run_iterative_refinement
 from app.optimize.multi_market import AGGREGATION_METHODS, run_multi_market_search
 from app.optimize.walkforward_ga import WalkforwardGACancelled, run_walkforward_aware_refinement
 from app.orchestration.batch_test import BatchTestItem, run_batch_test
@@ -469,6 +470,9 @@ def _upload_too_large(exc):
 # and a route that ALSO passes optimizer_modes explicitly simply
 # overrides this for that one render -- the two approaches coexist fine.
 app.jinja_env.globals["optimizer_modes"] = OPTIMIZER_MODES
+# Objective mode (PROP FIRM default | NET PROFIT live account) for every form with a fitness metric -- app/web/objective_mode.py.
+from app.web.objective_mode import current_objective_mode as _form_objective_mode, install as _install_objective_mode  # noqa: E402
+_install_objective_mode(app)
 
 # Session cookie signing key -- only needed for the OPTIONAL local account
 # lock (see app.accounts.settings' docstring: set a password on the
@@ -1108,6 +1112,7 @@ app.register_blueprint(options_outlook_bp)
 # Hedge Fund Manager (Research -> Black-Litterman portfolio -> execution ->
 # read-only Ollama oversight journal) -- see app/web/hedge_fund_routes.py.
 app.register_blueprint(hedge_fund_bp)
+app.register_blueprint(investing_bp)
 app.register_blueprint(pages_bp)
 # Strategy Compare, native PDF export, and the Dukascopy forex/CFD fetch button --
 # see app/web/extra_routes.py's module docstring (Deploy Live's live-money
@@ -3133,8 +3138,8 @@ def optimize_simple_form():
 #   "Risk size" = Risk Sweep over risk-per-trade against the prop rules
 # The goal decides which engine(s) run and what the settings GA is scored on. The older engines keep their own pages.
 OPTIMIZE_GOALS = {
-    "eval":   {"title": "Pass the evaluation", "engines": ["quick_optimize", "risk_sweep"], "metric": "pass_gradient",
-               "desc": "Tunes settings for the highest chance of hitting the profit target before a loss limit, then right-sizes risk."},
+    "eval":   {"title": "Pass the evaluation and get paid", "engines": ["quick_optimize", "risk_sweep"], "metric": "lifecycle_gradient",
+               "desc": "Tunes settings for the highest chance of passing the evaluation AND reaching a payout (faster, with funded-stage survival rewarded), then right-sizes risk."},
     "payout": {"title": "Get to a payout faster", "engines": ["quick_optimize", "risk_sweep"], "metric": "payout_30d",
                "desc": "Scores settings on reaching a first payout inside 30 days from a fresh account."},
     "robust": {"title": "Make the edge more reliable", "engines": ["quick_optimize"], "metric": "edge_lb_r",
@@ -3145,8 +3150,8 @@ OPTIMIZE_GOALS = {
                "desc": "Leaves the strategy alone and finds the risk per trade that fits the firm's drawdown rules. Best for strategies with a good edge but a rough ride."},
     "timefilter": {"title": "Cut the worst days/times", "engines": ["time_filter"], "metric": "net_profit",
                "desc": "Finds the weekday/hour slots that lose the most (e.g. Thursday 11:00) and stops the strategy entering then. Re-tests with the filter and saves it on the strategy only if it helps."},
-    "profit": {"title": "Maximise profit (no prop firm)", "engines": ["quick_optimize"], "metric": "net_profit",
-               "desc": "For long-term accounts with no evaluation: the settings that earned the most."},
+    "profit": {"title": "Maximise profit (no prop firm)", "engines": ["quick_optimize"], "metric": "net_profit_adjusted",
+               "desc": "For live and long-term accounts with no evaluation: the settings that earned the most after costs, shrunk by drawdown."},
 }
 
 
@@ -3160,7 +3165,8 @@ def optimize_simple_start():
                 form.pop(_k)
         for _e in _goal["engines"]:
             form[f"engine_{_e}"] = "on"
-        form["fitness_metric"] = _goal["metric"]
+        form["fitness_metric"] = fitness_for_objective_mode(form.get("objective_mode"), _goal["metric"]) \
+            if (form.get("objective_mode") or "").strip() else _goal["metric"]
     engines = [e for e in ("quick_optimize", "refine", "risk_sweep", "time_filter", "search", "evolution", "multi_objective", "deep_search")
                if form.get(f"engine_{e}") == "on"]
     ctx = lambda **kw: dict(active_page="optimize_simple", goals=OPTIMIZE_GOALS, want_goal=(form.get("goal") or "eval"), **_simple_pickers(), **kw)
@@ -6824,6 +6830,7 @@ def full_pipeline_start_batch():
 
         library_status_raw = (form.get("library_status") or "").strip()
         cfg = FullPipelineConfig(
+            objective_mode=_form_objective_mode(form),
             n_folds=int(form.get("n_folds", 4) or 4),
             window_mode=form.get("window_mode", "rolling"),
             ga_population=int(form.get("ga_population", 12) or 12),
@@ -7032,6 +7039,7 @@ def full_pipeline_schedule_batch():
         risk = _fill_unposted_costs(form, risk, active_label)
         library_status_raw = (form.get("library_status") or "").strip()
         cfg = FullPipelineConfig(
+            objective_mode=_form_objective_mode(form),
             n_folds=int(form.get("n_folds", 4) or 4),
             window_mode=form.get("window_mode", "rolling"),
             ga_population=int(form.get("ga_population", 12) or 12),
@@ -7275,6 +7283,7 @@ def full_pipeline_start():
 
         library_status_raw = (form.get("library_status") or "").strip()
         cfg = FullPipelineConfig(
+            objective_mode=_form_objective_mode(form),
             n_folds=int(form.get("n_folds", 4) or 4),
             window_mode=form.get("window_mode", "rolling"),
             ga_population=int(form.get("ga_population", 12) or 12),
@@ -7421,6 +7430,10 @@ def full_pipeline_job_status(job_id):
             "any_attempt_eval_pass_probability": _mch["any_attempt_eval_pass_probability"],
             "any_attempt_first_payout_probability": _mch["any_attempt_first_payout_probability"],
             "risk_of_ruin_pct": result.final_mc.risk_of_ruin_pct,
+            # 2026-11-07: account lifecycle (prop mode, default) or net-profit test (live-account mode) -- see app.prop.lifecycle.
+            "objective_mode": ((getattr(result, "audit_evidence", None) or {}).get("objective_mode") or "prop_lifecycle"),
+            "lifecycle": (getattr(result, "audit_evidence", None) or {}).get("lifecycle"),
+            "net_profit_test": (getattr(result, "audit_evidence", None) or {}).get("net_profit_test"),
             "refinement_ran": result.refinement_ran,
             "refinement_skip_reason": result.refinement_skip_reason,
             "oos_skip_reason": result.oos_validation_skip_reason,

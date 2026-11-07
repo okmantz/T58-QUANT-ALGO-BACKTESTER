@@ -232,6 +232,25 @@ def _run_engine_job(job_id, req, held_guard: str, pool_for=None):
         HEAVY_JOB_GUARD.release(held_guard)
 
 
+@discovery_engine_bp.route("/discovery-engine/hypotheses", methods=["POST"])
+def hypotheses():
+    """Measure market inefficiencies on a stored dataset (no strategy is built). JSON report with verdicts and the families they feed."""
+    from app.data.importer import import_csv
+    from app.data.storage import resolve_stored_dataset
+    from app.discovery_engine.edge_hypotheses import measure_edges
+    path = resolve_stored_dataset((request.form.get("dataset") or (request.get_json(silent=True) or {}).get("dataset") or "").strip())
+    if path is None:
+        return jsonify({"ok": False, "error": "Dataset not found."}), 404
+    res = import_csv(path)
+    if not res.is_valid:
+        return jsonify({"ok": False, "error": "; ".join(res.errors)[:200]}), 400
+    try:
+        cost = float(request.form.get("cost_bps") or 1.5)
+    except ValueError:
+        cost = 1.5
+    return jsonify({"ok": True, **measure_edges(res.dataframe, cost)})
+
+
 @discovery_engine_bp.route("/discovery-engine/start", methods=["POST"])
 def start():
     from app.data.importer import import_csv
@@ -298,6 +317,16 @@ def start():
     if preset_name == "gauntlet":
         preset_name = GAUNTLET[effort]
     families = {"": None, "ready": "ready", "all": "all"}.get((form.get("families") or "").strip(), None)
+    hypothesis_note = None
+    if (form.get("families") or "").strip() == "hypothesis":
+        # Hypothesis-first: measure which inefficiencies actually exist in THIS data, then search only the families that exploit them
+        # (falls back to every family when nothing is confirmed).
+        from app.discovery_engine.edge_hypotheses import hypothesis_first_families
+        try:
+            families, rep = hypothesis_first_families(df)
+            hypothesis_note = rep["headline"]
+        except Exception as exc:  # noqa: BLE001
+            families, hypothesis_note = "all", f"Hypothesis measurement failed ({str(exc)[:120]}); searching all families."
     try:
         seed = int(form.get("seed") or 42)
     except ValueError:
@@ -313,7 +342,7 @@ def start():
         pool_note = "Also checking the best ideas on other independent markets at the same bar size (the pool is gathered when the job starts)."
         job_id = JOB_MANAGER.create(
             page_template="/discovery-engine/job/{job_id}", tool="Strategy Discovery Engine", instrument=label, cancel_event=cancel,
-            log=[f"Loaded {len(df):,} bars of {label} ({tf}).", f"Looking: {EFFORT[effort][1]} ({METHODS.get(preset_name, preset_name)}).", pool_note],
+            log=[f"Loaded {len(df):,} bars of {label} ({tf}).", *([f"Hypothesis-first: {hypothesis_note}"] if hypothesis_note else []), f"Looking: {EFFORT[effort][1]} ({METHODS.get(preset_name, preset_name)}).", pool_note],
             engine_result=None, cancelled=False, settings={"dataset": label, "timeframe": tf, "effort": effort, "prop": prop_label, "risk_pct": risk_pct})
         JOB_MANAGER.prune(max_age_seconds=6 * 3600)
         req = EngineRequest(preset=preset_name, df=df, risk=risk, prop_rules=rules, instrument=label, timeframe=tf, families=families, seed=seed,
