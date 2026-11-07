@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>T58 Demo Account — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+{% include '_lifecycle_css.html' %}
+<style>
+  .da-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px;}
+  .da-stat{border:1px solid var(--lc-border); border-radius:10px; padding:10px 12px;} .da-stat small{display:block; color:var(--lc-muted); font-size:11px; text-transform:uppercase; letter-spacing:.6px;}
+  .da-stat b{font-size:20px; font-variant-numeric:tabular-nums;} .up{color:var(--lm-up,#3ed685);} .down{color:var(--lm-down,#f0596a);}
+  .da-bar{height:10px; border-radius:5px; background:var(--lc-border); overflow:hidden;} .da-bar>i{display:block; height:100%; background:var(--lc-acc);}
+  table.da{width:100%; border-collapse:collapse; font-size:13px;} table.da th{font-size:11px; color:var(--lc-muted); text-align:left; text-transform:uppercase; padding:6px 8px; border-bottom:1px solid var(--lc-border2);}
+  table.da td{padding:7px 8px; border-bottom:1px solid var(--lc-border);} .r{text-align:right; font-variant-numeric:tabular-nums;}
+  pre.da-code{white-space:pre-wrap; overflow-wrap:anywhere; background:var(--lc-border); padding:10px; border-radius:8px; font-size:12px;}
+  .da-badge{display:inline-block; padding:2px 8px; border-radius:6px; font-size:11px; font-weight:700; letter-spacing:.06em;}
+  .da-active{background:rgba(62,214,133,.15); color:#3ed685;} .da-passed{background:rgba(91,140,255,.18); color:#7aa2ff;} .da-breached{background:rgba(240,89,106,.18); color:#f0596a;}
+</style>
+</head>
+<body>
+{% set active_page = 'demo_account' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="lc-scope"><div class="lc-wrap">
+<div class="lc-crumb">Forward test · <b>T58 Demo account</b></div>
+<h1 class="lc-title">T58 Prop Firm demo account <span class="da-badge da-{{ acct.status }}" id="da-status">{{ acct.status|upper }}</span></h1>
+<p class="lc-sub">A ${{ '{:,.0f}'.format(acct.size) }} T58 Prop Firm simulation that follows the same rules the Rulebook v2 pipeline tests against: a trailing end-of-day loss floor that locks, a daily soft limit, a profit target and a best-day cap.
+  Run <a href="/library">Create</a> &rarr; <a href="/optimize-simple">Optimize</a> &rarr; <a href="/full-pipeline">Full Pipeline</a> &rarr; <a href="/validate-simple">Validate</a>, then deploy the strategy here. It trades exactly as it would on a real account and every win and loss is booked below.</p>
+{% if mode != 'demo' %}<div class="lc-notice bad">You are in <b>Live</b> mode. This demo account only books trades while the toggle is on <b>Demo</b> (<a href="/settings/account#account-mode">Account settings</a>).</div>{% endif %}
+{% if acct.status != 'active' %}<div class="lc-notice{{ '' if acct.status == 'passed' else ' bad' }}">{{ acct.status_reason }}
+  <form method="POST" action="/demo-account/reset" style="display:inline;margin-left:10px"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="btn" type="submit">Start attempt {{ acct.attempt + 1 }}</button></form></div>{% endif %}
+
+<div class="card" style="padding:14px;margin-bottom:14px;">
+  <div class="da-grid">
+    <div class="da-stat"><small>Balance</small><b>${{ '{:,.2f}'.format(acct.balance) }}</b></div>
+    <div class="da-stat"><small>Net P&amp;L</small><b class="{{ 'up' if acct.net_pnl > 0 else 'down' if acct.net_pnl < 0 else '' }}">{{ '{:+,.2f}'.format(acct.net_pnl) }}</b></div>
+    <div class="da-stat"><small>Today</small><b class="{{ 'up' if acct.day_pnl > 0 else 'down' if acct.day_pnl < 0 else '' }}">{{ '{:+,.2f}'.format(acct.day_pnl) }}</b></div>
+    <div class="da-stat"><small>Loss floor</small><b>${{ '{:,.2f}'.format(acct.floor) }}</b></div>
+    <div class="da-stat"><small>Cushion</small><b>${{ '{:,.2f}'.format(acct.cushion) }}</b></div>
+    <div class="da-stat"><small>Daily soft limit</small><b>${{ '{:,.0f}'.format(acct.soft_daily_limit) }}</b>{% if acct.day_stopped %}<small class="down">hit today: stand down</small>{% endif %}</div>
+    <div class="da-stat"><small>Trades · win rate</small><b>{{ acct.n_trades }}{% if acct.win_rate is not none %} · {{ acct.win_rate }}%{% endif %}</b></div>
+    <div class="da-stat"><small>Attempt</small><b>#{{ acct.attempt }}</b></div>
+  </div>
+  <div style="margin-top:12px"><small class="lc-muted">Progress to the ${{ '{:,.0f}'.format(acct.profit_target) }} target: {{ acct.target_pct }}%</small>
+    <div class="da-bar"><i style="width:{{ [acct.target_pct, 100]|min }}%"></i></div></div>
+</div>
+
+<div class="rb-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;">
+  <div class="card" style="padding:14px;">
+    <h2>1 · Pick the account size</h2>
+    <form method="POST" action="/demo-account/tier" style="display:flex;gap:8px;flex-wrap:wrap;">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      {% for t in tiers %}<button class="btn{{ ' primary' if t == acct.size else '' }}" type="submit" name="size" value="{{ t }}">${{ '{:,.0f}'.format(t) }}</button>{% endfor %}
+    </form>
+    <p class="help">Changing the size starts a fresh account (loss limit, target and soft limit scale with it).</p>
+  </div>
+  <div class="card" style="padding:14px;">
+    <h2>2 · Forward test / deploy a strategy</h2>
+    <p class="help">Creates the TradingView alert that feeds this account. In TradingView: add your Pine strategy, open <i>Create alert</i>, pick the strategy, paste the webhook URL and the message below. Each closed trade appears here as a win or a loss.</p>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;"><input id="da-name" placeholder="Strategy name" value="{{ acct.strategy }}" style="flex:1;min-width:160px"><input id="da-tickers" placeholder="Tickers (NQ, ES)" style="width:150px"><button class="btn primary" type="button" id="da-deploy">Get my alert</button></div>
+    <div id="da-out" hidden style="margin-top:10px">
+      <b>Webhook URL</b><pre class="da-code" id="da-url"></pre><div id="da-url-note" class="help"></div>
+      <b>Alert message</b><pre class="da-code" id="da-msg"></pre>
+    </div>
+    <p class="help">Public URL: {{ public_url or 'not set. TradingView needs a public https address; set one on the <a href="/webhook-relay">Webhook relay</a> page or start the tunnel there.' }}. The relay page also has a "send test alert" button.</p>
+  </div>
+</div>
+
+<div class="card" style="padding:14px;margin-top:16px;">
+  <h2>Trade log <small class="lc-muted">every win and loss, newest first</small></h2>
+  <table class="da"><thead><tr><th>#</th><th>Closed</th><th>Instrument</th><th>Side</th><th class="r">Qty</th><th class="r">P&amp;L</th><th class="r">Balance</th><th>Result</th></tr></thead><tbody id="da-trades">
+  {% for t in acct.recent_trades %}<tr><td>{{ t.n }}</td><td>{{ t.closed_at }}</td><td>{{ t.root }}</td><td>{{ t.side }}</td><td class="r">{{ t.qty }}</td>
+    <td class="r {{ 'up' if t.pnl > 0 else 'down' if t.pnl < 0 else '' }}">{{ '{:+,.2f}'.format(t.pnl) }}</td><td class="r">${{ '{:,.2f}'.format(t.balance) }}</td><td>{{ t.result|upper }}</td></tr>
+  {% else %}<tr><td colspan="8" class="lc-muted">No trades yet. Deploy a strategy above and the first closed trade will show up here.</td></tr>{% endfor %}
+  </tbody></table>
+</div>
+</div></div>
+</div>
+</div>
+<script>
+(function(){
+  var tok = {{ csrf_token()|tojson }};
+  document.getElementById('da-deploy').addEventListener('click', function(){
+    fetch('/demo-account/deploy', {method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':tok},
+      body: JSON.stringify({strategy: document.getElementById('da-name').value, tickers: document.getElementById('da-tickers').value})})
+    .then(function(r){return r.json();}).then(function(d){
+      document.getElementById('da-out').hidden = false;
+      document.getElementById('da-url').textContent = d.webhook_url || d.path;
+      document.getElementById('da-url-note').textContent = d.url_ready ? '' : 'No public URL is set yet: put your https address in front of this path.';
+      document.getElementById('da-msg').textContent = d.alert_message;
+    });
+  });
+  setTimeout(function(){ if (document.visibilityState === 'visible' && {{ 'true' if acct.status == 'active' else 'false' }}) location.reload(); }, 30000);
+})();
+</script>
+</body>
+</html>

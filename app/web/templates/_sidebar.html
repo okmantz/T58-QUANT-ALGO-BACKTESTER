@@ -49,6 +49,9 @@
 
 <!-- Always-visible profile circle (top right). Server-rendered so there is no flash; the small menu is wired in t58-chrome.js. -->
 <div class="t58-profile" id="t58-profile" data-csrf="{{ csrf_token() }}">
+  <a class="t58-pnl-chip" id="t58-pnl-chip" href="/demo-account" data-mode="{{ t58_profile.mode }}" title="Account P&amp;L ({{ t58_profile.mode|upper }})">
+    <span class="t58-pnl-mode">{{ t58_profile.mode|upper }}</span><span class="t58-pnl-val" id="t58-pnl-val">$0.00</span>
+  </a>
   <button type="button" class="t58-bell" id="t58-bell" aria-haspopup="dialog" aria-expanded="false" aria-controls="t58-inbox" title="Inbox">
     <svg class="lu"><use href="#lu-bell"/></svg><span class="t58-bell-dot" id="t58-bell-dot" hidden></span>
   </button>
@@ -162,7 +165,7 @@
 
   <!-- (6) Deployment -- v9.8: single link to the consolidated section page;
        its individual tools live on that page (tools grid), not in the sidebar. -->
-  <a href="/forward-test" data-accent="green" class="t58-nav-item top-level {{ 'active' if active_page in ['forward_test', 'deploy_live', 'live_market', 'replay', 'webhook_relay', 'start_here_deployment'] else '' }}">
+  <a href="/forward-test" data-accent="green" class="t58-nav-item top-level {{ 'active' if active_page in ['forward_test', 'deploy_live', 'live_market', 'replay', 'webhook_relay', 'demo_account', 'start_here_deployment'] else '' }}">
     <span class="t58-nav-icon"><svg class="lu"><use href="#lu-rocket"/></svg></span><span class="label">Deploy</span>
   </a>
 
@@ -188,8 +191,11 @@
       <a href="/profile" class="t58-nav-item {{ 'active' if active_page == 'profile' else '' }}">
         <span class="t58-nav-icon"><svg class="lu"><use href="#lu-user-round"/></svg></span><span class="label">Trader profile</span>
       </a>
+      <a href="/demo-account" class="t58-nav-item {{ 'active' if active_page == 'demo_account' else '' }}">
+        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-rocket"/></svg></span><span class="label">T58 Demo account</span>
+      </a>
       <a href="/rulebook" class="t58-nav-item {{ 'active' if active_page == 'rulebook' else '' }}">
-        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-book-open-check"/></svg></span><span class="label">Edge Rulebook</span>
+        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-book-open-check"/></svg></span><span class="label">Prop Firm Rulebook v2</span>
       </a>
     </div>
   </details>
@@ -287,6 +293,8 @@
 <script src="/static/csv-export.js" defer></script>
 <script src="/static/api-source.js" defer></script>
 <script src="/static/t58-livepnl.js" defer></script>
+<link rel="stylesheet" href="/static/t58-headerpnl.css">
+<script src="/static/t58-headerpnl.js" defer></script>
 <script src="/static/t58-achievements.js" defer></script>
 <script src="/static/t58-inbox.js" defer></script>
 <script src="/static/t58-nextstep.js" defer></script>

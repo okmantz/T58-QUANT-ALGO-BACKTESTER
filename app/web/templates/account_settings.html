@@ -200,10 +200,24 @@
   {% if saved == 'subscription' %}<div class="card saved-banner">Subscription refreshed from your license.</div>{% endif %}
   {% if saved == 'deleted' %}<div class="card saved-banner">Local account data deleted.</div>{% endif %}
   {% if saved == 'logout' %}<div class="card saved-banner">No lock password is set, so there's nothing to log out of.</div>{% endif %}
+  {% if saved == 'mode' %}<div class="card saved-banner">Account mode set to {{ settings.account_mode|upper }}.</div>{% endif %}
   {% if password_error %}<div class="card error-banner">{{ password_error }}</div>{% endif %}
   {% if error %}<div class="card error-banner">{{ error }}</div>{% endif %}
 
   <div class="as-grid">
+  <!-- ================= DEMO / LIVE ================= -->
+  <div class="card" id="account-mode">
+    <h2>Account mode</h2>
+    <p class="help">New accounts start in <b>Demo</b>: a T58 Prop Firm simulation (25k / 50k / 100k) where you create, test, optimize, validate, then forward-test a strategy with every win and loss tracked.
+      Switch to <b>Live</b> to connect a real prop-firm account. Demo and Live run the same way.</p>
+    <form method="POST" action="/settings/account/mode" class="t58-mode-toggle" style="display:flex;gap:8px;align-items:center;">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <label><input type="radio" name="mode" value="demo" {% if settings.account_mode != 'live' %}checked{% endif %}> Demo</label>
+      <label><input type="radio" name="mode" value="live" {% if settings.account_mode == 'live' %}checked{% endif %}> Live</label>
+      <button type="submit" class="btn">Save mode</button>
+      <a href="/demo-account" style="margin-left:auto;">Open the T58 demo account &rarr;</a>
+    </form>
+  </div>
   <!-- ================= PROFILE PICTURE ================= -->
   <div class="card">
     <h2>Profile picture</h2>
