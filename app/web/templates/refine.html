@@ -179,8 +179,11 @@
       <div><label>Elite count</label><input type="number" name="elite_count" value="2"></div>
       <div><label>Random seed</label><input type="number" name="random_seed" value="42"></div>
     </div>
-    <label>Fitness metric</label>
+    {% include "_objective_mode_field.html" %}
+<label>Fitness metric</label>
     <select name="fitness_metric">
+      <option value="lifecycle_gradient" selected>Prop lifecycle -- pass the evaluation AND reach a payout (recommended for prop firms)</option>
+      <option value="net_profit_adjusted">Net profit, risk-adjusted -- live account, no prop rules</option>
       <option value="eval_pass_probability">Eval pass probability -- reach target before hitting a limit (recommended for prop firms)</option>
       <option value="composite_prop_score">Composite prop score</option>
       <option value="first_payout_probability">First payout probability</option>

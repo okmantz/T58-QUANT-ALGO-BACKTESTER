@@ -142,7 +142,8 @@
       <option value="{{ key }}" {{ 'selected' if key == 'auto' else '' }}>{{ label }}</option>
       {% endfor %}
     </select>
-    <label>Fitness metric (scored per market, before aggregation)</label>
+    {% include "_objective_mode_field.html" %}
+<label>Fitness metric (scored per market, before aggregation)</label>
     <select name="fitness_metric">
       {% for key, label in fitness_metrics.items() %}
       <option value="{{ key }}" {{ 'selected' if key == 'eval_pass_probability' else '' }}>{{ label }}</option>

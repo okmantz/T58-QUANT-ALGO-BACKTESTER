@@ -172,7 +172,8 @@
             <div class="lc-adv-field"><label class="flabel">Population (Refine)</label><input type="number" name="population_size" value="10"></div>
             <div class="lc-adv-field"><label class="flabel">Generations (Refine)</label><input type="number" name="generations" value="5"></div>
             <div class="lc-adv-field"><label class="flabel">Monte-Carlo sims</label><input type="number" name="mc_sims" value="500"></div>
-            <div class="lc-adv-field"><label class="flabel">Fitness metric</label><input type="text" name="fitness_metric" value="pass_gradient"></div>
+            {% include "_objective_mode_field.html" %}
+<div class="lc-adv-field"><label class="flabel">Fitness metric</label><input type="text" name="fitness_metric" value="lifecycle_gradient"></div>
             <div class="lc-adv-field"><label class="flabel">Max bars to search (0 = all)</label><input type="number" name="max_bars" value="150000" min="0" step="5000" title="Searches the most recent bars so the run finishes quickly. Raise it, or set 0, to search all of your history."></div>
           </div>
         </div>

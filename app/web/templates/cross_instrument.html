@@ -154,10 +154,11 @@
       <option value="{{ key }}" {{ 'selected' if key == 'mean_minus_dispersion' else '' }}>{{ label }}</option>
       {% endfor %}
     </select>
-    <label>Fitness metric (scored on each instrument before combining)</label>
+    {% include "_objective_mode_field.html" %}
+<label>Fitness metric (scored on each instrument before combining)</label>
     <select name="fitness_metric">
       {% for key, label in fitness_metrics.items() %}
-      <option value="{{ key }}" {{ 'selected' if key == 'pass_gradient' else '' }}>{{ label }}</option>
+      <option value="{{ key }}" {{ 'selected' if key == 'lifecycle_gradient' else '' }}>{{ label }}</option>
       {% endfor %}
     </select>
     <div class="row">

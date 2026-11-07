@@ -196,7 +196,8 @@
         <div class="adv-b">
           <div class="adv-grp">What to optimise</div>
           <div class="lc-adv-grid">
-            <div class="lc-adv-field"><label class="flabel">Fitness metric</label>
+            {% include "_objective_mode_field.html" %}
+<div class="lc-adv-field"><label class="flabel">Fitness metric</label>
               <select name="fitness_metric">
                 {% for key, label in fitness_metrics.items() %}
                 <option value="{{ key }}" {{ 'selected' if key == 'edge_lb_r' else '' }}>{{ label }}</option>

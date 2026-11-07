@@ -127,7 +127,8 @@
       <div><label>Walk-forward/OOS folds</label><input type="number" name="validation_folds" value="3"></div>
       <div><label>Final Monte Carlo sims</label><input type="number" name="validation_final_mc_sims" value="3000"></div>
     </div>
-    <label>Fitness metric</label>
+    {% include "_objective_mode_field.html" %}
+<label>Fitness metric</label>
     <select name="fitness_metric">
       <option value="eval_pass_probability">Eval pass probability</option>
       <option value="composite_prop_score">Composite prop score</option>

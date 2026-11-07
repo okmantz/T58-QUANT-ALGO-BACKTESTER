@@ -1,0 +1,18 @@
+{# Test mode: PROP FIRM (default) or NET PROFIT (live account). Posted as objective_mode; see app/web/objective_mode.py. #}
+<div class="objective-mode" style="flex:1 1 100%;width:100%;margin:6px 0 10px 0;">
+  <label class="flabel" style="display:block;margin-bottom:4px;">Test mode</label>
+  <div role="radiogroup" aria-label="Test mode" style="display:flex;flex-wrap:wrap;gap:8px;">
+    <label style="display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid var(--lc-border, #2a3340);border-radius:8px;cursor:pointer;">
+      <input type="radio" name="objective_mode" value="prop_lifecycle" checked>
+      <span><b>Prop firm</b> <span style="opacity:.7;">(default)</span></span>
+    </label>
+    <label style="display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid var(--lc-border, #2a3340);border-radius:8px;cursor:pointer;">
+      <input type="radio" name="objective_mode" value="net_profit">
+      <span><b>Net profit</b> <span style="opacity:.7;">(live account)</span></span>
+    </label>
+  </div>
+  <div class="why" style="font-size:12px;opacity:.7;margin-top:4px;">
+    Prop firm scores the full account lifecycle: pass the evaluation, survive the funded stage, reach a payout. Net profit ignores
+    prop rules and ranks on what the account earns after costs, shrunk by drawdown &mdash; use it for a live or personal account.
+  </div>
+</div>

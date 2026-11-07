@@ -461,7 +461,8 @@
       </div>
       <label>Parameter-neighborhood samples (0 disables)</label>
       <input type="number" name="robustness_neighbors" value="6">
-      <label>Fitness metric</label>
+      {% include "_objective_mode_field.html" %}
+<label>Fitness metric</label>
       <select name="fitness_metric">
         <option value="edge_lb_r" selected>Edge lower bound -- mean R per trade after 2x costs, day-block bootstrap (recommended: ranks on edge, not on prop outcomes)</option>
         <option value="eval_pass_probability">Eval pass probability -- reach target before hitting a limit (noisy; use only on survivors)</option>

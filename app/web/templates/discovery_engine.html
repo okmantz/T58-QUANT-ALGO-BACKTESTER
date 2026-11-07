@@ -145,6 +145,7 @@
             <option value="">Engine&rsquo;s choice</option>
             <option value="ready" {{ 'selected' if form.get('families') == 'ready' else '' }}>Only fully tested types</option>
             <option value="all" {{ 'selected' if form.get('families') == 'all' else '' }}>Every available type</option>
+            <option value="hypothesis" {{ 'selected' if form.get('families') == 'hypothesis' else '' }}>Hypothesis-first (measure what exists, then search those)</option>
           </select>
         </label>
         <label>Risk per trade (%)

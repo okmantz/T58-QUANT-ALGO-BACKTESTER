@@ -121,7 +121,8 @@
     </div>
     <div class="row">
       <div><label>Robustness neighbors (Stage 3)</label><input type="number" name="robustness_neighbors" value="6"></div>
-      <div>
+      {% include "_objective_mode_field.html" %}
+<div>
         <label>Fitness metric</label>
         <select name="fitness_metric">
           <option value="edge_lb_r" selected>Edge lower bound (mean R after 2x costs)</option>

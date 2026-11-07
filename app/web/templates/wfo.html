@@ -187,7 +187,8 @@
       <div><label>Train fraction per fold</label><input type="number" step="0.05" name="train_frac" value="0.6"></div>
       <div><label>Embargo bars (gap between train/test)</label><input type="number" name="embargo_bars" value="0"></div>
     </div>
-    <label>Fitness metric (used to pick each fold's train-window winner)</label>
+    {% include "_objective_mode_field.html" %}
+<label>Fitness metric (used to pick each fold's train-window winner)</label>
     <select name="fitness_metric">
       {% for key, label in fitness_metrics.items() %}
       <option value="{{ key }}" {{ 'selected' if key == 'eval_pass_probability' else '' }}>{{ label }}</option>

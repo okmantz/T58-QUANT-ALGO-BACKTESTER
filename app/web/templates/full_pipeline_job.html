@@ -102,6 +102,10 @@
     <div class="stat"><div class="label">Risk of ruin</div><div class="value" id="s-ror">-</div></div>
     <div class="stat"><div class="label">Elapsed</div><div class="value" id="s-elapsed">-</div></div>
   </div>
+  <div class="wf" id="s-lifecycle" hidden>
+    <div class="wf-head"><b id="lc-title">Account lifecycle</b><span id="lc-headline"></span></div>
+    <div id="lc-body" style="font-size:13px;line-height:1.5"></div>
+  </div>
   <div class="wf" id="s-waterfall" hidden>
     <div class="wf-head"><b>Why this verdict</b><span id="wf-headline"></span></div>
     <ol class="wf-steps" id="wf-steps"></ol>
@@ -323,6 +327,44 @@ function STAGE(v){ return ({'FORWARD-TEST CANDIDATE':'FORWARD-TEST CANDIDATE','L
             document.getElementById('s-payout-ci').textContent = mcSub(s.first_payout_ci95, s.any_attempt_first_payout_probability, s.first_payout_probability);
             document.getElementById('s-ror').textContent = fmt(s.risk_of_ruin_pct, 1) + '%';
             document.getElementById('s-elapsed').textContent = fmt(s.elapsed_seconds, 0) + 's';
+
+            (function (s) {
+              const box = document.getElementById('s-lifecycle'), body = document.getElementById('lc-body');
+              const lc = s.lifecycle, np = s.net_profit_test;
+              const esc = x => String(x == null ? '' : x).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+              const pc = v => v == null ? '--' : Number(v).toFixed(1) + '%';
+              const row = (k, v) => `<div><span class="muted">${esc(k)}:</span> <b>${v}</b></div>`;
+              if (lc && lc.evaluation) {
+                box.hidden = false;
+                document.getElementById('lc-title').textContent = 'Prop account lifecycle (evaluation, then funded)';
+                document.getElementById('lc-headline').textContent = lc.headline || '';
+                const e = lc.evaluation, f = lc.funded || {}, t = (e.time_to_target || {}).calendar || {};
+                const within = Object.entries(e.p_pass_within_days || {}).map(([d, v]) => `${d}d: ${pc(v)}`).join(' &middot; ');
+                const surv = Object.entries(f.p_survive_given_funded || {}).map(([d, v]) => `${d}d: ${pc(v)}`).join(' &middot; ');
+                body.innerHTML =
+                  row('P(reach target before drawdown breach)', pc(e.p_reach_target_before_breach)) + row('P(pass evaluation)', pc(e.p_pass)) +
+                  row('P(daily-loss violation)', pc(e.p_fail_daily_loss)) +
+                  row('P(consistency satisfied | target hit)', pc(e.p_consistency_ok_given_target)) +
+                  row('Median calendar days to target (passers only)', t.p50 != null ? Number(t.p50).toFixed(0) : '--') +
+                  row('P(pass within N calendar days, all attempts)', within || '--') +
+                  row('P(funded)', pc(f.p_funded)) +
+                  row('P(funded survival after N days)', surv || '--') +
+                  row('P(pass AND first payout)', pc(lc.p_pass_and_first_payout)) +
+                  row('Expected net per attempt', money(lc.expected_net_per_attempt)) +
+                  (lc.notes || []).map(n => `<div class="muted">${esc(n)}</div>`).join('');
+              } else if (np) {
+                box.hidden = false;
+                document.getElementById('lc-title').textContent = 'Net-profit test (live account)';
+                document.getElementById('lc-headline').textContent = np.headline || np.verdict || '';
+                const b = np.baseline || {}, m = np.monte_carlo || {};
+                body.innerHTML =
+                  row('Verdict', esc(np.verdict)) +
+                  row('Net profit', money(b.net_profit)) +
+                  row('P(profit)', m.p_profit_pct != null ? Number(m.p_profit_pct).toFixed(0) + '%' : '--') +
+                  row('95th-pct drawdown', m.dd_p95_pct != null ? Number(m.dd_p95_pct).toFixed(1) + '%' : '--') +
+                  (np.notes || []).map(n => `<div class="muted">${esc(n)}</div>`).join('');
+              } else { box.hidden = true; }
+            })(s);
 
             // One-screen explanation: raw score -> each gate/cap that fired -> the single change that helps most.
             (function (w) {

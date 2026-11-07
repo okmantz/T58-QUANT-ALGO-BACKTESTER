@@ -186,7 +186,8 @@
     </div>
     <div class="row">
       <div><label>Walk-forward folds</label><input type="number" name="n_folds" value="4"></div>
-      <div><label>Fitness metric</label>
+      {% include "_objective_mode_field.html" %}
+<div><label>Fitness metric</label>
         <select name="fitness_metric">
           {% for key, label in fitness_metrics.items() %}
           <option value="{{ key }}" {{ 'selected' if key == 'edge_lb_r_dd' else '' }}>{{ label }}</option>

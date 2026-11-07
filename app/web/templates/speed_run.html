@@ -144,7 +144,8 @@
         <div><label>Final Monte Carlo sims</label><input type="number" name="validation_final_mc_sims" value="3000"></div>
       </div>
     </details>
-    <label style="margin-top:10px;">Fitness metric</label>
+    {% include "_objective_mode_field.html" %}
+<label style="margin-top:10px;">Fitness metric</label>
     <select name="fitness_metric">
       {% for key, label in fitness_metrics.items() %}
       <option value="{{ key }}" {{ 'selected' if key == 'edge_lb_r' else '' }}>{{ label }}</option>

@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Investing — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<style>
+  * { box-sizing: border-box; }
+  .iv { max-width: 1120px; }
+  .iv-hero { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between; padding: 22px; border-radius: 18px; border: 1px solid var(--border);
+    background: radial-gradient(900px 260px at 0% 0%, rgba(var(--teal-rgb), .20), transparent 60%), var(--panel-2); }
+  .iv-hero h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: -.02em; } .iv-hero p { margin: 0; color: var(--text-muted); font-size: 13.5px; max-width: 560px; line-height: 1.55; }
+  .iv-mode { display: inline-flex; padding: 3px; border-radius: 999px; background: var(--panel-3); border: 1px solid var(--border-light); }
+  .iv-mode button { border: 0; background: transparent; color: var(--text-muted); padding: 7px 16px; border-radius: 999px; font-weight: 700; font-size: 12.5px; cursor: pointer; }
+  .iv-mode button.on { background: var(--teal); color: var(--on-teal); }
+  .iv-mode button.live.on { background: #e5484d; color: #fff; }
+  .iv-tabs { display: flex; gap: 6px; margin: 16px 0 14px; overflow-x: auto; }
+  .iv-tabs button { white-space: nowrap; border: 1px solid var(--border); background: var(--panel-2); color: var(--text-muted); padding: 9px 16px; border-radius: 12px; font-weight: 700; font-size: 13px; cursor: pointer; }
+  .iv-tabs button.on { color: var(--text); border-color: var(--teal); box-shadow: 0 0 0 1px var(--teal) inset; }
+  .iv-pane { display: none; } .iv-pane.on { display: block; }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 16px; padding: 18px; margin-bottom: 14px; }
+  .card h2 { margin: 0 0 4px; font-size: 15px; text-transform: none; letter-spacing: 0; color: var(--text); }
+  .card p.help { font-size: 12.5px; color: var(--text-muted); margin: 0 0 12px; line-height: 1.55; }
+  .grid2 { display: grid; grid-template-columns: 1.15fr .85fr; gap: 14px; } .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  @media (max-width: 860px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
+  .iv input, .iv select { width: 100%; padding: 11px 13px; border-radius: 12px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 14px; }
+  .search { position: relative; } .search input { padding-left: 38px; font-size: 15px; }
+  .search svg { position: absolute; left: 12px; top: 12px; width: 18px; height: 18px; color: var(--text-muted); }
+  .results { margin-top: 8px; display: grid; gap: 6px; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel-3); cursor: pointer; }
+  .row:hover { border-color: var(--teal); } .row b { font-size: 14px; } .row small { color: var(--text-muted); font-size: 12px; }
+  .row .grow { flex: 1; min-width: 0; } .row .grow small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tag { font-size: 10.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; background: rgba(var(--teal-rgb), .15); color: var(--teal); }
+  .up { color: #2fb67c; } .down { color: #e5484d; }
+  .btn { border: 0; cursor: pointer; padding: 11px 18px; border-radius: 12px; font-weight: 800; font-size: 13.5px; background: var(--teal); color: var(--on-teal); }
+  .btn.ghost { background: var(--panel-3); color: var(--text); border: 1px solid var(--border-light); } .btn.sell { background: #e5484d; color: #fff; } .btn:disabled { opacity: .5; cursor: default; }
+  .price { font-size: 34px; font-weight: 800; letter-spacing: -.02em; } .kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin-top: 12px; }
+  .kpi { padding: 10px 12px; border-radius: 12px; background: var(--panel-3); border: 1px solid var(--border); } .kpi span { display: block; font-size: 11px; color: var(--text-muted); } .kpi b { font-size: 15px; }
+  .score { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 20px; flex: none; }
+  .bar { height: 8px; border-radius: 99px; background: var(--panel-3); overflow: hidden; } .bar i { display: block; height: 100%; background: var(--teal); }
+  table.t { width: 100%; border-collapse: collapse; font-size: 13px; } table.t th { text-align: left; color: var(--text-muted); font-size: 11.5px; padding: 6px 8px; } table.t td { padding: 8px; border-top: 1px solid var(--border); }
+  .q { margin-bottom: 18px; } .q h3 { font-size: 15px; margin: 0 0 8px; } .opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+  .opt { padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border-light); background: var(--panel-3); cursor: pointer; font-size: 13.5px; font-weight: 600; }
+  .opt.on { border-color: var(--teal); box-shadow: 0 0 0 1px var(--teal) inset; background: rgba(var(--teal-rgb), .10); }
+  .banner { padding: 10px 14px; border-radius: 12px; font-size: 12.5px; line-height: 1.5; margin-bottom: 12px; border: 1px solid rgba(var(--teal-rgb), .35); background: rgba(var(--teal-rgb), .07); color: var(--text-muted); }
+  .banner.warn { border-color: #e5484d; background: rgba(229, 72, 77, .08); } .muted { color: var(--text-muted); } svg.chart { width: 100%; height: 190px; display: block; }
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--panel-3); border: 1px solid var(--teal); padding: 10px 16px; border-radius: 12px; font-size: 13px; display: none; z-index: 50; }
+</style>
+</head>
+<body>
+{% set active_page = 'investing' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main"><div class="iv">
+
+<div class="iv-hero">
+  <div><h1>Investing</h1>
+  <p>Search any stock, index or crypto, read the SEC filings behind it, then invest yourself or let an algo tuned to you do it. Starts in <b>paper</b> mode with $10,000 of practice money.</p></div>
+  <div class="iv-mode" id="mode"><button data-m="paper" class="on">Paper</button><button data-m="alpaca-paper">Alpaca paper</button><button data-m="live" class="live">Live</button></div>
+</div>
+
+<div class="iv-tabs" id="tabs">
+  <button data-t="discover" class="on">Discover</button><button data-t="portfolio">My portfolio</button><button data-t="auto">Automated</button><button data-t="sec">SEC setup</button>
+</div>
+
+<!-- DISCOVER -->
+<div class="iv-pane on" id="p-discover">
+  <div class="grid2">
+    <div>
+      <div class="card">
+        <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="q" placeholder="Search stocks, indices, crypto — try AAPL, S&P, bitcoin" autocomplete="off"></div>
+        <div class="results" id="results"></div>
+      </div>
+      <div class="card" id="asset" style="display:none"></div>
+    </div>
+    <div>
+      <div class="card"><h2>Undervalued right now</h2>
+        <p class="help">Ranks companies by cheapness plus quality using their latest SEC annual filings and today's price. A research screen, not a promise.</p>
+        <button class="btn" id="scan">Scan the market</button><div class="results" id="scanout" style="margin-top:12px"></div></div>
+      <div class="card"><h2>Indices & funds</h2><div class="results" id="idx"></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- PORTFOLIO -->
+<div class="iv-pane" id="p-portfolio">
+  <div class="grid2">
+    <div class="card"><div id="acct"></div></div>
+    <div class="card"><h2>Trade</h2><p class="help">Market order at the latest price. Dollars or shares.</p>
+      <label class="muted" style="font-size:12px">Symbol</label><input id="o-sym" placeholder="AAPL">
+      <div class="grid3" style="margin-top:8px"><div><label class="muted" style="font-size:12px">Dollars</label><input id="o-usd" type="number" min="0" placeholder="500"></div>
+        <div><label class="muted" style="font-size:12px">or Shares</label><input id="o-qty" type="number" min="0" step="any" placeholder="2"></div>
+        <div style="display:flex;gap:6px;align-items:flex-end"><button class="btn" data-side="buy" style="flex:1">Buy</button><button class="btn sell" data-side="sell" style="flex:1">Sell</button></div></div>
+      <label id="liveconf" style="display:none;margin-top:10px;font-size:12.5px"><input type="checkbox" id="confirm" style="width:auto"> I understand this places real-money orders.</label>
+      <button class="btn ghost" style="margin-top:12px" id="resetpaper">Reset paper account ($10,000)</button></div>
+  </div>
+</div>
+
+<!-- AUTOMATED -->
+<div class="iv-pane" id="p-auto">
+  <div class="card" id="quiz"><h2>Tell us about you <span class="muted" style="font-weight:500">· 6 quick questions</span></h2>
+    <p class="help">Your answers set how many positions, how much cash, value vs momentum, how often to rebalance and where the stop-loss sits.</p>
+    <div id="qs"></div><label class="muted" style="font-size:12px">Starting amount ($)</label><input id="cash" type="number" value="10000" style="max-width:200px">
+    <div style="margin-top:14px"><button class="btn" id="mk">Build my plan</button></div></div>
+  <div id="planbox" style="display:none">
+    <div class="card"><h2 id="plantitle"></h2><div id="planwhy" class="muted" style="font-size:13px;line-height:1.6"></div>
+      <div style="margin:12px 0"><select id="algo" style="max-width:360px">{% for k, v in algos.items() %}<option value="{{ k }}" {{ 'selected' if k == 't58_composite' }}>{{ k.replace('_',' ').title() }} — {{ v[:60] }}</option>{% endfor %}</select></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="mkplan">Show today's picks</button><button class="btn ghost" id="mkbt">Backtest this algo</button></div></div>
+    <div class="card" id="planout" style="display:none"></div>
+    <div class="card" id="btout" style="display:none"></div>
+  </div>
+</div>
+
+<!-- SEC -->
+<div class="iv-pane" id="p-sec">
+  <div class="card"><h2>SEC EDGAR access</h2>
+    <p class="help">Filings, revenue, earnings, assets and liabilities come straight from the SEC's free API. The SEC asks every client to identify itself, so enter a contact (name + email). It is sent only to sec.gov and never stored on a server.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><input id="ua" placeholder="Your Name you@example.com" style="max-width:380px"><button class="btn" id="saveua">Save</button></div>
+    <div class="banner" style="margin-top:12px" id="secstate">{{ 'SEC access is ready.' if sec_ready else 'Not set yet — stock fundamentals and the undervalued scan need this.' }}</div></div>
+</div>
+
+<div class="banner" style="margin-top:6px">Educational research tool, not investment advice. Past performance does not predict future results. Paper mode uses no real money.</div>
+</div></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+const esc = x => String(x == null ? '' : x).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const usd = v => v == null ? '--' : (v < 0 ? '-$' : '$') + Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 2 });
+const pct = v => v == null ? '--' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+const cls = v => v >= 0 ? 'up' : 'down';
+const big = v => v == null ? '--' : Math.abs(v) >= 1e9 ? (v / 1e9).toFixed(2) + 'B' : Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v.toLocaleString();
+function toast(m) { const t = $('#toast'); t.textContent = m; t.style.display = 'block'; setTimeout(() => t.style.display = 'none', 3200); }
+async function api(path, body) {
+  const r = await fetch('/investing/api/' + path, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
+  const j = await r.json(); if (!j.ok) throw new Error(j.error || 'Request failed'); return j;
+}
+let mode = 'paper', answers = {}, plan = null, symbolNow = null;
+const modeKey = () => mode === 'alpaca-paper' ? 'alpaca-paper' : mode;
+$$('#mode button').forEach(b => b.onclick = () => { mode = b.dataset.m; $$('#mode button').forEach(x => x.classList.toggle('on', x === b)); $('#liveconf').style.display = mode === 'live' ? 'block' : 'none'; loadAcct(); });
+$$('#tabs button').forEach(b => b.onclick = () => { $$('#tabs button').forEach(x => x.classList.toggle('on', x === b)); $$('.iv-pane').forEach(p => p.classList.toggle('on', p.id === 'p-' + b.dataset.t)); if (b.dataset.t === 'portfolio') loadAcct(); });
+
+function spark(points, w = 560, h = 190, color) {
+  if (!points || points.length < 2) return '';
+  const v = points.map(p => p[1]), lo = Math.min(...v), hi = Math.max(...v), up = v[v.length - 1] >= v[0];
+  const c = color || (up ? '#2fb67c' : '#e5484d'), X = i => (i / (v.length - 1)) * w, Y = y => h - 8 - ((y - lo) / (hi - lo || 1)) * (h - 16);
+  const d = v.map((y, i) => (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(y).toFixed(1)).join('');
+  return `<svg class="chart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><defs><linearGradient id="g${c.slice(1)}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${c}" stop-opacity=".28"/><stop offset="1" stop-color="${c}" stop-opacity="0"/></linearGradient></defs><path d="${d}L${w} ${h}L0 ${h}Z" fill="url(#g${c.slice(1)})"/><path d="${d}" fill="none" stroke="${c}" stroke-width="2.2" vector-effect="non-scaling-stroke"/></svg>`;
+}
+const assetRow = r => `<div class="row" data-sym="${esc(r.symbol)}"><div class="grow"><b>${esc(r.symbol)}</b><small>${esc(r.name || '')}</small></div><span class="tag">${esc(r.kind || '')}</span></div>`;
+function bindRows(root) { $$(root + ' .row[data-sym]').forEach(r => r.onclick = () => openAsset(r.dataset.sym)); }
+
+let st;
+$('#q').oninput = e => { clearTimeout(st); const q = e.target.value.trim(); if (!q) { $('#results').innerHTML = ''; return; }
+  st = setTimeout(async () => { try { const j = await api('search?q=' + encodeURIComponent(q)); $('#results').innerHTML = j.results.map(assetRow).join('') || '<div class="muted">No matches.</div>'; bindRows('#results'); } catch (x) { $('#results').innerHTML = `<div class="muted">${esc(x.message)}</div>`; } }, 250); };
+
+async function openAsset(sym) {
+  symbolNow = sym; const box = $('#asset'); box.style.display = 'block'; box.innerHTML = '<div class="muted">Loading ' + esc(sym) + '…</div>'; $('#o-sym').value = sym;
+  try {
+    const [a, h] = await Promise.all([api('asset/' + encodeURIComponent(sym)), api('history/' + encodeURIComponent(sym) + '?range=2y').catch(() => ({ points: [] }))]);
+    const q = a.quote, v = a.valuation, f = a.fundamentals;
+    let html = `<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap"><div><span class="tag">${esc(a.kind)}</span><h2 style="font-size:20px;margin:6px 0 0">${esc(a.symbol)}</h2>
+      <div class="price">${usd(q.price)} <small class="${cls(q.change_pct)}" style="font-size:15px">${pct(q.change_pct)}</small></div></div>
+      ${v && v.score != null ? `<div style="display:flex;gap:12px;align-items:center"><div class="score" style="background:conic-gradient(var(--teal) ${v.score}%, var(--panel-3) 0)"><span style="background:var(--panel-2);width:50px;height:50px;border-radius:50%;display:grid;place-items:center">${Math.round(v.score)}</span></div><div><b>${esc(v.grade)}</b><div class="muted" style="font-size:12px">T58 value score</div></div></div>` : ''}</div>
+      ${spark(h.points)}
+      <div style="display:flex;gap:8px;margin:8px 0"><button class="btn" id="buyit">Buy ${esc(a.symbol)}</button><button class="btn ghost" id="trade">Open ticket</button></div>
+      <div class="kpis"><div class="kpi"><span>52-week range</span><b>${usd(q.low_52w)} – ${usd(q.high_52w)}</b></div><div class="kpi"><span>As of</span><b>${esc(q.as_of)}</b></div>`;
+    if (f && f.available) html += `<div class="kpi"><span>Revenue</span><b>${big(f.revenue)}</b></div><div class="kpi"><span>Net income</span><b>${big(f.net_income)}</b></div><div class="kpi"><span>Assets</span><b>${big(f.assets)}</b></div><div class="kpi"><span>Liabilities</span><b>${big(f.liabilities)}</b></div><div class="kpi"><span>Equity</span><b>${big(f.equity)}</b></div><div class="kpi"><span>Net margin</span><b>${f.net_margin != null ? (f.net_margin * 100).toFixed(1) + '%' : '--'}</b></div><div class="kpi"><span>ROE</span><b>${f.roe != null ? (f.roe * 100).toFixed(1) + '%' : '--'}</b></div>`;
+    html += '</div>';
+    if (v && v.reasons) html += `<p class="help" style="margin-top:12px"><b>Why this score:</b> ${v.reasons.map(esc).join(' · ')}${(v.flags || []).length ? ' · <span class="down">' + v.flags.map(esc).join(', ') + '</span>' : ''}</p>`;
+    if (a.statements && a.statements.length) html += `<h2 style="margin-top:12px">Annual statements (SEC)</h2><div style="overflow:auto"><table class="t"><tr><th>FY end</th><th>Revenue</th><th>Net income</th><th>Assets</th><th>Liabilities</th></tr>${a.statements.slice().reverse().map(s => `<tr><td>${esc(s.period_end)}</td><td>${big(s.revenue)}</td><td>${big(s.net_income)}</td><td>${big(s.assets)}</td><td>${big(s.liabilities)}</td></tr>`).join('')}</table></div>`;
+    if (a.filings && a.filings.length) html += `<h2 style="margin-top:12px">Recent filings</h2>${a.filings.map(x => `<div class="row" style="cursor:default"><span class="tag">${esc(x.form)}</span><div class="grow"><b style="font-size:13px">${esc(x.filed)}</b><small>${esc(x.description || x.period || '')}</small></div>${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">View</a>` : ''}</div>`).join('')}`;
+    if (a.sec_error) html += `<div class="banner warn" style="margin-top:12px">${esc(a.sec_error)}</div>`;
+    box.innerHTML = html;
+    $('#buyit').onclick = () => { $('#tabs button[data-t=portfolio]').click(); }; $('#trade').onclick = () => { $('#tabs button[data-t=portfolio]').click(); };
+  } catch (x) { box.innerHTML = `<div class="banner warn">${esc(x.message)}</div>`; }
+}
+
+$('#scan').onclick = async () => { const o = $('#scanout'); o.innerHTML = '<div class="muted">Reading SEC filings… this takes a minute the first time.</div>';
+  try { const j = await api('discover', { universe: ['stocks'] });
+    o.innerHTML = j.rows.map(r => `<div class="row" data-sym="${esc(r.symbol)}"><div class="grow"><b>${esc(r.symbol)}</b><small>${esc(r.grade)} · P/E ${r.pe ? r.pe.toFixed(1) : '--'} · ${r.pct_from_high.toFixed(0)}% from high</small></div><b>${Math.round(r.score)}</b></div>`).join('') || '<div class="muted">Nothing scored.</div>'; bindRows('#scanout');
+  } catch (x) { o.innerHTML = `<div class="banner warn">${esc(x.message)}</div>`; } };
+
+(async () => { const items = {{ indices|tojson }}, etfs = {{ etfs|tojson }};
+  $('#idx').innerHTML = Object.entries(items).map(([s, n]) => assetRow({ symbol: s, name: n, kind: 'index' })).join('') + Object.entries(etfs).slice(0, 5).map(([s, n]) => assetRow({ symbol: s, name: n, kind: 'etf' })).join('') + assetRow({ symbol: 'BTC-USD', name: 'Bitcoin', kind: 'crypto' }) + assetRow({ symbol: 'ETH-USD', name: 'Ethereum', kind: 'crypto' }); bindRows('#idx'); })();
+
+async function loadAcct() {
+  const el = $('#acct'); el.innerHTML = '<div class="muted">Loading…</div>';
+  try { const a = (await api('account?mode=' + modeKey() + '&confirm=' + ($('#confirm').checked ? 1 : 0))).account;
+    el.innerHTML = `<span class="tag">${esc(a.mode)}</span><div class="price">${usd(a.equity)}</div><div class="${cls(a.pnl)}">${usd(a.pnl)} (${pct(a.pnl_pct)})</div><div class="muted" style="font-size:12.5px">Cash ${usd(a.cash)}</div>
+      <h2 style="margin-top:14px">Holdings</h2>${a.positions.length ? `<table class="t"><tr><th>Symbol</th><th>Qty</th><th>Value</th><th>P/L</th></tr>${a.positions.map(p => `<tr><td><b>${esc(p.symbol)}</b></td><td>${(+p.qty).toFixed(3)}</td><td>${usd(p.market_value)}</td><td class="${cls(p.pnl)}">${pct(p.pnl_pct)}</td></tr>`).join('')}</table>` : '<p class="help">Nothing yet — search a stock and buy, or build an automated plan.</p>'}
+      ${(a.orders || []).length ? `<h2 style="margin-top:14px">Recent orders</h2>${a.orders.slice(0, 8).map(o => `<div class="muted" style="font-size:12.5px">${esc(o.t)} · ${esc(o.side)} ${(+o.qty).toFixed(3)} ${esc(o.symbol)} @ ${usd(o.price)} <i>${esc(o.note)}</i></div>`).join('')}` : ''}`;
+  } catch (x) { el.innerHTML = `<div class="banner warn">${esc(x.message)}</div>`; } }
+$$('[data-side]').forEach(b => b.onclick = async () => { try {
+  const body = { mode: modeKey(), symbol: $('#o-sym').value, side: b.dataset.side, confirm_live: $('#confirm').checked };
+  if ($('#o-qty').value) body.qty = $('#o-qty').value; else body.dollars = $('#o-usd').value;
+  const j = await api('order', body); toast(`${j.order.side} ${(+j.order.qty).toFixed(3)} ${j.order.symbol} @ ${usd(j.order.price)}`); loadAcct(); } catch (x) { toast(x.message); } });
+$('#resetpaper').onclick = async () => { if (confirm('Reset the paper account to $10,000?')) { await api('paper/reset', { cash: 10000 }); loadAcct(); } };
+
+// questionnaire
+const Q = {{ questions|tojson }};
+$('#qs').innerHTML = Q.map(q => `<div class="q" data-q="${q.id}"><h3>${esc(q.text)}</h3><div class="opts">${q.options.map(o => `<div class="opt" data-o="${o[0]}">${esc(o[1])}</div>`).join('')}</div></div>`).join('');
+$$('.q').forEach(qe => { const id = qe.dataset.q, multi = (Q.find(x => x.id === id) || {}).multi;
+  if (id === 'universe') { answers.universe = ['stocks', 'etf']; qe.querySelectorAll('.opt').forEach(o => o.classList.toggle('on', answers.universe.includes(o.dataset.o))); }
+  qe.querySelectorAll('.opt').forEach(o => o.onclick = () => { if (multi) { const s = new Set(answers[id] || []); s.has(o.dataset.o) ? s.delete(o.dataset.o) : s.add(o.dataset.o); answers[id] = [...s]; o.classList.toggle('on'); } else { answers[id] = o.dataset.o; qe.querySelectorAll('.opt').forEach(x => x.classList.toggle('on', x === o)); } }); });
+$('#mk').onclick = async () => { try { const j = await api('profile', { answers, starting_cash: +$('#cash').value }); plan = j;
+  $('#planbox').style.display = 'block'; $('#plantitle').textContent = `${j.profile.label} investor · risk ${j.profile.risk_score}/4`; $('#planwhy').innerHTML = j.config.why.map(w => '• ' + esc(w)).join('<br>'); $('#planbox').scrollIntoView({ behavior: 'smooth' }); } catch (x) { toast(x.message); } };
+$('#mkplan').onclick = async () => { const o = $('#planout'); o.style.display = 'block'; o.innerHTML = '<div class="muted">Scoring the universe…</div>';
+  try { const j = await api('plan', { answers, starting_cash: +$('#cash').value, algo: $('#algo').value }); plan.live = j;
+    const rows = Object.entries(j.weights).sort((a, b) => b[1] - a[1]);
+    o.innerHTML = `<h2>Today's portfolio (${esc(j.algo.replace(/_/g, ' '))})</h2><p class="help">${rows.length} positions · ${((1 - rows.reduce((s, r) => s + r[1], 0)) * 100).toFixed(0)}% cash</p>
+      ${rows.map(([s, w]) => `<div style="margin:8px 0"><div style="display:flex;justify-content:space-between;font-size:13px"><b>${esc(s)}</b><span>${(w * 100).toFixed(1)}%${j.value_scores[s] != null ? ' · value ' + Math.round(j.value_scores[s]) : ''}</span></div><div class="bar"><i style="width:${Math.min(100, w * 400)}%"></i></div></div>`).join('')}
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="apply">${answers.style === 'auto' ? 'Run automatically' : 'Approve & invest'} (${esc(mode)})</button></div>`;
+    $('#apply').onclick = async () => { try { const r = await api('auto/run', { mode: modeKey(), weights: j.weights, prices: j.prices, algo: j.algo, confirm_live: $('#confirm').checked }); toast(r.orders.length + ' orders placed'); } catch (x) { toast(x.message); } };
+  } catch (x) { o.innerHTML = `<div class="banner warn">${esc(x.message)}</div>`; } };
+$('#mkbt').onclick = async () => { const o = $('#btout'); o.style.display = 'block'; o.innerHTML = '<div class="muted">Backtesting up to 10 years…</div>';
+  try { const r = (await api('backtest', { answers, starting_cash: +$('#cash').value, algo: $('#algo').value })).result;
+    o.innerHTML = `<h2>Backtest · ${esc(r.start)} → ${esc(r.end)}</h2>${spark(r.equity)}<div class="kpis"><div class="kpi"><span>Total return</span><b class="${cls(r.total_return_pct)}">${pct(r.total_return_pct)}</b></div><div class="kpi"><span>CAGR</span><b>${r.cagr_pct}%</b></div><div class="kpi"><span>Max drawdown</span><b class="down">${r.max_drawdown_pct}%</b></div><div class="kpi"><span>Sharpe</span><b>${r.sharpe}</b></div><div class="kpi"><span>Benchmark (equal-weight)</span><b>${pct(r.benchmark_total_return_pct)}</b></div><div class="kpi"><span>Beat benchmark?</span><b>${r.beats_benchmark ? 'Yes' : 'No'}</b></div></div><p class="help" style="margin-top:10px">${r.notes.map(esc).join('<br>')}</p>`;
+  } catch (x) { o.innerHTML = `<div class="banner warn">${esc(x.message)}</div>`; } };
+$('#saveua').onclick = async () => { try { await api('sec-agent', { user_agent: $('#ua').value }); $('#secstate').textContent = 'SEC access is ready.'; } catch (x) { $('#secstate').textContent = x.message; } };
+</script>
+</body>
+</html>
