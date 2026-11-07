@@ -381,6 +381,9 @@ def run_multi_objective_refinement(
         elapsed = time.time() - t0
         log(f"Multi-objective optimization complete in {elapsed:.1f}s. Pareto front size: {len(pareto_front)}.")
 
+        from app.validation.trial_chain import note_looks
+        note_looks("multi_objective", "multi_objective_refinement", int(cfg.population_size) * (int(cfg.generations) + 1),
+                   src="multi_objective", meta={"estimate": "population_size*(generations+1)"})
         return MultiObjectiveResult(
             config=cfg,
             source_type=strategy.source_type,

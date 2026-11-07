@@ -1830,6 +1830,8 @@ def run_iterative_refinement(
         distribution_summary = _compute_distribution_summary(all_evaluated, cfg)
         log(f"Iterative Refinement complete in {elapsed:.1f}s ({len(all_evaluated)} candidates evaluated + {plateau_probes} plateau probes).")
 
+        from app.validation.trial_chain import note_looks
+        note_looks("refinement", "iterative_refinement", len(all_evaluated), src="refinement")
         return RefinementResult(
             refinement_config=cfg,
             fitness_metric=cfg.fitness_metric,

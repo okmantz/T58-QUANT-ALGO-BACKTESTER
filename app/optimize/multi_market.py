@@ -462,6 +462,9 @@ def run_multi_market_search(
         log(f"Multi-market search complete in {elapsed:.1f}s ({total_evaluations[0]} candidates, "
             f"{total_evaluations[0] * len(markets)} total backtests).")
 
+        from app.validation.trial_chain import note_looks
+        note_looks("multi_market", "multi_market_search", int(total_evaluations[0]) * len(markets), src="multi_market",
+                   meta={"candidates": int(total_evaluations[0]), "markets": len(markets)})
         return MultiMarketSearchResult(
             refinement_config=cfg, aggregation=aggregation, fitness_metric=cfg.fitness_metric,
             markets=markets, genes=genes, baseline=baseline, best=best_final,
