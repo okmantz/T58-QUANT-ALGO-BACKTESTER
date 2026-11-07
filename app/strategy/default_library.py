@@ -17,10 +17,10 @@ from pathlib import Path
 
 DEFAULT_STRATEGY_FILES: dict[str, tuple[str, ...]] = {
     "python": (
+        "MNQ1! Gap Aligned Drive RW Tight Stop 1m.py",
         "NQ1! Context Aligned Drive 1m v2.py",
-        "NQ1! Gap Aligned Drive Ensemble 1m.py",
+        "NQ1! Ind Rule 15m.py",
         "NQ1! Trend Momentum Continuation 5m.py",
-        "NQ1! V1T 1m.py",
     ),
     "pinescript": (),
     "mql5": (),
