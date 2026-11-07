@@ -80,3 +80,36 @@ def test_same_seed_reproduces_and_empty_input_is_handled():
 def test_drawdown_tolerance_is_the_traders_own_not_a_firm_rule():
     wild = run_net_profit_test(_trades(w=900.0, l=-700.0, win=0.5, n=300), NetProfitTestConfig(n_simulations=300, max_p95_drawdown_pct=5.0))
     assert any("tolerance" in x for x in wild.reasons)
+
+
+def test_net_profit_test_reports_sharpe_sortino_calmar_psr_and_gates_on_them():
+    import numpy as np, pandas as pd
+    from types import SimpleNamespace
+    from app.validation.net_profit_tester import NetProfitTestConfig, run_net_profit_test
+    rng = np.random.default_rng(3)
+    days = pd.bdate_range("2022-01-03", periods=600)
+    def mk(mu):
+        return [SimpleNamespace(entry_time=d, exit_time=d, pnl=float(rng.normal(mu, 120)), commission=2.0, initial_risk=1.0, size=100.0) for d in days]
+    good = run_net_profit_test(mk(40), NetProfitTestConfig(n_simulations=300))
+    ra = good.edge["risk_adjusted"]
+    assert ra["sharpe"] > 0.75 and ra["psr"] > 0.9 and ra["sortino"] > 0 and ra["calmar"] is not None
+    flat = run_net_profit_test(mk(0.0), NetProfitTestConfig(n_simulations=300))
+    assert flat.edge["risk_adjusted"]["psr"] < 0.9 and any("Sharpe" in r for r in flat.reasons)
+    assert not any("prop" in r.lower() and "lifecycle" in r.lower() for r in good.reasons)
+
+
+def test_net_profit_mode_rewrites_every_engines_prop_selectors():
+    import app.web.server as server
+    server.app.config["TESTING"] = True
+    from flask import request
+    from app.web.objective_mode import apply_objective_mode_to_form
+    with server.app.test_request_context("/x", method="POST", data={"objective_mode": "net_profit", "fitness_goal_preset": "eval_pass_rate",
+                                                                  "metric": "eval_pass_probability", "objectives": ["eval_pass_probability", "win_rate"]}):
+        apply_objective_mode_to_form()
+        assert request.form["fitness_goal_preset"] == "net_profit" and request.form["metric"] == "net_profit"
+        assert request.form["fitness_metric"] == "net_profit_adjusted"
+        objs = request.form.getlist("objectives")
+        assert "eval_pass_probability" not in objs and "net_profit" in objs and "win_rate" in objs
+    with server.app.test_request_context("/x", method="POST", data={"objective_mode": "prop_lifecycle", "metric": "eval_pass_probability"}):
+        apply_objective_mode_to_form()
+        assert request.form["metric"] == "eval_pass_probability"
