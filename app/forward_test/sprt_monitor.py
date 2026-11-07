@@ -71,16 +71,25 @@ class SprtMonitor:
     def status(self) -> dict:
         d = sprt_decision(self.r_values, self.h1_r, self.sd_r, 0.0, self.alpha, self.beta, self.max_trades)
         halted = self.kill.check(self.r_values, self.days if all(x is not None for x in self.days) else None)
-        # Rulebook kill line (2026-11-03, section 4): LLR of "+0.15R" vs "no edge"; cut the strategy at <= -2.25.
+        # Rulebook v2 kill line (layer 2): LLR of "+0.10R" vs "no edge" (centred at +0.05R); cut the strategy at <= -2.25.
         from app.validation.rulebook import llr_path
         llr = llr_path(self.r_values)
         d["rulebook_llr"] = llr
         if llr["killed"]:
             halted = list(halted) + [f"Rulebook kill line hit: LLR {llr['llr']:.2f} <= {llr['kill_at']:.2f} at trade {llr['killed_at_trade']} "
-                                     "(the live edge is no longer consistent with +0.15R)"]
+                                     "(the live edge is no longer consistent with +0.10R)"]
         d["kill_switch"] = halted
         d["halted"] = bool(halted)
         d["ladder_state"] = {"ACCEPT_H1": "EVALUATE"}.get(d["decision"], "FORWARD-TEST CANDIDATE" if d["decision"] == "CONTINUE" else "REJECT")
+        # Rulebook v2 G6: >= 20 live-sim trading days with the monitor above the kill line is PERMISSION TO BUY CAPPED ATTEMPTS (EVALUATE); the
+        # H1 acceptance test (roughly 460 to 810 trades at +0.10R) moved to G7, where a $172 attempt separates no edge from +0.10R better per dollar.
+        try:
+            n_days = len({str(x) for x in self.days if x is not None})
+        except Exception:  # noqa: BLE001
+            n_days = 0
+        d["live_sim_days"] = n_days
+        if d["decision"] == "CONTINUE" and not halted and n_days >= 20:
+            d["ladder_state"] = "EVALUATE"
         if d["halted"]:
             d["ladder_state"] = "REJECT"
         return d
