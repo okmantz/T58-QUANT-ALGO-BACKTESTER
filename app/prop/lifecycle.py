@@ -516,5 +516,14 @@ def evaluate_objective(trades, rules: PropRules | None, mode: str = DEFAULT_OBJE
             out["fallback"] = "no prop rules supplied -- scored on net profit"
         return out
     lc = run_lifecycle(trades, rules, cfg, objective_mode=mode)
-    return {"mode": mode, "objective": lc.objective_value, "label": OBJECTIVE_MODE_LABELS[mode], "lifecycle": lc.to_dict(),
-            "headline": lc.headline()}
+    out = {"mode": mode, "objective": lc.objective_value, "label": OBJECTIVE_MODE_LABELS[mode], "lifecycle": lc.to_dict(),
+           "headline": lc.headline()}
+    try:   # Rulebook v2: the planning edge the same trades earn (G3 reads this number; a pass probability on a +0.00R edge is luck)
+        from app.validation import rulebook as _rb
+        g3 = _rb.g3_development_evidence(trades, n_looks=1)
+        out["rulebook_v2"] = {"e_plan_r_single_look": (g3.data or {}).get("e_plan"), "mean_r": (g3.data or {}).get("mean_r"),
+                              "n_trades": (g3.data or {}).get("n_trades"), "needs_observed_edge_r": (g3.data or {}).get("required_observed_edge"),
+                              "note": "single-look figure; the full pipeline re-computes it at the run's real trial count N (gate G3)"}
+    except Exception:  # noqa: BLE001 - an annotation must never break an optimiser
+        pass
+    return out
