@@ -16,23 +16,42 @@ def client():
 
 def test_rulebook_page_and_calc(client, tmp_path, monkeypatch):
     from app.validation import rulebook as rb
-    monkeypatch.setattr(rb, "_ledger_path", lambda: tmp_path / "alpha.json")
+    monkeypatch.setattr(rb, "_register_path", lambda: tmp_path / "register.json")
+    monkeypatch.setattr(rb, "_sheet_path", lambda: tmp_path / "sheet.json")
     r = client.get("/rulebook")
     assert r.status_code == 200
     body = r.get_data(as_text=True)
-    for s in ("Edge Rulebook", "Alpha budget", "Binary screen", "Forward test", "2.81"):
+    for s in ("Prop Firm Rulebook v2", "G0", "G7", "Rules sheet", "Capped paid attempts", "0.112", "trial register"):
         assert s in body, s
-    j = client.get("/api/rulebook/calc?sr=0.10&looks=10").get_json()
-    assert j["ok"] and j["z_bar"] == 2.807 and abs(j["trades_needed"] - 1038) <= 1
+    for gone in ("Binary screen", "Alpha budget", "Edge Rulebook"):
+        assert gone not in body, gone
+    j = client.get("/api/rulebook/calc?n=400&looks=3&edge=0.15").get_json()
+    assert j["ok"] and abs(j["required_observed_edge"] - 0.112) < 0.001 and j["e_plan"] > 0.05
+    j = client.get("/api/rulebook/attempts?outcomes=1,1").get_json()
+    assert j["ok"] and j["data"]["decision"] == "SCALE"
 
 
-def test_log_hypothesis_requires_frame(client, tmp_path, monkeypatch):
+def test_register_trial_route_requires_g2(client, tmp_path, monkeypatch):
     from app.validation import rulebook as rb
-    monkeypatch.setattr(rb, "_ledger_path", lambda: tmp_path / "alpha.json")
-    r = client.post("/rulebook/hypothesis", data={"mechanism": "", "segment": "x", "sign": "+", "payoff": "2", "cost_r": "0.05"})
+    monkeypatch.setattr(rb, "_register_path", lambda: tmp_path / "register.json")
+    monkeypatch.setattr(rb, "_sheet_path", lambda: tmp_path / "sheet.json")
+    r = client.post("/rulebook/trial", data={"family": "f", "mechanism": "", "counterparty": "", "sign": "long", "instruments": "MNQ", "mechanisms": "1", "variants": "1"})
     assert r.status_code == 302 and "ok=0" in r.headers["Location"]
-    r = client.post("/rulebook/hypothesis", data={"mechanism": "yields lead futures", "segment": "next 30m", "sign": "+", "payoff": "2", "cost_r": "0.05"})
-    assert "ok=1" in r.headers["Location"] and rb.load_ledger()[0]["id"] == "H1"
+    r = client.post("/rulebook/trial", data={"family": "opening-drive", "mechanism": "late fade", "counterparty": "reversal traders", "sign": "long",
+                                             "instruments": "MNQ, MES, M2K", "mechanisms": "1", "variants": "1", "seal_date": "2026-03-01", "code": "x"})
+    assert "ok=1" in r.headers["Location"] and rb.load_register()["rows"][0]["id"] == "T1"
+    assert rb.load_register()["rows"][0]["code_hash"] and rb.load_register()["seal_dates"]["MNQ"] == "2026-03-01"
+
+
+def test_rules_sheet_route_marks_g0_open_until_complete(client, tmp_path, monkeypatch):
+    from app.validation import rulebook as rb
+    monkeypatch.setattr(rb, "_register_path", lambda: tmp_path / "register.json")
+    monkeypatch.setattr(rb, "_sheet_path", lambda: tmp_path / "sheet.json")
+    r = client.post("/rulebook/rules-sheet/preset", data={"preset": "lucid_50k"})
+    assert r.status_code == 302 and "ok=1" in r.headers["Location"]
+    assert rb.load_rules_sheet()["max_loss"]["value"] in (2000.0, "2000.0")
+    r = client.post("/rulebook/rules-sheet", data={"fee": "172"})
+    assert "ok=0" in r.headers["Location"]          # most of the sheet is still blank
 
 
 def test_acknowledge_endpoint_stamps_for_30_days(client, tmp_path, monkeypatch):
