@@ -4,17 +4,16 @@ One Blueprint so server.py needs a single import + register line. Everything her
 beyond what the person explicitly opens (research-paper links open the publisher's page in a new tab)."""
 from __future__ import annotations
 
-from flask import Blueprint, jsonify, render_template, request
+from flask import Blueprint, jsonify, redirect, render_template, request
 
 pages_bp = Blueprint("pages_extra", __name__)
 
 
 # ------------------------------------------------------------------ Achievements
-@pages_bp.route("/achievements")
-def achievements_page():
-    from app.achievements import evaluate
+def achievements_context() -> dict:
+    """Template context for the Achievements tab of Account settings."""
     from app import achievements
-    from app.achievements import share
+    from app.achievements import evaluate, share
     model = evaluate()
     prof = achievements.profile(model)
     ranks = []
@@ -22,8 +21,14 @@ def achievements_page():
         top = next((a2 for a2, _m, _l in achievements.RANK_METALS if a2 > at), None)
         ranks.append({"metal": metal, "label": label, "from": at + 1, "to": (top if top else None),
                       "reached": model["level"]["level"] - 1 >= at})
-    return render_template("achievements.html", active_page="achievements", model=model, rank=prof["rank"], badges=prof["badges"],
-                           ranks=ranks, metals=share.METALS, who=_display_name())
+    return {"model": model, "rank": prof["rank"], "badges": prof["badges"], "ranks": ranks,
+            "metals": share.METALS, "who": _display_name()}
+
+
+@pages_bp.route("/achievements")
+def achievements_page():
+    # Achievements now live in Account settings; the old URL keeps working.
+    return redirect("/settings/account?tab=achievements", 301)
 
 
 @pages_bp.route("/api/achievements")

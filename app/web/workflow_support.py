@@ -319,26 +319,6 @@ def comparison(run_ids: list[str]) -> dict:
 
 
 # --------------------------------------------------------------------------------------------------- routes
-@workflow_bp.route("/profile", methods=["GET"])
-def profile_page():
-    try:
-        from app.prop.presets import list_presets
-        presets = [(p.key, p.label) for p in list_presets()]
-    except Exception:  # noqa: BLE001
-        presets = []
-    return render_template("trader_profile.html", active_page="profile", profile=load_profile(), presets=presets, hold_choices=HOLD_CHOICES,
-                           saved=request.args.get("saved") == "1")
-
-
-@workflow_bp.route("/profile", methods=["POST"])
-def profile_save():
-    from flask import redirect
-    prof = clean_profile(request.form.to_dict())
-    with _LOCK:
-        _write("trader_profile.json", prof)
-    return redirect("/profile?saved=1")
-
-
 @workflow_bp.route("/api/profile/defaults")
 def api_profile_defaults():
     return jsonify({"profile": load_profile(), "defaults": profile_defaults()})

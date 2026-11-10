@@ -1,7 +1,7 @@
 """Pine Indicator Creator (``/pine-indicator``): TradingView indicators from an idea or from pasted code."""
 from __future__ import annotations
 
-from flask import Blueprint, jsonify, render_template, request
+from flask import Blueprint, Response, jsonify, render_template, request
 
 from app.strategy import pine_indicator as P
 
@@ -56,3 +56,32 @@ def api_create():
     except Exception as exc:  # noqa: BLE001
         return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 500
     return jsonify({"ok": True, "result": res.to_dict()})
+
+
+# ------------------------------------------------------------------ TradingView settings bridge
+@pine_indicator_bp.route("/bridge")
+def bridge_page():
+    """Backtest -> chart in one copy-paste: check a settings ID, then copy the Pine indicator or strategy that reads it."""
+    return render_template("tradingview_bridge.html", active_page="pine_indicator")
+
+
+@pine_indicator_bp.route("/api/bridge/decode", methods=["POST"])
+def bridge_decode():
+    from app.reports import tv_bridge as tv
+    body = request.get_json(silent=True) or {}
+    try:
+        settings = tv.decode(str(body.get("id") or "").strip())
+    except tv.SettingsIdError as exc:
+        return jsonify({"ok": False, "error": str(exc)})
+    return jsonify({"ok": True, "rows": tv.describe(settings)})
+
+
+@pine_indicator_bp.route("/api/bridge/pine")
+def bridge_pine():
+    from app.reports import tv_bridge as tv
+    kind = "strategy" if request.args.get("kind") == "strategy" else "indicator"
+    text = tv.pine_strategy() if kind == "strategy" else tv.pine_indicator()
+    resp = Response(text, mimetype="text/plain")
+    if request.args.get("download"):
+        resp.headers["Content-Disposition"] = f'attachment; filename="t58_settings_{kind}.pine"'
+    return resp

@@ -160,6 +160,30 @@ def api_order():
         return _err(e)
 
 
+@investing_bp.route("/investing/api/close", methods=["POST"])
+def api_close():
+    """Sell all (or a fraction) of one holding at the latest price: the one-click exit used by the position drawer."""
+    b = request.get_json(silent=True) or {}
+    try:
+        mode = b.get("mode", "paper")
+        br = _broker(mode, bool(b.get("confirm_live")))
+        sym = str(b.get("symbol") or "").upper().strip()
+        fraction = float(b.get("fraction") or 1.0)
+        if not sym or not 0 < fraction <= 1:
+            raise ValueError("Pick a holding and a share between 0% and 100% to sell.")
+        held = next((p for p in br.state()["positions"] if p["symbol"].upper() == sym), None)
+        if not held or held["qty"] <= 0:
+            raise ValueError(f"You do not hold {sym}.")
+        try:
+            px = md.quote(sym)["price"]
+        except Exception:  # noqa: BLE001 -- fall back to the position's own last price
+            px = held["price"]
+        qty = held["qty"] if fraction >= 0.999 else held["qty"] * fraction
+        return jsonify({"ok": True, "order": br.order(sym, "sell", qty, px, "close position" if fraction >= 0.999 else f"sell {fraction:.0%}")})
+    except Exception as e:  # noqa: BLE001
+        return _err(e)
+
+
 @investing_bp.route("/investing/api/auto/run", methods=["POST"])
 def api_auto_run():
     """Apply the automated plan to the account (paper by default). Hybrid style: client sends approve=true after the user reviews."""

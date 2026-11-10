@@ -46,7 +46,7 @@ from pathlib import Path
 
 from urllib.parse import quote_plus
 from flask import (
-    Flask, Response, jsonify, redirect, render_template, request, send_from_directory, session, url_for,
+    Flask, Response, abort, jsonify, redirect, render_template, request, send_from_directory, session, url_for,
 )
 
 from app.ai.ollama_settings import OllamaSettings
@@ -1481,108 +1481,6 @@ def _prop_presets_json() -> str:
     return json.dumps([p.to_dict() for p in list_presets()])
 
 
-@app.route("/rulebook")
-def rulebook_page():
-    """The T58 Prop Firm Rulebook v2 as a working page: gate pipeline, G3 table, rules sheet (G0), trial register (G2), attempt score (G7)."""
-    from app.validation import rulebook as rb
-    from app.prop.presets import list_presets
-    return render_template("rulebook.html", active_page="rulebook", snap=rb.snapshot(), gate_map=rb.GATE_NAME_MAP,
-                           presets=[{"key": p.key, "label": p.label} for p in list_presets()],
-                           notice=request.args.get("notice"), notice_ok=request.args.get("ok"))
-
-
-@app.route("/rulebook/trial", methods=["POST"])
-def rulebook_register_trial():
-    """G2: pre-register a trial (family, counterparty, sign, breadth, seal dates) BEFORE any run. Refuses past 3 looks per family."""
-    from app.validation import rulebook as rb
-    f = request.form
-    insts = [x.strip().upper() for x in (f.get("instruments") or "").replace(";", ",").split(",") if x.strip()]
-    seal = {i: f.get("seal_date", "").strip() for i in insts if f.get("seal_date", "").strip()}
-    try:
-        variants = max(int(f.get("variants") or 1), 1)
-        mechs = max(int(f.get("mechanisms") or 1), 1)
-    except ValueError:
-        return redirect(url_for("rulebook_page", notice="Variants and mechanisms must be whole numbers.", ok="0"))
-    res = rb.register_trial(family=f.get("family", ""), mechanism=f.get("mechanism", ""), counterparty=f.get("counterparty", ""),
-                            sign=f.get("sign", ""), instruments=insts, mechanisms=mechs, variants=variants, code_text=f.get("code", ""), sealed=seal)
-    if not res["ok"]:
-        return redirect(url_for("rulebook_page", notice="G2 not met: " + " ".join(res["problems"]), ok="0"))
-    row = res["row"]
-    return redirect(url_for("rulebook_page", ok="1", notice=f"Registered {row['id']} (code hash {row['code_hash']}). N is now {row['n_after']}, so E[max N] = {row['e_max']}."))
-
-
-@app.route("/rulebook/trial/<tid>/archive", methods=["POST"])
-def rulebook_archive_trial(tid):
-    from app.validation import rulebook as rb
-    ok = rb.archive_trial(tid, request.form.get("gate", "G3"), request.form.get("failing_number", "archived by hand"))
-    return redirect(url_for("rulebook_page", ok="1" if ok else "0", notice=("Archived " + tid + ". A revival is a new registration and counts as new looks.") if ok else "No such trial."))
-
-
-@app.route("/rulebook/rules-sheet", methods=["POST"])
-def rulebook_save_rules_sheet():
-    """G0: save the rules sheet. Every field carries its value, a source and the date it was checked; one blank stops everything."""
-    from app.validation import rulebook as rb
-    f = request.form
-    sheet = rb.load_rules_sheet()
-    today = datetime.now().date().isoformat()
-    for key, _label in rb.RULES_SHEET_FIELDS:
-        val = (f.get(key) or "").strip()
-        if val == "":
-            sheet.pop(key, None)
-            continue
-        old = sheet.get(key) or {}
-        changed = str(old.get("value", "")) != val
-        sheet[key] = {"value": val, "source": (f.get(key + "__source") or old.get("source") or "").strip(),
-                      "checked_on": (f.get(key + "__date") or (today if changed else old.get("checked_on")) or today).strip()}
-    for key, _label in rb.RULES_SHEET_CONFIRMATIONS:
-        if f.get(key):
-            sheet[key] = {"value": True, "source": (f.get(key + "__source") or "written confirmation").strip(), "checked_on": today}
-        else:
-            sheet.pop(key, None)
-    rb.save_rules_sheet(sheet)
-    g0 = rb.g0_rules_sheet(sheet)
-    return redirect(url_for("rulebook_page", ok="1" if g0.passed else "0", notice="G0 passed: the rules sheet is complete and fresh." if g0.passed else "Saved. G0 still open: " + g0.failing_number()))
-
-
-@app.route("/rulebook/rules-sheet/preset", methods=["POST"])
-def rulebook_rules_sheet_from_preset():
-    from app.validation import rulebook as rb
-    key = request.form.get("preset", "")
-    try:
-        sheet = rb.load_rules_sheet()
-        sheet.update(rb.rules_sheet_from_preset(key))
-        rb.save_rules_sheet(sheet)
-    except KeyError:
-        return redirect(url_for("rulebook_page", ok="0", notice="Unknown preset."))
-    return redirect(url_for("rulebook_page", ok="1", notice="Filled the rules the preset carries (with its source and check date). Payout terms, fees and written confirmations stay blank until you source them."))
-
-
-@app.route("/api/rulebook/calc")
-def api_rulebook_calc():
-    """?n=600&looks=10[&sigma=1.46][&edge=0.12] -> E[max N], the observed edge G3 needs, the derived trade floor and the planning edge."""
-    from app.validation import rulebook as rb
-    try:
-        n = int(request.args.get("n", 600)); looks = int(request.args.get("looks", 1))
-        sigma = float(request.args.get("sigma", rb.SIGMA_R_AT_2_TO_1)); edge = request.args.get("edge")
-        edge = float(edge) if edge not in (None, "") else None
-    except ValueError:
-        return jsonify({"ok": False, "error": "numbers only"}), 400
-    out = {"ok": True, "e_max": round(rb.expected_max_z(looks), 3), "z_bar": round(rb.z_bar(looks), 3),
-           "required_observed_edge": round(rb.required_observed_edge(n, looks, sigma), 4)}
-    if edge is not None:
-        out["e_plan"] = round(rb.e_plan(edge, looks, sigma / max(n, 1) ** 0.5), 4)
-        out["trade_floor"] = rb.trade_floor(looks, edge, sigma) if edge > rb.E_PLAN_FLOOR_R else None
-    return jsonify(out)
-
-
-@app.route("/api/rulebook/attempts")
-def api_rulebook_attempts():
-    """?outcomes=1,0,0,1 (1 = paid) -> the G7 attempt score and decision."""
-    from app.validation import rulebook as rb
-    outs = [x.strip() == "1" for x in (request.args.get("outcomes") or "").split(",") if x.strip() in ("0", "1")]
-    return jsonify({"ok": True, **rb.g7_capped_attempts(outs).to_dict()})
-
-
 @app.route("/api/prop-presets/<key>/acknowledge", methods=["POST"])
 def api_prop_preset_acknowledge(key):
     """In-app "I re-checked this firm's rules page" box: stamps the preset today (good for 30 days, see app.prop.presets.acknowledge_preset)."""
@@ -2004,48 +1902,40 @@ def mobile_access():
     )
 
 
-@app.route("/resources")
-def resources():
-    """A static, no-engine-dependency page for the T58 30-Day Trading
-    Quickstart Guide (Owen's own Google Doc) plus a short list of other
-    free, well-known beginner trading resources -- purely educational,
-    for anyone using this app who wants a running start on trading
-    fundamentals before backtesting their first strategy. No form, no
-    job, no report; just links out.
-    """
-    return render_template("resources.html", active_page="resources")
-
-
 @app.route("/education")
 def education():
-    """Quant/algo-trading concept lessons -- what a number or a tab
-    actually MEANS, as opposed to /user-manual (which button to click)
-    and /resources (external trading-fundamentals links). Content lives
-    in app.education.content as one shared source both this route and
-    the desktop Education tab (app.ui.main_window._build_education_tab)
-    render from, so the two can never drift apart. No form, no job, no
-    report; just a reading page, same as Resources and User Manual."""
+    """University > Courses: quant/algo-trading concept lessons (what a number or a tab actually MEANS). Content lives in
+    app.education.content as one shared source both this route and the desktop Education tab render from."""
     return render_template("education.html", active_page="education", sections=education_content.list_sections(),
                            lab_slots=education_content.LESSON_LAB_SLOTS)
 
 
+@app.route("/education/resources")
+def education_resources():
+    """University > Resources: a static page with the T58 30-Day Quickstart Guide, the MS-LSD summary and other free beginner material."""
+    return render_template("university_resources.html", active_page="education")
+
+
+@app.route("/education/manual")
+def education_manual():
+    """University > User Manual: the start-to-finish walkthrough, reading guide and decision guide, written for the web app's own page names."""
+    return render_template("university_manual.html", active_page="education")
+
+
 @app.route("/education/knowledge-check")
 def education_knowledge_check():
-    """The knowledge check is the last module of the Education course, not a page of its own -- keep old bookmarks working."""
+    """The knowledge check is the last module of the Courses page, not a page of its own -- keep old bookmarks working."""
     return redirect("/education#knowledge-check", code=301)
 
 
+@app.route("/resources")
+def resources_moved():
+    return redirect("/education/resources", code=301)
+
+
 @app.route("/user-manual")
-def user_manual():
-    """Web equivalent of the desktop app's User Manual tab (see
-    app.ui.main_window._build_manual_tab) -- a start-to-finish workflow
-    walkthrough (Create / Test / Optimize / Validate / Champion /
-    Deployment), rewritten for the web app's own page names and URLs
-    rather than a verbatim port of the desktop tab's Tkinter text
-    (the two apps' navigation labels differ enough that a literal copy
-    would point at things that don't exist here). No form, no job, no
-    report; just a reading page, same as Resources."""
-    return render_template("user_manual.html", active_page="user_manual")
+def user_manual_moved():
+    return redirect("/education/manual", code=301)
 
 
 def _get_stored_strategy(strategy_type: str, filename: str):
@@ -5126,8 +5016,22 @@ def _account_settings_page_context(**extra):
         ctx["live_pnl_unlocked"] = bool(_ach.unlock_state()["features"]["live_pnl_panel"]["unlocked"])
     except Exception:  # noqa: BLE001
         ctx["live_pnl_unlocked"] = False
+    tab = extra.pop("tab", None) or request.args.get("tab", "account")
+    if tab not in _ACCOUNT_TABS:
+        tab = "account"
+    ctx["tab"] = tab
+    if tab == "api-keys":
+        ctx.update(_api_keys_ctx())
+    elif tab == "achievements":
+        from app.web.pages_routes import achievements_context
+        ctx.update(achievements_context())
+    elif tab == "support":
+        ctx["support_active"] = True
     ctx.update(extra)
     return ctx
+
+
+_ACCOUNT_TABS = ("account", "notifications", "api-keys", "achievements", "support")
 
 
 @app.route("/data-center")
@@ -5297,8 +5201,7 @@ def _ai_provider_ctx() -> dict:
             "claude_model": saved_remote_model("claude"), "openai_model": saved_remote_model("openai")}
 
 
-@app.route("/settings/api-keys")
-def api_keys_settings_form():
+def _api_keys_ctx() -> dict:
     from app.ai.ollama_settings import load_settings as load_ollama_settings
     from app.data.alpaca_credentials import load_credentials as load_alpaca_credentials
     from app.accounts.api_keys import load_settings as load_api_keys_settings
@@ -5306,9 +5209,7 @@ def api_keys_settings_form():
     from app.live_deploy.broker_registry import SUPPORTED_PLATFORMS
 
     alpaca_creds = load_alpaca_credentials()
-    return render_template(
-        "api_keys_settings.html",
-        active_page="api_keys_settings",
+    return dict(
         ollama=load_ollama_settings(),
         ai_provider=_ai_provider_ctx(),
         alpaca_api_key=(alpaca_creds.api_key if alpaca_creds else ""),
@@ -5317,6 +5218,11 @@ def api_keys_settings_form():
         broker_accounts=load_accounts(),
         broker_platforms=SUPPORTED_PLATFORMS,
     )
+
+
+@app.route("/settings/api-keys")
+def api_keys_settings_form():
+    return redirect("/settings/account?tab=api-keys", 301)
 
 
 @app.route("/settings/api-keys/save-ai", methods=["POST"])
@@ -5342,7 +5248,7 @@ def api_keys_save_ai():
         openai_api_key=(form.get("openai_api_key") or existing_keys.openai_api_key),
         claude_api_key=(form.get("claude_api_key") or existing_keys.claude_api_key),
     ))
-    return redirect(url_for("api_keys_settings_form"))
+    return redirect("/settings/account?tab=api-keys")
 
 
 @app.route("/settings/api-keys/save-trading", methods=["POST"])
@@ -5354,7 +5260,7 @@ def api_keys_save_trading():
     secret_key = (form.get("alpaca_secret_key") or (existing.secret_key if existing else "")).strip()
     if api_key and secret_key:
         save_alpaca_credentials(api_key, secret_key)
-    return redirect(url_for("api_keys_settings_form"))
+    return redirect("/settings/account?tab=api-keys")
 
 
 @app.route("/settings/api-keys/save-data", methods=["POST"])
@@ -5368,7 +5274,7 @@ def api_keys_save_data():
     save_api_keys_settings(_dc.replace(
         existing, **{f: (form.get(f) or getattr(existing, f)) for f in _data_fields},
     ))
-    return redirect(url_for("api_keys_settings_form"))
+    return redirect("/settings/account?tab=api-keys")
 
 
 @app.route("/settings/api-keys/brokers/save", methods=["POST"])
@@ -5390,7 +5296,7 @@ def api_keys_save_broker():
         extra_credentials=extra,
     )
     save_account(account)
-    return redirect(url_for("api_keys_settings_form"))
+    return redirect("/settings/account?tab=api-keys")
 
 
 @app.route("/settings/api-keys/brokers/delete", methods=["POST"])
@@ -5399,7 +5305,7 @@ def api_keys_delete_broker():
     account_id = request.form.get("account_id", "")
     if account_id:
         delete_account(account_id)
-    return redirect(url_for("api_keys_settings_form"))
+    return redirect("/settings/account?tab=api-keys")
 
 
 @app.route("/settings/api-keys/test", methods=["POST"])
@@ -5532,7 +5438,7 @@ def api_keys_test_connection():
 
 @app.route("/support")
 def support_page():
-    return render_template("support.html", active_page="support")
+    return redirect("/settings/account?tab=support", 301)
 
 
 # UPGRADE (Sep 2026 Start Here pass): one dedicated "Start Here" landing
@@ -5564,7 +5470,7 @@ def section_start_here(section):
         return redirect(url_for("full_pipeline_form"))
     data = _SECTION_START_HERE.get(section)
     if data is None or section in _WEB_REMOVED_START_HERE:
-        return render_template("support.html", active_page="support"), 404
+        abort(404)
     extra: dict = {}
     if section == "create":
         # v9.7: the Create step page gets real inputs -- recently saved
@@ -5768,7 +5674,7 @@ def account_settings_check_updates():
 @app.route("/settings/notifications")
 def notification_settings_form():
     # Notification settings now live inside Account settings (above the app version).
-    return redirect("/settings/account#notifications")
+    return redirect("/settings/account?tab=notifications", 301)
 
 
 @app.route("/settings/notifications/save", methods=["POST"])
@@ -5795,7 +5701,7 @@ def notification_settings_save():
         telegram_chat_id=(form.get("telegram_chat_id") or "").strip(),
     )
     save_notification_settings(settings)
-    return redirect("/settings/account?notif_saved=1#notifications")
+    return redirect("/settings/account?tab=notifications&notif_saved=1")
 
 
 @app.route("/settings/notifications/test", methods=["POST"])
@@ -11034,7 +10940,11 @@ def forward_test_info():
         deploy_champion = champion_board.strongest_validated_candidate(champion_board.list_board())
     except Exception:
         deploy_champion = None
+    from app.demo_account import TIERS, get_mode, load as _load_demo
+    from app.webhook_relay.config import get_public_url
     return render_template("forward_test.html", mt5_accounts=mt5_accounts, running=running,
+                           view=("mt5" if request.args.get("view") == "mt5" else "demo"),
+                           acct=_load_demo().to_dict(), tiers=TIERS, mode=get_mode(), public_url=get_public_url(),
                            starting=_FT_START_JOB.is_running,
                            deploy_champion=deploy_champion, strategies=_simple_strategy_options(),
                            prefill_strategy=(request.args.get("strategy") or "").strip(),
@@ -11691,10 +11601,8 @@ def account_mode_save():
 
 @app.route("/demo-account")
 def demo_account_page():
-    from app.demo_account import TIERS, get_mode, load
-    from app.webhook_relay.config import get_public_url
-    return render_template("demo_account.html", active_page="demo_account", mode=get_mode(), acct=load().to_dict(), tiers=TIERS,
-                           public_url=get_public_url())
+    """The demo account lives on the Deploy page now; the old URL (and the header P&L chip) keep working."""
+    return redirect("/forward-test?view=demo", code=301)
 
 
 @app.route("/demo-account/tier", methods=["POST"])
@@ -11704,14 +11612,14 @@ def demo_account_tier():
         set_tier(float(request.form.get("size") or (request.get_json(silent=True) or {}).get("size") or 0))
     except (ValueError, TypeError) as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
-    return redirect(url_for("demo_account_page")) if not request.is_json else jsonify({"ok": True})
+    return redirect("/forward-test?view=demo") if not request.is_json else jsonify({"ok": True})
 
 
 @app.route("/demo-account/reset", methods=["POST"])
 def demo_account_reset():
     from app.demo_account import reset
     reset()
-    return redirect(url_for("demo_account_page"))
+    return redirect("/forward-test?view=demo")
 
 
 @app.route("/demo-account/deploy", methods=["POST"])
