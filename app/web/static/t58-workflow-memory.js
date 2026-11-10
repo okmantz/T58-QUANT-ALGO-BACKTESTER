@@ -48,7 +48,7 @@
           Object.keys(p.defaults).forEach(function (k) { var el = form.querySelector('[name="' + k + '"]'); if (el && (el.value === '' || el.value === undefined)) setValue(el, String(p.defaults[k])); });
         });
       } else {
-        showNote(form, 'Opened with the settings from your last run. <a href="/profile">Trader profile</a>');
+        showNote(form, 'Opened with the settings from your last run.');
       }
     });
   }

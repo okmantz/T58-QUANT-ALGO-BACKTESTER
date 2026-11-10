@@ -106,10 +106,10 @@
     {
       title: "Help is always one click away",
       text: [
-        "The **User Manual** is the full walkthrough, and Education and Resources cover the trading basics.",
+        "**University** holds the courses, the User Manual (the full walkthrough) and a short list of trading-basics resources.",
         "Want this tour again? Use the **Take the tour** button at the top of the Dashboard."
       ],
-      target: function () { return navLink("/user-manual"); },
+      target: function () { return navLink("/education"); },
       action: { label: "Start my first test \u2192", href: "/start-here/create", primary: true }
     }
   ];

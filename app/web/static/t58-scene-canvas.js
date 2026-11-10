@@ -977,17 +977,55 @@
     st.sand = []; for (var i = 0; i < (st.small ? 50 : 120); i++) st.sand.push({ x: rnd(0, st.W), y: rnd(st.H * 0.45, st.H), z: rnd(0.3, 1), ph: rnd(0, 6.28), l: rnd(5, 14) });
     st.walk = { u: 0.12, pause: 0 };
   }
+  /* A robed desert traveller in profile, facing right: two-bone legs solved by inverse kinematics so the knees bend and the feet plant,
+     counter-swinging arms with a walking staff, a hooded head, a pack, and cloth (robe hem, scarf) streaming back in the wind. */
+  function ik2(ax, ay, bx, by, l1, l2) {                       // knee position for a two-bone limb reaching (bx,by); the joint bends forward (+x)
+    var dx = bx - ax, dy = by - ay, d = Math.min(Math.hypot(dx, dy), l1 + l2 - 0.001), a = Math.atan2(dy, dx);
+    var c = Math.max(-1, Math.min(1, (l1 * l1 + d * d - l2 * l2) / (2 * l1 * d)));
+    return { x: ax + Math.cos(a - Math.acos(c)) * l1, y: ay + Math.sin(a - Math.acos(c)) * l1, ex: ax + Math.cos(a) * d, ey: ay + Math.sin(a) * d };
+  }
+  function limb(ctx, x0, y0, x1, y1, r0, r1) {                 // a tapered, rounded segment (thigh, shin, arm)
+    var a = Math.atan2(y1 - y0, x1 - x0) + Math.PI / 2, c = Math.cos(a), s = Math.sin(a);
+    ctx.beginPath(); ctx.moveTo(x0 + c * r0, y0 + s * r0); ctx.lineTo(x1 + c * r1, y1 + s * r1); ctx.lineTo(x1 - c * r1, y1 - s * r1); ctx.lineTo(x0 - c * r0, y0 - s * r0); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.arc(x0, y0, r0, 0, 6.2832); ctx.arc(x1, y1, r1, 0, 6.2832); ctx.fill();
+  }
   function drawWalker(ctx, st, t, x, y, h, alpha) {
-    var ph = t * 3.0, sw = Math.sin(ph), bob = Math.abs(Math.cos(ph)) * h * 0.025, lw = Math.max(1, h * 0.07);
-    ctx.save(); ctx.globalAlpha = alpha; ctx.lineCap = 'round';
-    ctx.fillStyle = 'rgba(40,18,6,0.35)'; ctx.beginPath(); ctx.ellipse(x - h * 0.55, y + h * 0.02, h * 0.62, h * 0.06, 0, 0, 6.2832); ctx.fill();   // long low shadow
-    ctx.strokeStyle = '#1b0e07'; ctx.fillStyle = '#1b0e07'; ctx.lineWidth = lw;
-    var hip = y - h * 0.46 - bob, sh = hip - h * 0.34;
-    ctx.beginPath(); ctx.moveTo(x, hip); ctx.lineTo(x + sw * h * 0.17, y); ctx.moveTo(x, hip); ctx.lineTo(x - sw * h * 0.17, y); ctx.stroke();   // legs
-    ctx.lineWidth = lw * 1.5; ctx.beginPath(); ctx.moveTo(x, hip); ctx.lineTo(x + h * 0.03, sh); ctx.stroke();                                         // torso
-    ctx.lineWidth = lw * 0.8; ctx.beginPath(); ctx.moveTo(x + h * 0.03, sh + h * 0.03); ctx.lineTo(x + h * 0.03 - sw * h * 0.12, sh + h * 0.22);
-    ctx.moveTo(x + h * 0.03, sh + h * 0.03); ctx.lineTo(x + h * 0.03 + sw * h * 0.12, sh + h * 0.22); ctx.stroke();                                    // arms
-    ctx.beginPath(); ctx.arc(x + h * 0.04, sh - h * 0.07, h * 0.075, 0, 6.2832); ctx.fill();                                                         // head
+    var w = 2.9 * t, thigh = h * 0.245, shin = h * 0.245, stride = h * 0.17, lift = h * 0.085;
+    var hipY = y - (thigh + shin) * (0.955 + 0.03 * Math.abs(Math.sin(w))), hipX = x;
+    var shY = hipY - h * 0.335, shX = hipX + h * 0.035;                                   // shoulders: a slight forward lean
+    var wind = Math.sin(t * 2.1) * 0.5 + 0.5, flut = Math.sin(t * 5.3) * h * 0.012;
+    function foot(phase) { return { x: hipX + Math.cos(phase) * stride, y: y - Math.max(0, -Math.sin(phase)) * lift }; }
+    function leg(phase, col, boot) {
+      var f = foot(phase), k = ik2(hipX, hipY, f.x, f.y, thigh, shin);
+      ctx.fillStyle = col; limb(ctx, hipX, hipY, k.x, k.y, h * 0.052, h * 0.042); limb(ctx, k.x, k.y, k.ex, k.ey, h * 0.042, h * 0.03);
+      ctx.fillStyle = boot; ctx.beginPath(); ctx.ellipse(k.ex + h * 0.025, k.ey + h * 0.008, h * 0.05, h * 0.02, 0, 0, 6.2832); ctx.fill();
+    }
+    function arm(phase, col, staff) {                                                     // arms swing against the legs
+      var sw = Math.sin(phase) * h * 0.13, hx = shX + sw, hy = shY + h * 0.265 - Math.abs(Math.sin(phase)) * h * 0.01, k = ik2(shX, shY, hx, hy, h * 0.15, h * 0.14);
+      ctx.fillStyle = col; limb(ctx, shX, shY + h * 0.01, k.x, k.y, h * 0.036, h * 0.03); limb(ctx, k.x, k.y, k.ex, k.ey, h * 0.03, h * 0.022);
+      ctx.beginPath(); ctx.arc(k.ex, k.ey, h * 0.026, 0, 6.2832); ctx.fill();
+      if (staff) {                                                                        // walking staff, planted a little ahead of the hand
+        ctx.strokeStyle = '#4a2c14'; ctx.lineWidth = Math.max(1, h * 0.022); ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(k.ex - h * 0.03, k.ey - h * 0.2); ctx.lineTo(k.ex + h * 0.07 + sw * 0.35, y); ctx.stroke();
+      }
+    }
+    ctx.save(); ctx.globalAlpha = alpha; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.fillStyle = 'rgba(40,18,6,0.38)';                                                  // long low shadow thrown away from the sun
+    ctx.beginPath(); ctx.ellipse(x - h * 0.5, y + h * 0.018, h * 0.62, h * 0.05, 0, 0, 6.2832); ctx.fill();
+    leg(w + Math.PI, '#140a05', '#0d0603'); arm(w, '#1d0f07', false);                      // far leg, far arm
+    var hemY = y - h * 0.2, backX = hipX - h * (0.13 + 0.05 * wind) - flut * 2;              // robe: shoulders to a wind-blown hem
+    var g = ctx.createLinearGradient(0, shY, 0, hemY); g.addColorStop(0, '#3b2414'); g.addColorStop(1, '#25150a');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(shX + h * 0.055, shY); ctx.quadraticCurveTo(shX + h * 0.1, hipY, hipX + h * 0.085, hemY);
+    ctx.lineTo(backX + h * 0.02, hemY + Math.sin(t * 4.1) * h * 0.012); ctx.quadraticCurveTo(hipX - h * 0.09, hipY - h * 0.02, shX - h * 0.075, shY + h * 0.015); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#2a190d'; ctx.beginPath(); ctx.ellipse(shX - h * 0.1, shY + h * 0.11, h * 0.062, h * 0.13, -0.12, 0, 6.2832); ctx.fill();   // pack on the back
+    leg(w, '#1b0e07', '#0d0603');                                                          // near leg
+    var hx = shX + h * 0.012, hy = shY - h * 0.088;                                         // head, hood and a trailing scarf
+    ctx.fillStyle = '#c99a6e'; ctx.beginPath(); ctx.arc(hx + h * 0.012, hy + h * 0.004, h * 0.052, 0, 6.2832); ctx.fill();               // face
+    ctx.fillStyle = '#5c2f17'; ctx.beginPath(); ctx.arc(hx - h * 0.004, hy - h * 0.006, h * 0.068, Math.PI * 0.52, Math.PI * 1.62); ctx.closePath(); ctx.fill();   // hood (back of the head; the face stays visible)
+    ctx.beginPath(); ctx.moveTo(hx - h * 0.05, hy + h * 0.01);
+    ctx.bezierCurveTo(hx - h * 0.09, hy + h * 0.035 + flut, hx - h * (0.13 + 0.05 * wind), hy + h * 0.05 - flut, hx - h * (0.19 + 0.07 * wind), hy + h * 0.1 + flut * 2);
+    ctx.lineTo(hx - h * (0.16 + 0.06 * wind), hy + h * 0.125 + flut); ctx.bezierCurveTo(hx - h * 0.11, hy + h * 0.085, hx - h * 0.07, hy + h * 0.08, hx - h * 0.035, hy + h * 0.06); ctx.closePath(); ctx.fill();
+    arm(w + Math.PI, '#26140a', true);                                                      // near arm holds the staff
     ctx.restore();
   }
   function sandsFrame(st, dt) {
@@ -998,7 +1036,7 @@
     driftBlobs(ctx, st, st.clouds, blobSprite(st, 'cl', '255,170,90'), t, lm);
     var wk = st.walk;
     if (wk.pause > 0) wk.pause -= dt; else { wk.u += dt / 150; if (wk.u > 0.58) { wk.u = 0.12; wk.pause = 14; } }
-    var p = PT(st, wk.u, 0.585 - (wk.u - 0.12) * 0.16 + Math.sin(wk.u * 25) * 0.003), h = st.rect.h * 0.052 * (1 - (wk.u - 0.12) * 0.25);
+    var p = PT(st, wk.u, 0.585 - (wk.u - 0.12) * 0.16 + Math.sin(wk.u * 25) * 0.003), h = st.rect.h * 0.06 * (1 - (wk.u - 0.12) * 0.25);
     var edge = smooth(0.12, 0.17, wk.u) * (1 - smooth(0.53, 0.58, wk.u)), moving = wk.pause <= 0;
     ctx.globalCompositeOperation = 'source-over';
     if (moving) drawWalker(ctx, st, t, p.x, p.y, h, 0.92 * edge);

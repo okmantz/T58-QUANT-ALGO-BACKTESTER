@@ -18,7 +18,7 @@
       chip.classList.toggle('bad', d.status === 'breached');
       chip.title = d.label + (d.status && d.status !== 'active' && d.status !== 'idle' ? ' · ' + d.status.toUpperCase() : '') +
         (d.day_pnl != null ? ' · today ' + money(d.day_pnl) : '');
-      chip.setAttribute('href', d.mode === 'demo' ? '/demo-account' : '/deploy-live');
+      chip.setAttribute('href', d.mode === 'demo' ? '/forward-test?view=demo' : '/deploy-live');
     }).catch(function () {});
   }
   tick(); setInterval(tick, 5000);
