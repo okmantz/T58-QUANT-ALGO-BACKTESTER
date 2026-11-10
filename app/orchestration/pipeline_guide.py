@@ -57,7 +57,7 @@ def first_run_welcome() -> str:
         "edge, tightening drawdown, promoting a candidate, moving on to Optimize or Validate -- telling "
         "you exactly what to do next, in plain language and naming the exact tab, so you're never left "
         "guessing the sequence yourself. For the full start-to-finish walkthrough instead, see the User "
-        "Manual (desktop: sidebar 'User Manual' tab; web: /user-manual)."
+        "Manual (desktop: sidebar 'User Manual' tab; web: /education/manual)."
     )
 
 
