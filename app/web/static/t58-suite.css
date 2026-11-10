@@ -1,0 +1,55 @@
+/* Shared styles for the prop-journey pages (Buy Challenge, Mission, Guardian, Accounts, Research Integrity, Family Map).
+   Uses the theme tokens only, so every theme and accent colour applies. */
+.s-wrap { max-width: 1280px; }
+.s-note { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+.s-strip { border: 1px solid var(--border); background: var(--panel-2); border-radius: 12px; padding: 10px 14px; font-size: 12.5px; color: var(--text-muted); margin-bottom: 16px; }
+.s-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
+.s-input, .s-select { background: var(--panel-3); color: var(--text); border: 1px solid var(--border-light); border-radius: 9px; padding: 8px 11px; font-size: 13px; }
+.s-chip { padding: 6px 12px; border-radius: 999px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text-muted); font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.s-chip.on { background: rgba(var(--teal-rgb), .14); color: var(--teal); border-color: rgba(var(--teal-rgb), .5); }
+.s-btn { padding: 8px 14px; border-radius: 9px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+.s-btn:hover { border-color: var(--teal); }
+.s-btn.primary { background: var(--teal); color: var(--on-teal, #04120e); border-color: var(--teal); }
+.s-btn.sm { padding: 5px 10px; font-size: 12px; }
+.s-btn[disabled] { opacity: .5; cursor: not-allowed; }
+.s-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; margin-bottom: 26px; }
+.s-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.s-card h3 { margin: 0; font-size: 16px; }
+.s-card .sub { font-size: 12px; color: var(--text-muted); }
+.s-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; letter-spacing: .03em; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border-light); color: var(--text-muted); }
+.s-badge.ok { color: var(--ok); border-color: rgba(var(--ok-rgb), .5); background: rgba(var(--ok-rgb), .1); }
+.s-badge.warn { color: var(--amber); border-color: rgba(240, 180, 41, .5); background: rgba(240, 180, 41, .08); }
+.s-badge.bad { color: var(--coral); border-color: rgba(var(--coral-rgb), .5); background: rgba(var(--coral-rgb), .08); }
+.s-code { display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 1px dashed var(--border-light); border-radius: 10px; padding: 8px 10px; background: var(--panel-3); }
+.s-code code { font-size: 14px; font-weight: 700; letter-spacing: .06em; color: var(--teal); }
+.s-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.s-kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+.s-kv > div { background: var(--panel-3); border-radius: 9px; padding: 8px 10px; }
+.s-kv .k { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); }
+.s-kv .v { font-size: 15px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.s-h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); margin: 26px 0 10px; }
+.s-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 14px; background: var(--panel-2); }
+.s-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.s-table th { text-align: right; padding: 10px 12px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); white-space: nowrap; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--panel-2); }
+.s-table td { text-align: right; padding: 9px 12px; border-top: 1px solid var(--border); white-space: nowrap; }
+.s-table th:first-child, .s-table td:first-child { text-align: left; }
+.s-table tr:hover td { background: rgba(var(--teal-rgb), .04); }
+.s-table td.best { color: var(--ok); font-weight: 700; }
+.s-table td.diff { background: rgba(240, 180, 41, .07); }
+.s-meter { height: 8px; border-radius: 999px; background: var(--panel-3); overflow: hidden; }
+.s-meter > i { display: block; height: 100%; border-radius: 999px; background: var(--teal); }
+.s-meter.warn > i { background: var(--amber); } .s-meter.bad > i { background: var(--coral); }
+.s-modal-back { position: fixed; inset: 0; background: rgba(2, 8, 10, .7); display: none; align-items: center; justify-content: center; z-index: 9400; padding: 20px; }
+.s-modal-back.show { display: flex; }
+.s-modal { background: var(--pop-bg, var(--panel)); border: 1px solid var(--pop-bd, var(--border-light)); border-radius: 14px; padding: 20px; width: min(520px, 100%); max-height: 90vh; overflow: auto; }
+.s-modal h3 { margin: 0 0 12px; }
+.s-field { display: block; margin-bottom: 10px; font-size: 12px; color: var(--text-muted); }
+.s-field input { display: block; width: 100%; margin-top: 4px; }
+.s-toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--pop-bg, #0c1c22); border: 1px solid var(--teal); color: var(--text); padding: 9px 16px; border-radius: 10px; font-size: 13px; z-index: 9600; }
+.s-tray { position: sticky; bottom: 12px; z-index: 50; background: var(--pop-bg, var(--panel)); border: 1px solid var(--teal); border-radius: 14px; padding: 10px 14px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; box-shadow: 0 10px 30px rgba(0, 0, 0, .4); }
+.t58-brand { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; letter-spacing: .18em; font-weight: 800; color: var(--text-dim); text-transform: uppercase; }
+.t58-brand::before { content: ""; width: 7px; height: 7px; border-radius: 2px; background: var(--teal); display: inline-block; }
+@media (max-width: 640px) { .s-grid { grid-template-columns: 1fr; } }
+
+.s-table.plans th:nth-child(2), .s-table.plans td:nth-child(2) { text-align: left; }
+.s-table.plans th:first-child, .s-table.plans td:first-child { text-align: center; }
