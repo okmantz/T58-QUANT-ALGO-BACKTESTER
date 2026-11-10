@@ -8,6 +8,7 @@ be printed/saved to PDF from any browser -- avoids pulling in a heavy PDF
 rendering dependency for the MVP).
 """
 from __future__ import annotations
+from app.reports.branding import brand as _t58_brand
 
 import csv
 import html
@@ -1461,7 +1462,7 @@ def export_html(
         trade_chart_html=trade_chart_html,
     )
 
-    html = _fix_negative_money(html)
+    html = _t58_brand(_fix_negative_money(html))
     with open(path, "w", encoding="utf-8") as f:
         f.write(html)
 
@@ -1484,6 +1485,7 @@ def export_html(
     with open(path, "r+", encoding="utf-8") as f:
         content = f.read()
         content = content.replace("</body>", pdf_button_html + "</body>") if "</body>" in content else content + pdf_button_html
+        content = _t58_brand(content)
         f.seek(0)
         f.write(content)
         f.truncate()

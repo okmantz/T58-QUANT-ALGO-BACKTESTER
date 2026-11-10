@@ -524,7 +524,8 @@ def masthead(title: str, sub: str = "", logo_b64: str | None = None) -> str:
 
 def page(title: str, body: str, subtitle: str = "", logo_b64: str | None = None, extra_head: str = "", extra_end: str = "") -> str:
     """A complete standalone page: masthead + content + shared CSS. ``body`` is trusted markup."""
-    return (
+    from app.reports.branding import brand
+    return brand(
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         f"<title>{_html.escape(title)}</title><style>{BASE_CSS}</style>{extra_head}</head><body>"

@@ -18,6 +18,7 @@ never recomputes or re-derives a probability -- if a number here looks
 wrong, the bug is in survival_engine, not here.
 """
 from __future__ import annotations
+from app.reports.branding import brand as _t58_brand
 
 import json
 from dataclasses import asdict
@@ -264,7 +265,7 @@ def export_survival_html(report: dict, path: str | Path) -> Path:
         score_breakdown_table=_score_breakdown_table(result["score_breakdown"]),
     )
     with open(path, "w", encoding="utf-8") as f:
-        f.write(html)
+        f.write(_t58_brand(html))
     return path
 
 
