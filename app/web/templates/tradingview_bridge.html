@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>TradingView bridge — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<style>
+  .tvb { max-width: 920px; }
+  .tvb h1 { font-size: 22px; margin: 0 0 4px; }
+  .tvb .lede { color: var(--text-muted); font-size: 14px; margin: 0 0 18px; line-height: 1.55; max-width: 680px; }
+  .tvb .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 14px; padding: 18px; margin-bottom: 14px; }
+  .tvb .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-bottom: 14px; }
+  .tvb .step { background: var(--panel-2); border: 1px solid var(--border); border-radius: 14px; padding: 16px; }
+  .tvb .step b.n { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--teal); color: var(--on-teal, #04120d); font-size: 12px; margin-right: 8px; }
+  .tvb .step p { margin: 8px 0 0; font-size: 13px; color: var(--text-muted); line-height: 1.5; }
+  .tvb input[type=text] { width: 100%; padding: 11px 12px; border-radius: 9px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font: 13px ui-monospace, monospace; }
+  .tvb button { padding: 9px 16px; border-radius: 9px; border: 1px solid var(--teal); background: var(--teal); color: var(--on-teal, #04120d); font-weight: 700; font-size: 13px; cursor: pointer; }
+  .tvb button.ghost { background: transparent; color: var(--teal); }
+  .tvb table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13.5px; }
+  .tvb td { padding: 7px 8px; border-top: 1px solid var(--border); } .tvb td:first-child { color: var(--text-muted); width: 40%; }
+  .tvb pre { background: var(--panel-3); border: 1px solid var(--border-light); border-radius: 10px; padding: 12px; font-size: 12px; max-height: 320px; overflow: auto; white-space: pre; }
+  .tvb .ok { color: var(--teal); font-weight: 600; } .tvb .bad { color: var(--danger); font-weight: 600; }
+  .tvb .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+</style>
+</head>
+<body>
+{% set active_page = 'pine_indicator' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main"><div class="tvb">
+  <h1>TradingView bridge</h1>
+  <p class="lede">Every backtest report carries a short <b>settings ID</b>. Paste it into a T58 Pine script and the exact configuration the backtest ran with shows up on your chart: strategy, market, timeframe, risk per trade, daily loss limit, drawdown limit and account size.</p>
+  <div class="steps">
+    <div class="step"><b class="n">1</b><b>Copy the ID</b><p>Open any report and press <i>Copy ID</i> in its TradingView section.</p></div>
+    <div class="step"><b class="n">2</b><b>Add the script once</b><p>In TradingView's Pine editor, paste one of the two scripts below and add it to your chart.</p></div>
+    <div class="step"><b class="n">3</b><b>Paste the ID</b><p>Open the script's settings and paste the ID into its one input. Done.</p></div>
+  </div>
+
+  <div class="card">
+    <b>Check an ID</b>
+    <p style="margin:4px 0 10px;color:var(--text-muted);font-size:13px;">Catches half-copied or edited IDs before you paste them into TradingView.</p>
+    <input type="text" id="tvb-id" placeholder="T58.1|n=Opening Range|s=ES|tf=15m|...|c=4F2A" autocomplete="off" spellcheck="false">
+    <div class="row"><button type="button" id="tvb-check">Check ID</button></div>
+    <div id="tvb-out" role="status" aria-live="polite"></div>
+  </div>
+
+  <div class="card">
+    <b>Indicator: shows the settings on the chart</b>
+    <p style="margin:4px 0 0;color:var(--text-muted);font-size:13px;">A table in the corner of your chart listing every setting. Works on any chart; changes nothing about trading.</p>
+    <div class="row"><button type="button" data-copy="indicator">Copy script</button><a href="/pine-indicator/api/bridge/pine?kind=indicator&download=1"><button type="button" class="ghost">Download .pine</button></a></div>
+  </div>
+  <div class="card">
+    <b>Strategy: also enforces the protections</b>
+    <p style="margin:4px 0 0;color:var(--text-muted);font-size:13px;">Sizes each trade by the backtest's risk setting and stops trading when the max trades per day, daily loss limit or drawdown limit is hit. The entry signal is a placeholder (EMA cross): replace the two lines marked <code>YOUR ENTRY LOGIC</code> with your own.</p>
+    <div class="row"><button type="button" data-copy="strategy">Copy script</button><a href="/pine-indicator/api/bridge/pine?kind=strategy&download=1"><button type="button" class="ghost">Download .pine</button></a></div>
+  </div>
+</div></div>
+</div>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); }, tok = {{ csrf_token()|tojson }};
+  $('tvb-check').addEventListener('click', function () {
+    fetch('/pine-indicator/api/bridge/decode', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': tok }, body: JSON.stringify({ id: $('tvb-id').value }) })
+      .then(function (r) { return r.json(); }).then(function (d) {
+        var out = $('tvb-out');
+        if (!d.ok) { out.innerHTML = '<p class="bad"></p>'; out.firstChild.textContent = d.error; return; }
+        out.innerHTML = '<p class="ok">This ID is complete and unedited.</p><table></table>';
+        var tb = out.querySelector('table');
+        d.rows.forEach(function (r) { var tr = document.createElement('tr'), a = document.createElement('td'), b = document.createElement('td'); a.textContent = r[0]; b.textContent = r[1]; tr.appendChild(a); tr.appendChild(b); tb.appendChild(tr); });
+      });
+  });
+  document.querySelectorAll('[data-copy]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      fetch('/pine-indicator/api/bridge/pine?kind=' + b.dataset.copy).then(function (r) { return r.text(); }).then(function (t) {
+        return navigator.clipboard.writeText(t);
+      }).then(function () { var o = b.textContent; b.textContent = 'Copied'; setTimeout(function () { b.textContent = o; }, 1400); }).catch(function () { b.textContent = 'Copy failed: use Download'; });
+    });
+  });
+})();
+</script>
+</body>
+</html>

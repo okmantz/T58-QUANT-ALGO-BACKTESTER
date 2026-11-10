@@ -49,7 +49,7 @@
 
 <!-- Always-visible profile circle (top right). Server-rendered so there is no flash; the small menu is wired in t58-chrome.js. -->
 <div class="t58-profile" id="t58-profile" data-csrf="{{ csrf_token() }}">
-  <a class="t58-pnl-chip" id="t58-pnl-chip" href="/demo-account" data-mode="{{ t58_profile.mode }}" title="Account P&amp;L ({{ t58_profile.mode|upper }})">
+  <a class="t58-pnl-chip" id="t58-pnl-chip" href="/forward-test?view=demo" data-mode="{{ t58_profile.mode }}" title="Account P&amp;L ({{ t58_profile.mode|upper }})">
     <span class="t58-pnl-mode">{{ t58_profile.mode|upper }}</span><span class="t58-pnl-val" id="t58-pnl-val">$0.00</span>
   </a>
   <button type="button" class="t58-bell" id="t58-bell" aria-haspopup="dialog" aria-expanded="false" aria-controls="t58-inbox" title="Inbox">
@@ -188,15 +188,6 @@
       <a href="/research-labs" class="t58-nav-item {{ 'active' if active_page == 'research_labs' else '' }}">
         <span class="t58-nav-icon"><svg class="lu"><use href="#lu-microscope"/></svg></span><span class="label">Research Lab</span>
       </a>
-      <a href="/profile" class="t58-nav-item {{ 'active' if active_page == 'profile' else '' }}">
-        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-user-round"/></svg></span><span class="label">Trader profile</span>
-      </a>
-      <a href="/demo-account" class="t58-nav-item {{ 'active' if active_page == 'demo_account' else '' }}">
-        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-rocket"/></svg></span><span class="label">T58 Demo account</span>
-      </a>
-      <a href="/rulebook" class="t58-nav-item {{ 'active' if active_page == 'rulebook' else '' }}">
-        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-book-open-check"/></svg></span><span class="label">Prop Firm Rulebook v2</span>
-      </a>
     </div>
   </details>
 
@@ -226,18 +217,13 @@
   <div class="t58-nav-divider"></div>
   <div class="t58-nav-section-label">Account</div>
 
-  <!-- (11) Account -- Account Settings (name/email/company), then API Keys
-       (centralized credentials for every integration in the app), then
-       Notification Settings, then Support -- per the Sep 2026 Account tab
-       pass and the follow-up API-Keys/Support consolidation. -->
+  <!-- (11) Account -- Account Settings is one tabbed page (account, notifications,
+       API keys, achievements, support); Data Center and Strategy Library sit beside it. -->
   <details class="t58-nav-group">
     <summary><span class="t58-nav-icon"><svg class="lu"><use href="#lu-user-round"/></svg></span> Account <span class="chev"><svg class="lu"><use href="#lu-chevron-right"/></svg></span></summary>
     <div class="t58-nav-group-items">
       <a href="/settings/account" class="t58-nav-item {{ 'active' if active_page == 'account_settings' else '' }}">
         <span class="t58-nav-icon"><svg class="lu"><use href="#lu-settings"/></svg></span><span class="label">Account Settings</span>
-      </a>
-      <a href="/settings/api-keys" class="t58-nav-item {{ 'active' if active_page == 'api_keys_settings' else '' }}">
-        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-key-round"/></svg></span><span class="label">API Keys</span>
       </a>
       <a href="/data-center" class="t58-nav-item {{ 'active' if active_page == 'data_center' else '' }}">
         <span class="t58-nav-icon"><svg class="lu"><use href="#lu-database"/></svg></span><span class="label">Data Center</span>
@@ -245,34 +231,22 @@
       <a href="/library" class="t58-nav-item {{ 'active' if active_page == 'strategy_library' else '' }}">
         <span class="t58-nav-icon"><svg class="lu"><use href="#lu-library"/></svg></span><span class="label">Strategy Library</span>
       </a>
-      <a href="/achievements" class="t58-nav-item {{ 'active' if active_page == 'achievements' else '' }}">
-        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-award"/></svg></span><span class="label">Achievements</span>
-      </a>
-      <a href="/support" class="t58-nav-item {{ 'active' if active_page == 'support' else '' }}">
-        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-life-buoy"/></svg></span><span class="label">Support</span>
-      </a>
     </div>
   </details>
 
-  <!-- (12) Education -- University, Resources, Playground, Library, then the
-       User Manual last (all siblings, same left alignment). -->
+  <!-- (12) Education -- University (courses, resources and the user manual are tabs
+       inside it), Playground, Library. -->
   <details class="t58-nav-group">
     <summary><span class="t58-nav-icon"><svg class="lu"><use href="#lu-graduation-cap"/></svg></span> Education <span class="chev"><svg class="lu"><use href="#lu-chevron-right"/></svg></span></summary>
     <div class="t58-nav-group-items">
       <a href="/education" class="t58-nav-item {{ 'active' if active_page == 'education' else '' }}">
         <span class="t58-nav-icon"><svg class="lu"><use href="#lu-school"/></svg></span><span class="label">University</span>
       </a>
-      <a href="/resources" class="t58-nav-item {{ 'active' if active_page == 'resources' else '' }}">
-        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-book-open-check"/></svg></span><span class="label">Resources</span>
-      </a>
       <a href="/playground" class="t58-nav-item {{ 'active' if (active_page or '').startswith('playground') else '' }}">
         <span class="t58-nav-icon"><svg class="lu"><use href="#lu-gamepad-2"/></svg></span><span class="label">Playground</span>
       </a>
       <a href="/playground/library" class="t58-nav-item {{ 'active' if active_page == 'books_library' else '' }}">
         <span class="t58-nav-icon"><svg class="lu"><use href="#lu-book-marked"/></svg></span><span class="label">Library</span>
-      </a>
-      <a href="/user-manual" class="t58-nav-item {{ 'active' if active_page == 'user_manual' else '' }}">
-        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-book-open"/></svg></span><span class="label">User Manual</span>
       </a>
     </div>
   </details>

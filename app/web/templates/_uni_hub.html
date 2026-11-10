@@ -1,0 +1,12 @@
+{# University hub header: hero + the three separate pages (Courses / Resources / User Manual). Set `uni_page` before including. #}
+<link rel="stylesheet" href="/static/university.css">
+<div class="uni-hero">
+  <span class="uni-eyebrow"><svg class="lu"><use href="#lu-graduation-cap"/></svg>T58 University</span>
+  <h1>{{ uni_title or 'Learn the lab. Trust the numbers.' }}</h1>
+  <p>{{ uni_blurb or 'What the numbers and tabs in this app actually mean, and how to think quantitatively about strategy research.' }}</p>
+</div>
+<nav class="uni-tabs" aria-label="University sections">
+  <a href="/education" {% if uni_page == 'courses' %}aria-current="page"{% endif %}><svg class="lu"><use href="#lu-school"/></svg>Courses</a>
+  <a href="/education/resources" {% if uni_page == 'resources' %}aria-current="page"{% endif %}><svg class="lu"><use href="#lu-library"/></svg>Resources</a>
+  <a href="/education/manual" {% if uni_page == 'manual' %}aria-current="page"{% endif %}><svg class="lu"><use href="#lu-book-open"/></svg>User Manual</a>
+</nav>

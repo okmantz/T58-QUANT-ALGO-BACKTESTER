@@ -5,45 +5,104 @@
 {% include '_head_common.html' %}
 <style>
   * { box-sizing: border-box; }
-  .iv { max-width: 1120px; }
-  .iv-hero { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between; padding: 22px; border-radius: 18px; border: 1px solid var(--border);
-    background: radial-gradient(900px 260px at 0% 0%, rgba(var(--teal-rgb), .20), transparent 60%), var(--panel-2); }
-  .iv-hero h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: -.02em; } .iv-hero p { margin: 0; color: var(--text-muted); font-size: 13.5px; max-width: 560px; line-height: 1.55; }
-  .iv-mode { display: inline-flex; padding: 3px; border-radius: 999px; background: var(--panel-3); border: 1px solid var(--border-light); }
-  .iv-mode button { border: 0; background: transparent; color: var(--text-muted); padding: 7px 16px; border-radius: 999px; font-weight: 700; font-size: 12.5px; cursor: pointer; }
-  .iv-mode button.on { background: var(--teal); color: var(--on-teal); }
-  .iv-mode button.live.on { background: #e5484d; color: #fff; }
-  .iv-tabs { display: flex; gap: 6px; margin: 16px 0 14px; overflow-x: auto; }
-  .iv-tabs button { white-space: nowrap; border: 1px solid var(--border); background: var(--panel-2); color: var(--text-muted); padding: 9px 16px; border-radius: 12px; font-weight: 700; font-size: 13px; cursor: pointer; }
-  .iv-tabs button.on { color: var(--text); border-color: var(--teal); box-shadow: 0 0 0 1px var(--teal) inset; }
-  .iv-pane { display: none; } .iv-pane.on { display: block; }
+  .iv { max-width: 1120px; --up: #1f9d6b; --down: #d6454a; }
+  :root[data-theme="light"] .iv { --up: #157a53; --down: #c23338; }
+  .iv h1, .iv h2, .iv h3 { text-transform: none; letter-spacing: 0; }
+
+  /* hero + mode switch */
+  .iv-hero { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: center; justify-content: space-between; padding: 20px 22px; border-radius: 18px;
+    border: 1px solid var(--border); background: radial-gradient(900px 240px at 0% 0%, rgba(var(--teal-rgb), .16), transparent 62%), var(--panel-2); transition: border-color .2s, box-shadow .2s; }
+  .iv-hero.live { border-color: var(--down); box-shadow: 0 0 0 1px var(--down) inset; }
+  .iv-hero h1 { margin: 0 0 4px; font-size: 24px; letter-spacing: -.02em; }
+  .iv-hero p { margin: 0; color: var(--text-muted); font-size: 13.5px; max-width: 540px; line-height: 1.55; }
+  .seg { display: inline-flex; padding: 3px; border-radius: 999px; background: var(--panel-3); border: 1px solid var(--border-light); }
+  .seg button { border: 0; background: transparent; color: var(--text-muted); padding: 7px 15px; border-radius: 999px; font-weight: 700; font-size: 12.5px; cursor: pointer; transition: background .15s, color .15s; }
+  .seg button.on { background: var(--teal); color: var(--on-teal); }
+  .seg button.live.on { background: var(--down); color: #fff; }
+  .seg button.buy.on { background: var(--up); color: #fff; }
+  .seg button.sell.on { background: var(--down); color: #fff; }
+
+  /* account strip */
+  .strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 14px 0 4px; }
+  .tile { padding: 12px 14px; border-radius: 14px; border: 1px solid var(--border); background: var(--panel-2); min-width: 0; }
+  .tile span { display: block; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); }
+  .tile b { display: block; font-size: 20px; margin-top: 3px; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile small { font-size: 12px; font-weight: 700; }
+  @media (max-width: 760px) { .strip { grid-template-columns: repeat(2, 1fr); } }
+
+  /* tabs */
+  .tabs { display: flex; gap: 4px; margin: 14px 0 16px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+  .tabs button { white-space: nowrap; border: 0; background: transparent; color: var(--text-muted); padding: 11px 16px; font-weight: 700; font-size: 13.5px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .tabs button:hover { color: var(--text); }
+  .tabs button.on { color: var(--text); border-bottom-color: var(--teal); }
+  .pane { display: none; } .pane.on { display: block; animation: ivfade .18s ease; }
+  @keyframes ivfade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .pane.on { animation: none; } }
+
+  /* cards + form controls */
   .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 16px; padding: 18px; margin-bottom: 14px; }
-  .card h2 { margin: 0 0 4px; font-size: 15px; text-transform: none; letter-spacing: 0; color: var(--text); }
+  .card h2 { margin: 0 0 4px; font-size: 15px; color: var(--text); }
   .card p.help { font-size: 12.5px; color: var(--text-muted); margin: 0 0 12px; line-height: 1.55; }
-  .grid2 { display: grid; grid-template-columns: 1.15fr .85fr; gap: 14px; } .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .grid2 { display: grid; grid-template-columns: 1.2fr .8fr; gap: 14px; align-items: start; } .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
   @media (max-width: 860px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
   .iv input, .iv select { width: 100%; padding: 11px 13px; border-radius: 12px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 14px; }
-  .search { position: relative; } .search input { padding-left: 38px; font-size: 15px; }
-  .search svg { position: absolute; left: 12px; top: 12px; width: 18px; height: 18px; color: var(--text-muted); }
+  .iv input:focus, .iv select:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), .18); }
+  .iv label.l { display: block; font-size: 11.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted); margin: 0 0 5px; }
+  .search { position: relative; } .search input { padding-left: 40px; font-size: 15px; }
+  .search svg { position: absolute; left: 13px; top: 12px; width: 18px; height: 18px; color: var(--text-muted); }
   .results { margin-top: 8px; display: grid; gap: 6px; }
-  .row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel-3); cursor: pointer; }
-  .row:hover { border-color: var(--teal); } .row b { font-size: 14px; } .row small { color: var(--text-muted); font-size: 12px; }
-  .row .grow { flex: 1; min-width: 0; } .row .grow small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .btn { border: 0; cursor: pointer; padding: 11px 18px; border-radius: 12px; font-weight: 800; font-size: 13.5px; background: var(--teal); color: var(--on-teal); transition: filter .15s, transform .05s; }
+  .btn:hover { filter: brightness(1.08); } .btn:active { transform: translateY(1px); }
+  .btn.ghost { background: var(--panel-3); color: var(--text); border: 1px solid var(--border-light); }
+  .btn.buy { background: var(--up); color: #fff; } .btn.sell { background: var(--down); color: #fff; }
+  .btn.sm { padding: 8px 13px; font-size: 12.5px; border-radius: 10px; } .btn:disabled { opacity: .5; cursor: default; }
   .tag { font-size: 10.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; background: rgba(var(--teal-rgb), .15); color: var(--teal); }
-  .up { color: #2fb67c; } .down { color: #e5484d; }
-  .btn { border: 0; cursor: pointer; padding: 11px 18px; border-radius: 12px; font-weight: 800; font-size: 13.5px; background: var(--teal); color: var(--on-teal); }
-  .btn.ghost { background: var(--panel-3); color: var(--text); border: 1px solid var(--border-light); } .btn.sell { background: #e5484d; color: #fff; } .btn:disabled { opacity: .5; cursor: default; }
-  .price { font-size: 34px; font-weight: 800; letter-spacing: -.02em; } .kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin-top: 12px; }
-  .kpi { padding: 10px 12px; border-radius: 12px; background: var(--panel-3); border: 1px solid var(--border); } .kpi span { display: block; font-size: 11px; color: var(--text-muted); } .kpi b { font-size: 15px; }
+  .up { color: var(--up); } .down { color: var(--down); } .muted { color: var(--text-muted); }
+  .pill { display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 800; }
+  .pill.up { background: rgba(31, 157, 107, .14); } .pill.down { background: rgba(214, 69, 74, .14); }
+
+  /* list rows (search results, holdings, orders) */
+  .row { display: flex; align-items: center; gap: 12px; padding: 11px 13px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel-3); cursor: pointer; transition: border-color .15s, transform .15s; }
+  .row:hover, .row:focus-visible { border-color: var(--teal); outline: none; transform: translateX(2px); }
+  .row b { font-size: 14px; } .row small { color: var(--text-muted); font-size: 12px; }
+  .row .grow { flex: 1; min-width: 0; } .row .grow small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .end { text-align: right; } .row .chev { color: var(--text-muted); font-size: 18px; line-height: 1; }
+  .dot { width: 34px; height: 34px; border-radius: 10px; flex: none; display: grid; place-items: center; font-size: 11px; font-weight: 800; background: rgba(var(--teal-rgb), .14); color: var(--teal); }
+  .alloc { display: flex; height: 10px; border-radius: 99px; overflow: hidden; background: var(--panel-3); margin: 4px 0 14px; }
+  .alloc i { display: block; height: 100%; } .alloc i + i { margin-left: 2px; }
+  .hint { font-size: 12px; color: var(--text-muted); margin: 8px 0 0; }
+  .empty { padding: 26px 14px; text-align: center; color: var(--text-muted); border: 1px dashed var(--border-light); border-radius: 14px; font-size: 13px; line-height: 1.6; }
+  .sticky { position: sticky; top: 12px; }
+
+  .kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin-top: 12px; }
+  .kpi { padding: 10px 12px; border-radius: 12px; background: var(--panel-3); border: 1px solid var(--border); } .kpi span { display: block; font-size: 11px; color: var(--text-muted); } .kpi b { font-size: 14.5px; }
+  .price { font-size: 32px; font-weight: 800; letter-spacing: -.02em; }
   .score { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 20px; flex: none; }
   .bar { height: 8px; border-radius: 99px; background: var(--panel-3); overflow: hidden; } .bar i { display: block; height: 100%; background: var(--teal); }
   table.t { width: 100%; border-collapse: collapse; font-size: 13px; } table.t th { text-align: left; color: var(--text-muted); font-size: 11.5px; padding: 6px 8px; } table.t td { padding: 8px; border-top: 1px solid var(--border); }
   .q { margin-bottom: 18px; } .q h3 { font-size: 15px; margin: 0 0 8px; } .opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
-  .opt { padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border-light); background: var(--panel-3); cursor: pointer; font-size: 13.5px; font-weight: 600; }
-  .opt.on { border-color: var(--teal); box-shadow: 0 0 0 1px var(--teal) inset; background: rgba(var(--teal-rgb), .10); }
+  .opt { padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border-light); background: var(--panel-3); cursor: pointer; font-size: 13.5px; font-weight: 600; transition: border-color .15s; }
+  .opt:hover { border-color: var(--teal); } .opt.on { border-color: var(--teal); box-shadow: 0 0 0 1px var(--teal) inset; background: rgba(var(--teal-rgb), .10); }
   .banner { padding: 10px 14px; border-radius: 12px; font-size: 12.5px; line-height: 1.5; margin-bottom: 12px; border: 1px solid rgba(var(--teal-rgb), .35); background: rgba(var(--teal-rgb), .07); color: var(--text-muted); }
-  .banner.warn { border-color: #e5484d; background: rgba(229, 72, 77, .08); } .muted { color: var(--text-muted); } svg.chart { width: 100%; height: 190px; display: block; }
-  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--panel-3); border: 1px solid var(--teal); padding: 10px 16px; border-radius: 12px; font-size: 13px; display: none; z-index: 50; }
+  .banner.warn { border-color: var(--down); background: rgba(214, 69, 74, .08); }
+  svg.chart { width: 100%; height: 190px; display: block; }
+  .ranges { display: inline-flex; gap: 4px; margin: 6px 0 2px; } .ranges button { border: 1px solid var(--border); background: var(--panel-3); color: var(--text-muted); padding: 4px 11px; border-radius: 999px; font-size: 12px; font-weight: 700; cursor: pointer; } .ranges button.on { color: var(--on-teal); background: var(--teal); border-color: var(--teal); }
+  .skel { height: 16px; border-radius: 8px; background: linear-gradient(90deg, var(--panel-3), var(--border), var(--panel-3)); background-size: 200% 100%; animation: ivsk 1.2s linear infinite; margin: 8px 0; }
+  @keyframes ivsk { to { background-position: -200% 0; } } @media (prefers-reduced-motion: reduce) { .skel { animation: none; } }
+
+  /* position drawer */
+  .scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 60; }
+  .scrim.on { opacity: 1; pointer-events: auto; }
+  .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(540px, 100vw); background: var(--panel); border-left: 1px solid var(--border); z-index: 61; transform: translateX(102%); transition: transform .24s cubic-bezier(.22, .61, .36, 1); display: flex; flex-direction: column; box-shadow: -18px 0 40px rgba(0, 0, 0, .25); }
+  .drawer.on { transform: none; }
+  .drawer-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+  .drawer-head button { border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); width: 34px; height: 34px; border-radius: 10px; cursor: pointer; font-size: 16px; }
+  .drawer-body { flex: 1; overflow-y: auto; padding: 18px; }
+  .acts { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0; }
+  .acts .btn { flex: 1; min-width: 110px; }
+  .liveok { display: none; margin: 8px 0 0; font-size: 12.5px; } .liveok.on { display: block; }
+  .liveok input { width: auto; margin-right: 6px; }
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--panel-3); border: 1px solid var(--teal); padding: 10px 16px; border-radius: 12px; font-size: 13px; display: none; z-index: 80; max-width: 92vw; }
 </style>
 </head>
 <body>
@@ -52,55 +111,66 @@
 {% include '_sidebar.html' %}
 <div class="t58-main"><div class="iv">
 
-<div class="iv-hero">
+<div class="iv-hero" id="hero">
   <div><h1>Investing</h1>
   <p>Search any stock, index or crypto, read the SEC filings behind it, then invest yourself or let an algo tuned to you do it. Starts in <b>paper</b> mode with $10,000 of practice money.</p></div>
-  <div class="iv-mode" id="mode"><button data-m="paper" class="on">Paper</button><button data-m="alpaca-paper">Alpaca paper</button><button data-m="live" class="live">Live</button></div>
+  <div class="seg" id="mode" role="group" aria-label="Account mode"><button data-m="paper" class="on">Paper</button><button data-m="alpaca-paper">Alpaca paper</button><button data-m="live" class="live">Live</button></div>
 </div>
 
-<div class="iv-tabs" id="tabs">
-  <button data-t="discover" class="on">Discover</button><button data-t="portfolio">My portfolio</button><button data-t="auto">Automated</button><button data-t="sec">SEC setup</button>
+<div class="strip" id="strip" aria-live="polite">
+  <div class="tile"><span>Account value</span><b id="s-eq">--</b></div>
+  <div class="tile"><span>Profit / loss</span><b id="s-pnl">--</b></div>
+  <div class="tile"><span>Cash</span><b id="s-cash">--</b></div>
+  <div class="tile"><span>Holdings</span><b id="s-n">--</b></div>
+</div>
+
+<div class="tabs" id="tabs" role="tablist">
+  <button data-t="discover" class="on" role="tab">Discover</button><button data-t="portfolio" role="tab">My portfolio</button><button data-t="auto" role="tab">Automated</button><button data-t="sec" role="tab">SEC setup</button>
 </div>
 
 <!-- DISCOVER -->
-<div class="iv-pane on" id="p-discover">
+<div class="pane on" id="p-discover">
   <div class="grid2">
     <div>
       <div class="card">
         <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
           <input id="q" placeholder="Search stocks, indices, crypto — try AAPL, S&P, bitcoin" autocomplete="off"></div>
         <div class="results" id="results"></div>
+        <p class="hint" id="searchhint">Click any result to open its full page: price chart, SEC fundamentals and a one-click buy.</p>
       </div>
-      <div class="card" id="asset" style="display:none"></div>
     </div>
     <div>
       <div class="card"><h2>Undervalued right now</h2>
         <p class="help">Ranks companies by cheapness plus quality using their latest SEC annual filings and today's price. A research screen, not a promise.</p>
         <button class="btn" id="scan">Scan the market</button><div class="results" id="scanout" style="margin-top:12px"></div></div>
-      <div class="card"><h2>Indices & funds</h2><div class="results" id="idx"></div></div>
+      <div class="card"><h2>Indices &amp; funds</h2><div class="results" id="idx"></div></div>
     </div>
   </div>
 </div>
 
 <!-- PORTFOLIO -->
-<div class="iv-pane" id="p-portfolio">
+<div class="pane" id="p-portfolio">
   <div class="grid2">
-    <div class="card"><div id="acct"></div></div>
-    <div class="card"><h2>Trade</h2><p class="help">Market order at the latest price. Dollars or shares.</p>
-      <label class="muted" style="font-size:12px">Symbol</label><input id="o-sym" placeholder="AAPL">
-      <div class="grid3" style="margin-top:8px"><div><label class="muted" style="font-size:12px">Dollars</label><input id="o-usd" type="number" min="0" placeholder="500"></div>
-        <div><label class="muted" style="font-size:12px">or Shares</label><input id="o-qty" type="number" min="0" step="any" placeholder="2"></div>
-        <div style="display:flex;gap:6px;align-items:flex-end"><button class="btn" data-side="buy" style="flex:1">Buy</button><button class="btn sell" data-side="sell" style="flex:1">Sell</button></div></div>
-      <label id="liveconf" style="display:none;margin-top:10px;font-size:12.5px"><input type="checkbox" id="confirm" style="width:auto"> I understand this places real-money orders.</label>
-      <button class="btn ghost" style="margin-top:12px" id="resetpaper">Reset paper account ($10,000)</button></div>
+    <div>
+      <div class="card"><h2>Holdings</h2><p class="help">Click a holding to see its details and sell in one click.</p><div id="acct"></div></div>
+      <div class="card"><h2>Recent orders</h2><div id="orders"></div></div>
+    </div>
+    <div class="card sticky"><h2>Trade</h2><p class="help">Market order at the latest price. Enter dollars or shares.</p>
+      <div class="seg" id="side" style="margin-bottom:12px"><button data-side="buy" class="buy on">Buy</button><button data-side="sell" class="sell">Sell</button></div>
+      <label class="l" for="o-sym">Symbol</label><input id="o-sym" placeholder="AAPL" autocomplete="off" style="text-transform:uppercase">
+      <div class="grid3" style="margin-top:10px"><div><label class="l" for="o-usd">Dollars</label><input id="o-usd" type="number" min="0" placeholder="500"></div>
+        <div><label class="l" for="o-qty">or Shares</label><input id="o-qty" type="number" min="0" step="any" placeholder="2"></div>
+        <div style="display:flex;align-items:flex-end"><button class="btn buy" id="submit" style="width:100%">Buy</button></div></div>
+      <label class="liveok" id="liveconf"><input type="checkbox" id="confirm"> I understand this places real-money orders.</label>
+      <button class="btn ghost sm" style="margin-top:14px" id="resetpaper">Reset paper account ($10,000)</button></div>
   </div>
 </div>
 
 <!-- AUTOMATED -->
-<div class="iv-pane" id="p-auto">
+<div class="pane" id="p-auto">
   <div class="card" id="quiz"><h2>Tell us about you <span class="muted" style="font-weight:500">· 6 quick questions</span></h2>
     <p class="help">Your answers set how many positions, how much cash, value vs momentum, how often to rebalance and where the stop-loss sits.</p>
-    <div id="qs"></div><label class="muted" style="font-size:12px">Starting amount ($)</label><input id="cash" type="number" value="10000" style="max-width:200px">
+    <div id="qs"></div><label class="l" for="cash">Starting amount ($)</label><input id="cash" type="number" value="10000" style="max-width:200px">
     <div style="margin-top:14px"><button class="btn" id="mk">Build my plan</button></div></div>
   <div id="planbox" style="display:none">
     <div class="card"><h2 id="plantitle"></h2><div id="planwhy" class="muted" style="font-size:13px;line-height:1.6"></div>
@@ -112,7 +182,7 @@
 </div>
 
 <!-- SEC -->
-<div class="iv-pane" id="p-sec">
+<div class="pane" id="p-sec">
   <div class="card"><h2>SEC EDGAR access</h2>
     <p class="help">Filings, revenue, earnings, assets and liabilities come straight from the SEC's free API. The SEC asks every client to identify itself, so enter a contact (name + email). It is sent only to sec.gov and never stored on a server.</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap"><input id="ua" placeholder="Your Name you@example.com" style="max-width:380px"><button class="btn" id="saveua">Save</button></div>
@@ -121,7 +191,14 @@
 
 <div class="banner" style="margin-top:6px">Educational research tool, not investment advice. Past performance does not predict future results. Paper mode uses no real money.</div>
 </div></div></div>
-<div class="toast" id="toast"></div>
+
+<!-- position / asset drawer -->
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-label="Asset details" aria-hidden="true">
+  <div class="drawer-head"><b id="d-title">Details</b><button type="button" id="d-close" aria-label="Close">&#10005;</button></div>
+  <div class="drawer-body" id="d-body"></div>
+</aside>
+<div class="toast" id="toast" role="status"></div>
 
 <script>
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
@@ -130,74 +207,153 @@ const usd = v => v == null ? '--' : (v < 0 ? '-$' : '$') + Math.abs(v).toLocaleS
 const pct = v => v == null ? '--' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
 const cls = v => v >= 0 ? 'up' : 'down';
 const big = v => v == null ? '--' : Math.abs(v) >= 1e9 ? (v / 1e9).toFixed(2) + 'B' : Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v.toLocaleString();
-function toast(m) { const t = $('#toast'); t.textContent = m; t.style.display = 'block'; setTimeout(() => t.style.display = 'none', 3200); }
+const num = v => (+v).toLocaleString(undefined, { maximumFractionDigits: 4 });
+let toastTimer;
+function toast(m) { const t = $('#toast'); t.textContent = m; t.style.display = 'block'; clearTimeout(toastTimer); toastTimer = setTimeout(() => t.style.display = 'none', 3600); }
 async function api(path, body) {
   const r = await fetch('/investing/api/' + path, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
   const j = await r.json(); if (!j.ok) throw new Error(j.error || 'Request failed'); return j;
 }
-let mode = 'paper', answers = {}, plan = null, symbolNow = null;
-const modeKey = () => mode === 'alpaca-paper' ? 'alpaca-paper' : mode;
-$$('#mode button').forEach(b => b.onclick = () => { mode = b.dataset.m; $$('#mode button').forEach(x => x.classList.toggle('on', x === b)); $('#liveconf').style.display = mode === 'live' ? 'block' : 'none'; loadAcct(); });
-$$('#tabs button').forEach(b => b.onclick = () => { $$('#tabs button').forEach(x => x.classList.toggle('on', x === b)); $$('.iv-pane').forEach(p => p.classList.toggle('on', p.id === 'p-' + b.dataset.t)); if (b.dataset.t === 'portfolio') loadAcct(); });
+let mode = 'paper', answers = {}, plan = null, acct = null, side = 'buy', drawerSym = null, busy = false;
+const PALETTE = ['#2fb6a8', '#4d90ff', '#9b8cff', '#f5b83d', '#e5848d', '#6bc46d', '#e58b3a', '#7fc4e8'];
 
+/* ---------- mode, tabs, side ---------- */
+function liveOn() { return mode === 'live'; }
+function syncLive() { $('#liveconf').classList.toggle('on', liveOn()); $('#hero').classList.toggle('live', liveOn()); const d = $('#d-live'); if (d) d.classList.toggle('on', liveOn()); }
+$$('#mode button').forEach(b => b.onclick = () => { mode = b.dataset.m; $$('#mode button').forEach(x => x.classList.toggle('on', x === b)); syncLive(); loadAcct(); });
+function showTab(t) { $$('#tabs button').forEach(x => x.classList.toggle('on', x.dataset.t === t)); $$('.pane').forEach(p => p.classList.toggle('on', p.id === 'p-' + t)); if (t === 'portfolio') loadAcct(); }
+$$('#tabs button').forEach(b => b.onclick = () => showTab(b.dataset.t));
+function setSide(s) { side = s; $$('#side button').forEach(x => x.classList.toggle('on', x.dataset.side === s)); const sb = $('#submit'); sb.textContent = s === 'buy' ? 'Buy' : 'Sell'; sb.className = 'btn ' + s; }
+$$('#side button').forEach(b => b.onclick = () => setSide(b.dataset.side));
+
+/* ---------- small chart ---------- */
 function spark(points, w = 560, h = 190, color) {
-  if (!points || points.length < 2) return '';
+  if (!points || points.length < 2) return '<div class="empty">No price history to draw.</div>';
   const v = points.map(p => p[1]), lo = Math.min(...v), hi = Math.max(...v), up = v[v.length - 1] >= v[0];
-  const c = color || (up ? '#2fb67c' : '#e5484d'), X = i => (i / (v.length - 1)) * w, Y = y => h - 8 - ((y - lo) / (hi - lo || 1)) * (h - 16);
+  const c = color || (up ? '#2fb67c' : '#e5484d'), id = 'g' + Math.random().toString(36).slice(2, 7), X = i => (i / (v.length - 1)) * w, Y = y => h - 8 - ((y - lo) / (hi - lo || 1)) * (h - 16);
   const d = v.map((y, i) => (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(y).toFixed(1)).join('');
-  return `<svg class="chart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><defs><linearGradient id="g${c.slice(1)}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${c}" stop-opacity=".28"/><stop offset="1" stop-color="${c}" stop-opacity="0"/></linearGradient></defs><path d="${d}L${w} ${h}L0 ${h}Z" fill="url(#g${c.slice(1)})"/><path d="${d}" fill="none" stroke="${c}" stroke-width="2.2" vector-effect="non-scaling-stroke"/></svg>`;
+  return `<svg class="chart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><defs><linearGradient id="${id}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${c}" stop-opacity=".28"/><stop offset="1" stop-color="${c}" stop-opacity="0"/></linearGradient></defs><path d="${d}L${w} ${h}L0 ${h}Z" fill="url(#${id})"/><path d="${d}" fill="none" stroke="${c}" stroke-width="2.2" vector-effect="non-scaling-stroke"/></svg>`;
 }
-const assetRow = r => `<div class="row" data-sym="${esc(r.symbol)}"><div class="grow"><b>${esc(r.symbol)}</b><small>${esc(r.name || '')}</small></div><span class="tag">${esc(r.kind || '')}</span></div>`;
-function bindRows(root) { $$(root + ' .row[data-sym]').forEach(r => r.onclick = () => openAsset(r.dataset.sym)); }
 
+/* ---------- discover ---------- */
+const assetRow = r => `<div class="row" tabindex="0" role="button" data-sym="${esc(r.symbol)}"><span class="dot">${esc(r.symbol.replace('^', '').slice(0, 3))}</span><div class="grow"><b>${esc(r.symbol)}</b><small>${esc(r.name || '')}</small></div><span class="tag">${esc(r.kind || '')}</span></div>`;
+function bindRows(root) { $$(root + ' .row[data-sym]').forEach(r => { const go = () => openDrawer(r.dataset.sym); r.onclick = go; r.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } }; }); }
 let st;
 $('#q').oninput = e => { clearTimeout(st); const q = e.target.value.trim(); if (!q) { $('#results').innerHTML = ''; return; }
-  st = setTimeout(async () => { try { const j = await api('search?q=' + encodeURIComponent(q)); $('#results').innerHTML = j.results.map(assetRow).join('') || '<div class="muted">No matches.</div>'; bindRows('#results'); } catch (x) { $('#results').innerHTML = `<div class="muted">${esc(x.message)}</div>`; } }, 250); };
-
-async function openAsset(sym) {
-  symbolNow = sym; const box = $('#asset'); box.style.display = 'block'; box.innerHTML = '<div class="muted">Loading ' + esc(sym) + '…</div>'; $('#o-sym').value = sym;
-  try {
-    const [a, h] = await Promise.all([api('asset/' + encodeURIComponent(sym)), api('history/' + encodeURIComponent(sym) + '?range=2y').catch(() => ({ points: [] }))]);
-    const q = a.quote, v = a.valuation, f = a.fundamentals;
-    let html = `<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap"><div><span class="tag">${esc(a.kind)}</span><h2 style="font-size:20px;margin:6px 0 0">${esc(a.symbol)}</h2>
-      <div class="price">${usd(q.price)} <small class="${cls(q.change_pct)}" style="font-size:15px">${pct(q.change_pct)}</small></div></div>
-      ${v && v.score != null ? `<div style="display:flex;gap:12px;align-items:center"><div class="score" style="background:conic-gradient(var(--teal) ${v.score}%, var(--panel-3) 0)"><span style="background:var(--panel-2);width:50px;height:50px;border-radius:50%;display:grid;place-items:center">${Math.round(v.score)}</span></div><div><b>${esc(v.grade)}</b><div class="muted" style="font-size:12px">T58 value score</div></div></div>` : ''}</div>
-      ${spark(h.points)}
-      <div style="display:flex;gap:8px;margin:8px 0"><button class="btn" id="buyit">Buy ${esc(a.symbol)}</button><button class="btn ghost" id="trade">Open ticket</button></div>
-      <div class="kpis"><div class="kpi"><span>52-week range</span><b>${usd(q.low_52w)} – ${usd(q.high_52w)}</b></div><div class="kpi"><span>As of</span><b>${esc(q.as_of)}</b></div>`;
-    if (f && f.available) html += `<div class="kpi"><span>Revenue</span><b>${big(f.revenue)}</b></div><div class="kpi"><span>Net income</span><b>${big(f.net_income)}</b></div><div class="kpi"><span>Assets</span><b>${big(f.assets)}</b></div><div class="kpi"><span>Liabilities</span><b>${big(f.liabilities)}</b></div><div class="kpi"><span>Equity</span><b>${big(f.equity)}</b></div><div class="kpi"><span>Net margin</span><b>${f.net_margin != null ? (f.net_margin * 100).toFixed(1) + '%' : '--'}</b></div><div class="kpi"><span>ROE</span><b>${f.roe != null ? (f.roe * 100).toFixed(1) + '%' : '--'}</b></div>`;
-    html += '</div>';
-    if (v && v.reasons) html += `<p class="help" style="margin-top:12px"><b>Why this score:</b> ${v.reasons.map(esc).join(' · ')}${(v.flags || []).length ? ' · <span class="down">' + v.flags.map(esc).join(', ') + '</span>' : ''}</p>`;
-    if (a.statements && a.statements.length) html += `<h2 style="margin-top:12px">Annual statements (SEC)</h2><div style="overflow:auto"><table class="t"><tr><th>FY end</th><th>Revenue</th><th>Net income</th><th>Assets</th><th>Liabilities</th></tr>${a.statements.slice().reverse().map(s => `<tr><td>${esc(s.period_end)}</td><td>${big(s.revenue)}</td><td>${big(s.net_income)}</td><td>${big(s.assets)}</td><td>${big(s.liabilities)}</td></tr>`).join('')}</table></div>`;
-    if (a.filings && a.filings.length) html += `<h2 style="margin-top:12px">Recent filings</h2>${a.filings.map(x => `<div class="row" style="cursor:default"><span class="tag">${esc(x.form)}</span><div class="grow"><b style="font-size:13px">${esc(x.filed)}</b><small>${esc(x.description || x.period || '')}</small></div>${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">View</a>` : ''}</div>`).join('')}`;
-    if (a.sec_error) html += `<div class="banner warn" style="margin-top:12px">${esc(a.sec_error)}</div>`;
-    box.innerHTML = html;
-    $('#buyit').onclick = () => { $('#tabs button[data-t=portfolio]').click(); }; $('#trade').onclick = () => { $('#tabs button[data-t=portfolio]').click(); };
-  } catch (x) { box.innerHTML = `<div class="banner warn">${esc(x.message)}</div>`; }
-}
-
-$('#scan').onclick = async () => { const o = $('#scanout'); o.innerHTML = '<div class="muted">Reading SEC filings… this takes a minute the first time.</div>';
+  st = setTimeout(async () => { try { const j = await api('search?q=' + encodeURIComponent(q)); $('#results').innerHTML = j.results.map(assetRow).join('') || '<div class="empty">No matches.</div>'; bindRows('#results'); } catch (x) { $('#results').innerHTML = `<div class="empty">${esc(x.message)}</div>`; } }, 250); };
+$('#scan').onclick = async () => { const o = $('#scanout'); o.innerHTML = '<div class="skel"></div><div class="skel"></div><div class="skel"></div><div class="muted" style="font-size:12px">Reading SEC filings… this takes a minute the first time.</div>';
   try { const j = await api('discover', { universe: ['stocks'] });
-    o.innerHTML = j.rows.map(r => `<div class="row" data-sym="${esc(r.symbol)}"><div class="grow"><b>${esc(r.symbol)}</b><small>${esc(r.grade)} · P/E ${r.pe ? r.pe.toFixed(1) : '--'} · ${r.pct_from_high.toFixed(0)}% from high</small></div><b>${Math.round(r.score)}</b></div>`).join('') || '<div class="muted">Nothing scored.</div>'; bindRows('#scanout');
+    o.innerHTML = j.rows.map(r => `<div class="row" tabindex="0" role="button" data-sym="${esc(r.symbol)}"><span class="dot">${esc(r.symbol.slice(0, 3))}</span><div class="grow"><b>${esc(r.symbol)}</b><small>${esc(r.grade)} · P/E ${r.pe ? r.pe.toFixed(1) : '--'} · ${r.pct_from_high.toFixed(0)}% from high</small></div><b>${Math.round(r.score)}</b></div>`).join('') || '<div class="empty">Nothing scored.</div>'; bindRows('#scanout');
   } catch (x) { o.innerHTML = `<div class="banner warn">${esc(x.message)}</div>`; } };
-
-(async () => { const items = {{ indices|tojson }}, etfs = {{ etfs|tojson }};
+(() => { const items = {{ indices|tojson }}, etfs = {{ etfs|tojson }};
   $('#idx').innerHTML = Object.entries(items).map(([s, n]) => assetRow({ symbol: s, name: n, kind: 'index' })).join('') + Object.entries(etfs).slice(0, 5).map(([s, n]) => assetRow({ symbol: s, name: n, kind: 'etf' })).join('') + assetRow({ symbol: 'BTC-USD', name: 'Bitcoin', kind: 'crypto' }) + assetRow({ symbol: 'ETH-USD', name: 'Ethereum', kind: 'crypto' }); bindRows('#idx'); })();
 
+/* ---------- account: strip, holdings, orders ---------- */
+const modeKey = () => mode;
+async function fetchAcct() { return (await api('account?mode=' + modeKey() + '&confirm=' + ($('#confirm').checked ? 1 : 0))).account; }
+function paintStrip(a) {
+  $('#s-eq').textContent = a ? usd(a.equity) : '--';
+  $('#s-pnl').innerHTML = a ? `<span class="${cls(a.pnl)}">${usd(a.pnl)}</span> <small class="${cls(a.pnl)}">${pct(a.pnl_pct)}</small>` : '--';
+  $('#s-cash').textContent = a ? usd(a.cash) : '--';
+  $('#s-n').textContent = a ? a.positions.length : '--';
+}
+function paintHoldings(a) {
+  const el = $('#acct'), tot = a.positions.reduce((s, p) => s + p.market_value, 0) + a.cash || 1;
+  if (!a.positions.length) { el.innerHTML = '<div class="empty">No holdings yet.<br>Search a stock on the Discover tab and buy, or build an automated plan.</div>'; return; }
+  const bar = a.positions.map((p, i) => `<i title="${esc(p.symbol)}" style="width:${(p.market_value / tot * 100).toFixed(2)}%;background:${PALETTE[i % PALETTE.length]}"></i>`).join('') + (a.cash > 0 ? `<i title="Cash" style="width:${(a.cash / tot * 100).toFixed(2)}%;background:var(--border-light)"></i>` : '');
+  el.innerHTML = `<div class="alloc" aria-hidden="true">${bar}</div><div class="results">${a.positions.map((p, i) => `<div class="row" tabindex="0" role="button" data-sym="${esc(p.symbol)}"><span class="dot" style="background:${PALETTE[i % PALETTE.length]}22;color:${PALETTE[i % PALETTE.length]}">${esc(p.symbol.slice(0, 3))}</span><div class="grow"><b>${esc(p.symbol)}</b><small>${num(p.qty)} shares · ${(p.market_value / tot * 100).toFixed(1)}% of account</small></div><div class="end"><b>${usd(p.market_value)}</b><br><span class="pill ${cls(p.pnl)}">${pct(p.pnl_pct)}</span></div><span class="chev">&rsaquo;</span></div>`).join('')}</div>`;
+  bindRows('#acct');
+}
+function paintOrders(a) {
+  const el = $('#orders'), os = a.orders || [];
+  if (!os.length) { el.innerHTML = '<div class="empty">' + (a.mode === 'paper' ? 'No orders yet.' : 'Order history for this account lives with your broker.') + '</div>'; return; }
+  el.innerHTML = `<div class="results">${os.slice(0, 12).map(o => `<div class="row" tabindex="0" role="button" data-sym="${esc(o.symbol)}"><span class="dot ${o.side === 'buy' ? 'up' : 'down'}">${o.side === 'buy' ? 'BUY' : 'SELL'}</span><div class="grow"><b>${esc(o.symbol)}</b><small>${esc(o.t)}${o.note ? ' · ' + esc(o.note) : ''}</small></div><div class="end"><b>${num(o.qty)}</b> <small>@ ${usd(o.price)}</small></div><span class="chev">&rsaquo;</span></div>`).join('')}</div>`;
+  bindRows('#orders');
+}
 async function loadAcct() {
-  const el = $('#acct'); el.innerHTML = '<div class="muted">Loading…</div>';
-  try { const a = (await api('account?mode=' + modeKey() + '&confirm=' + ($('#confirm').checked ? 1 : 0))).account;
-    el.innerHTML = `<span class="tag">${esc(a.mode)}</span><div class="price">${usd(a.equity)}</div><div class="${cls(a.pnl)}">${usd(a.pnl)} (${pct(a.pnl_pct)})</div><div class="muted" style="font-size:12.5px">Cash ${usd(a.cash)}</div>
-      <h2 style="margin-top:14px">Holdings</h2>${a.positions.length ? `<table class="t"><tr><th>Symbol</th><th>Qty</th><th>Value</th><th>P/L</th></tr>${a.positions.map(p => `<tr><td><b>${esc(p.symbol)}</b></td><td>${(+p.qty).toFixed(3)}</td><td>${usd(p.market_value)}</td><td class="${cls(p.pnl)}">${pct(p.pnl_pct)}</td></tr>`).join('')}</table>` : '<p class="help">Nothing yet — search a stock and buy, or build an automated plan.</p>'}
-      ${(a.orders || []).length ? `<h2 style="margin-top:14px">Recent orders</h2>${a.orders.slice(0, 8).map(o => `<div class="muted" style="font-size:12.5px">${esc(o.t)} · ${esc(o.side)} ${(+o.qty).toFixed(3)} ${esc(o.symbol)} @ ${usd(o.price)} <i>${esc(o.note)}</i></div>`).join('')}` : ''}`;
-  } catch (x) { el.innerHTML = `<div class="banner warn">${esc(x.message)}</div>`; } }
-$$('[data-side]').forEach(b => b.onclick = async () => { try {
-  const body = { mode: modeKey(), symbol: $('#o-sym').value, side: b.dataset.side, confirm_live: $('#confirm').checked };
+  $('#acct').innerHTML = '<div class="skel"></div><div class="skel"></div><div class="skel"></div>';
+  try { acct = await fetchAcct(); paintStrip(acct); paintHoldings(acct); paintOrders(acct); if (drawerSym && $('#drawer').classList.contains('on')) paintPosition(); }
+  catch (x) { acct = null; paintStrip(null); $('#acct').innerHTML = `<div class="banner warn">${esc(x.message)}</div>`; $('#orders').innerHTML = ''; }
+}
+
+/* ---------- ticket ---------- */
+$('#submit').onclick = async () => { if (busy) return; busy = true; try {
+  const body = { mode: modeKey(), symbol: $('#o-sym').value.trim(), side, confirm_live: $('#confirm').checked };
+  if (!body.symbol) throw new Error('Enter a symbol first.');
   if ($('#o-qty').value) body.qty = $('#o-qty').value; else body.dollars = $('#o-usd').value;
-  const j = await api('order', body); toast(`${j.order.side} ${(+j.order.qty).toFixed(3)} ${j.order.symbol} @ ${usd(j.order.price)}`); loadAcct(); } catch (x) { toast(x.message); } });
+  const j = await api('order', body); toast(`${j.order.side} ${num(j.order.qty)} ${j.order.symbol} @ ${usd(j.order.price)}`); $('#o-usd').value = ''; $('#o-qty').value = ''; loadAcct();
+} catch (x) { toast(x.message); } finally { busy = false; } };
 $('#resetpaper').onclick = async () => { if (confirm('Reset the paper account to $10,000?')) { await api('paper/reset', { cash: 10000 }); loadAcct(); } };
 
-// questionnaire
+/* ---------- drawer: asset details + one-click sell ---------- */
+function openDrawerShell() { $('#scrim').classList.add('on'); const d = $('#drawer'); d.classList.add('on'); d.setAttribute('aria-hidden', 'false'); $('#d-close').focus(); }
+function closeDrawer() { $('#scrim').classList.remove('on'); const d = $('#drawer'); d.classList.remove('on'); d.setAttribute('aria-hidden', 'true'); drawerSym = null; }
+$('#scrim').onclick = closeDrawer; $('#d-close').onclick = closeDrawer;
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && drawerSym) closeDrawer(); });
+const held = sym => acct && acct.positions.find(p => p.symbol.toUpperCase() === String(sym).toUpperCase());
+
+async function openDrawer(sym, range = '2y') {
+  drawerSym = sym; $('#o-sym').value = sym; $('#d-title').textContent = sym; openDrawerShell();
+  const body = $('#d-body'); body.innerHTML = '<div class="skel" style="height:34px"></div><div class="skel" style="height:150px"></div><div class="skel"></div><div class="skel"></div>';
+  if (!acct) { try { acct = await fetchAcct(); } catch (x) { /* account is optional for browsing */ } }
+  try {
+    const [a, h] = await Promise.all([api('asset/' + encodeURIComponent(sym)), api('history/' + encodeURIComponent(sym) + '?range=' + range).catch(() => ({ points: [] }))]);
+    if (drawerSym !== sym) return;
+    const q = a.quote, v = a.valuation, f = a.fundamentals;
+    let html = `<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start"><div><span class="tag">${esc(a.kind)}</span>
+      <div class="price" style="margin-top:6px">${usd(q.price)} <small class="${cls(q.change_pct)}" style="font-size:15px">${pct(q.change_pct)}</small></div><div class="muted" style="font-size:12px">As of ${esc(q.as_of)}</div></div>
+      ${v && v.score != null ? `<div style="display:flex;gap:12px;align-items:center"><div class="score" style="background:conic-gradient(var(--teal) ${v.score}%, var(--panel-3) 0)"><span style="background:var(--panel);width:50px;height:50px;border-radius:50%;display:grid;place-items:center">${Math.round(v.score)}</span></div><div><b>${esc(v.grade)}</b><div class="muted" style="font-size:12px">T58 value score</div></div></div>` : ''}</div>
+      <div class="ranges" id="d-ranges">${[['3mo', '3M'], ['1y', '1Y'], ['2y', '2Y'], ['5y', '5Y']].map(([k, l]) => `<button data-r="${k}" class="${k === range ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <div id="d-chart">${spark(h.points)}</div>
+      <div id="d-pos"></div>`;
+    html += `<div class="kpis"><div class="kpi"><span>52-week range</span><b>${usd(q.low_52w)} – ${usd(q.high_52w)}</b></div>`;
+    if (f && f.available) html += `<div class="kpi"><span>Revenue</span><b>${big(f.revenue)}</b></div><div class="kpi"><span>Net income</span><b>${big(f.net_income)}</b></div><div class="kpi"><span>Net margin</span><b>${f.net_margin != null ? (f.net_margin * 100).toFixed(1) + '%' : '--'}</b></div><div class="kpi"><span>ROE</span><b>${f.roe != null ? (f.roe * 100).toFixed(1) + '%' : '--'}</b></div>`;
+    html += '</div>';
+    if (v && v.reasons) html += `<p class="help" style="margin-top:12px"><b>Why this score:</b> ${v.reasons.map(esc).join(' · ')}${(v.flags || []).length ? ' · <span class="down">' + v.flags.map(esc).join(', ') + '</span>' : ''}</p>`;
+    if (a.statements && a.statements.length) html += `<h2 style="margin:14px 0 6px;font-size:14px">Annual statements (SEC)</h2><div style="overflow:auto"><table class="t"><tr><th>FY end</th><th>Revenue</th><th>Net income</th><th>Assets</th></tr>${a.statements.slice().reverse().map(s => `<tr><td>${esc(s.period_end)}</td><td>${big(s.revenue)}</td><td>${big(s.net_income)}</td><td>${big(s.assets)}</td></tr>`).join('')}</table></div>`;
+    if (a.filings && a.filings.length) html += `<h2 style="margin:14px 0 6px;font-size:14px">Recent filings</h2><div class="results">${a.filings.slice(0, 6).map(x => `<div class="row" style="cursor:default"><span class="tag">${esc(x.form)}</span><div class="grow"><b style="font-size:13px">${esc(x.filed)}</b><small>${esc(x.description || x.period || '')}</small></div>${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">View</a>` : ''}</div>`).join('')}</div>`;
+    if (a.sec_error) html += `<div class="banner warn" style="margin-top:12px">${esc(a.sec_error)}</div>`;
+    body.innerHTML = html; paintPosition(q.price);
+    $$('#d-ranges button').forEach(b => b.onclick = () => openDrawer(sym, b.dataset.r));
+  } catch (x) { body.innerHTML = `<div class="banner warn">${esc(x.message)}</div><div id="d-pos"></div>`; paintPosition(); }
+}
+
+function paintPosition(lastPrice) {
+  const box = $('#d-pos'); if (!box || !drawerSym) return;
+  const p = held(drawerSym), live = `<label class="liveok ${liveOn() ? 'on' : ''}" id="d-live"><input type="checkbox" id="d-confirm" ${$('#confirm').checked ? 'checked' : ''}> I understand this places real-money orders.</label>`;
+  if (p) {
+    const tot = acct.equity || 1, hist = (acct.orders || []).filter(o => o.symbol.toUpperCase() === drawerSym.toUpperCase());
+    box.innerHTML = `<div class="card" style="margin:14px 0;background:var(--panel-2)"><h2>Your position</h2><div class="kpis" style="margin-top:8px">
+      <div class="kpi"><span>Shares</span><b>${num(p.qty)}</b></div><div class="kpi"><span>Average cost</span><b>${usd(p.avg_cost)}</b></div><div class="kpi"><span>Market value</span><b>${usd(p.market_value)}</b></div>
+      <div class="kpi"><span>Profit / loss</span><b class="${cls(p.pnl)}">${usd(p.pnl)} (${pct(p.pnl_pct)})</b></div><div class="kpi"><span>Share of account</span><b>${(p.market_value / tot * 100).toFixed(1)}%</b></div></div>
+      <div class="acts"><button class="btn sell" id="sell-all">Sell all · ${usd(p.market_value)}</button><button class="btn ghost" data-frac="0.5">Sell half</button><button class="btn ghost" data-frac="0.25">Sell 25%</button></div>
+      ${live}
+      <div class="acts" style="margin:0"><button class="btn buy sm" id="buy-more">Buy more</button></div>
+      ${hist.length ? `<h2 style="margin:14px 0 6px;font-size:13px">Your orders in ${esc(drawerSym)}</h2>${hist.slice(0, 6).map(o => `<div class="muted" style="font-size:12.5px;padding:3px 0">${esc(o.t)} · <b class="${o.side === 'buy' ? 'up' : 'down'}">${esc(o.side)}</b> ${num(o.qty)} @ ${usd(o.price)}</div>`).join('')}` : ''}</div>`;
+    $('#sell-all').onclick = () => closePosition(1);
+    $$('#d-pos [data-frac]').forEach(b => b.onclick = () => closePosition(+b.dataset.frac));
+  } else {
+    box.innerHTML = `<div class="card" style="margin:14px 0;background:var(--panel-2)"><h2>Not in your portfolio</h2><p class="help" style="margin-bottom:10px">Buy at the latest price in one click, or open the ticket for an exact amount.</p>
+      <div class="acts" style="margin:0"><button class="btn buy" data-usd="100">Buy $100</button><button class="btn buy" data-usd="500">Buy $500</button><button class="btn ghost" id="buy-more">Open ticket</button></div>${live}</div>`;
+    $$('#d-pos [data-usd]').forEach(b => b.onclick = () => quickBuy(+b.dataset.usd));
+  }
+  const dc = $('#d-confirm'); if (dc) dc.onchange = () => { $('#confirm').checked = dc.checked; };
+  const bm = $('#buy-more'); if (bm) bm.onclick = () => { setSide('buy'); closeDrawer(); showTab('portfolio'); $('#o-usd').focus(); };
+}
+async function closePosition(fraction) {
+  if (busy || !drawerSym) return; if (liveOn() && !$('#confirm').checked) { toast('Tick the real-money confirmation first.'); return; }
+  busy = true; const sym = drawerSym; try {
+    const j = await api('close', { mode: modeKey(), symbol: sym, fraction, confirm_live: $('#confirm').checked });
+    toast(`Sold ${num(j.order.qty)} ${j.order.symbol} @ ${usd(j.order.price)}`); await loadAcct(); if (!held(sym)) closeDrawer();
+  } catch (x) { toast(x.message); } finally { busy = false; } }
+async function quickBuy(dollars) {
+  if (busy || !drawerSym) return; if (liveOn() && !$('#confirm').checked) { toast('Tick the real-money confirmation first.'); return; }
+  busy = true; try {
+    const j = await api('order', { mode: modeKey(), symbol: drawerSym, side: 'buy', dollars, confirm_live: $('#confirm').checked });
+    toast(`Bought ${num(j.order.qty)} ${j.order.symbol} @ ${usd(j.order.price)}`); await loadAcct(); paintPosition();
+  } catch (x) { toast(x.message); } finally { busy = false; } }
+
+/* ---------- automated ---------- */
 const Q = {{ questions|tojson }};
 $('#qs').innerHTML = Q.map(q => `<div class="q" data-q="${q.id}"><h3>${esc(q.text)}</h3><div class="opts">${q.options.map(o => `<div class="opt" data-o="${o[0]}">${esc(o[1])}</div>`).join('')}</div></div>`).join('');
 $$('.q').forEach(qe => { const id = qe.dataset.q, multi = (Q.find(x => x.id === id) || {}).multi;
@@ -205,19 +361,21 @@ $$('.q').forEach(qe => { const id = qe.dataset.q, multi = (Q.find(x => x.id === 
   qe.querySelectorAll('.opt').forEach(o => o.onclick = () => { if (multi) { const s = new Set(answers[id] || []); s.has(o.dataset.o) ? s.delete(o.dataset.o) : s.add(o.dataset.o); answers[id] = [...s]; o.classList.toggle('on'); } else { answers[id] = o.dataset.o; qe.querySelectorAll('.opt').forEach(x => x.classList.toggle('on', x === o)); } }); });
 $('#mk').onclick = async () => { try { const j = await api('profile', { answers, starting_cash: +$('#cash').value }); plan = j;
   $('#planbox').style.display = 'block'; $('#plantitle').textContent = `${j.profile.label} investor · risk ${j.profile.risk_score}/4`; $('#planwhy').innerHTML = j.config.why.map(w => '• ' + esc(w)).join('<br>'); $('#planbox').scrollIntoView({ behavior: 'smooth' }); } catch (x) { toast(x.message); } };
-$('#mkplan').onclick = async () => { const o = $('#planout'); o.style.display = 'block'; o.innerHTML = '<div class="muted">Scoring the universe…</div>';
+$('#mkplan').onclick = async () => { const o = $('#planout'); o.style.display = 'block'; o.innerHTML = '<div class="skel"></div><div class="skel"></div><div class="muted" style="font-size:12px">Scoring the universe…</div>';
   try { const j = await api('plan', { answers, starting_cash: +$('#cash').value, algo: $('#algo').value }); plan.live = j;
     const rows = Object.entries(j.weights).sort((a, b) => b[1] - a[1]);
     o.innerHTML = `<h2>Today's portfolio (${esc(j.algo.replace(/_/g, ' '))})</h2><p class="help">${rows.length} positions · ${((1 - rows.reduce((s, r) => s + r[1], 0)) * 100).toFixed(0)}% cash</p>
       ${rows.map(([s, w]) => `<div style="margin:8px 0"><div style="display:flex;justify-content:space-between;font-size:13px"><b>${esc(s)}</b><span>${(w * 100).toFixed(1)}%${j.value_scores[s] != null ? ' · value ' + Math.round(j.value_scores[s]) : ''}</span></div><div class="bar"><i style="width:${Math.min(100, w * 400)}%"></i></div></div>`).join('')}
       <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="apply">${answers.style === 'auto' ? 'Run automatically' : 'Approve & invest'} (${esc(mode)})</button></div>`;
-    $('#apply').onclick = async () => { try { const r = await api('auto/run', { mode: modeKey(), weights: j.weights, prices: j.prices, algo: j.algo, confirm_live: $('#confirm').checked }); toast(r.orders.length + ' orders placed'); } catch (x) { toast(x.message); } };
+    $('#apply').onclick = async () => { try { const r = await api('auto/run', { mode: modeKey(), weights: j.weights, prices: j.prices, algo: j.algo, confirm_live: $('#confirm').checked }); toast(r.orders.length + ' orders placed'); loadAcct(); } catch (x) { toast(x.message); } };
   } catch (x) { o.innerHTML = `<div class="banner warn">${esc(x.message)}</div>`; } };
-$('#mkbt').onclick = async () => { const o = $('#btout'); o.style.display = 'block'; o.innerHTML = '<div class="muted">Backtesting up to 10 years…</div>';
+$('#mkbt').onclick = async () => { const o = $('#btout'); o.style.display = 'block'; o.innerHTML = '<div class="skel"></div><div class="skel"></div><div class="muted" style="font-size:12px">Backtesting up to 10 years…</div>';
   try { const r = (await api('backtest', { answers, starting_cash: +$('#cash').value, algo: $('#algo').value })).result;
     o.innerHTML = `<h2>Backtest · ${esc(r.start)} → ${esc(r.end)}</h2>${spark(r.equity)}<div class="kpis"><div class="kpi"><span>Total return</span><b class="${cls(r.total_return_pct)}">${pct(r.total_return_pct)}</b></div><div class="kpi"><span>CAGR</span><b>${r.cagr_pct}%</b></div><div class="kpi"><span>Max drawdown</span><b class="down">${r.max_drawdown_pct}%</b></div><div class="kpi"><span>Sharpe</span><b>${r.sharpe}</b></div><div class="kpi"><span>Benchmark (equal-weight)</span><b>${pct(r.benchmark_total_return_pct)}</b></div><div class="kpi"><span>Beat benchmark?</span><b>${r.beats_benchmark ? 'Yes' : 'No'}</b></div></div><p class="help" style="margin-top:10px">${r.notes.map(esc).join('<br>')}</p>`;
   } catch (x) { o.innerHTML = `<div class="banner warn">${esc(x.message)}</div>`; } };
 $('#saveua').onclick = async () => { try { await api('sec-agent', { user_agent: $('#ua').value }); $('#secstate').textContent = 'SEC access is ready.'; } catch (x) { $('#secstate').textContent = x.message; } };
+
+syncLive(); loadAcct();
 </script>
 </body>
 </html>

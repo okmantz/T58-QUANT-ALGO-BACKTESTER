@@ -45,6 +45,14 @@
   select:disabled, input[readonly] { cursor: not-allowed; opacity: .92; }
   input[readonly]:focus { border-color: var(--border-light); box-shadow: none; }
   h1 { font-size: 18px; margin: 0 0 4px; }
+  .acct-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin: 0 0 18px; border-bottom: 1px solid var(--border); }
+  .acct-tabs a { display: inline-flex; align-items: center; gap: 7px; padding: 10px 14px; font-size: 13.5px; font-weight: 600; color: var(--text-muted);
+    text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -1px; border-radius: 8px 8px 0 0; transition: color .15s, background .15s; }
+  .acct-tabs a:hover { color: var(--text); background: rgba(var(--teal-rgb), 0.06); }
+  .acct-tabs a[aria-selected="true"] { color: var(--teal); border-bottom-color: var(--teal); }
+  .acct-tabs .lu { width: 15px; height: 15px; }
+  .acct-pane { max-width: 1100px; }
+  @media (max-width: 640px) { .acct-tabs { flex-wrap: nowrap; overflow-x: auto; } .acct-tabs a { white-space: nowrap; } }
   p.lede { color: var(--text-muted); font-size: 13px; margin: 0 0 16px; max-width: 560px; }
   .pz-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-top: 6px; }
   .pz-tile { position: relative; height: 84px; border-radius: 10px; border: 2px solid var(--border-light); cursor: pointer; overflow: hidden;
@@ -188,12 +196,13 @@
 <div class="t58-main">
 <div class="t58-page-header">
   <h1>Account settings</h1>
-  <p class="lede">
-    Your profile, preferences, API keys and runs are filed under your license key (and the email you signed in with), so they
-    come back after a reinstall. Profile fields personalize exported reports; the Security section's password
-    is an OPTIONAL local lock for this app (useful mainly if you use Mobile Access on a
-    shared Wi-Fi); Subscription shows your plan and license, which come from your license key.
-  </p>
+  <p class="lede">Your profile, notifications, API keys, achievements and support, in one place. Everything is filed under your license key (and the email you signed in with), so it comes back after a reinstall.</p>
+  {% set acct_tabs = [('account','Account','user-round'),('notifications','Notifications','bell'),('api-keys','API keys','key-round'),('achievements','Achievements','trophy'),('support','Support','life-buoy')] %}
+  <nav class="acct-tabs" role="tablist" aria-label="Account settings sections">
+    {% for key, label, icon in acct_tabs %}
+    <a href="/settings/account?tab={{ key }}" role="tab" {% if tab == key %}aria-selected="true" aria-current="page"{% else %}aria-selected="false"{% endif %}><svg class="lu"><use href="#lu-{{ icon }}"/></svg>{{ label }}</a>
+    {% endfor %}
+  </nav>
 
   {% if saved == 'profile' %}<div class="card saved-banner">Profile saved.</div>{% endif %}
   {% if saved == 'password' %}<div class="card saved-banner">{{ password_message }}</div>{% endif %}
@@ -204,6 +213,7 @@
   {% if password_error %}<div class="card error-banner">{{ password_error }}</div>{% endif %}
   {% if error %}<div class="card error-banner">{{ error }}</div>{% endif %}
 
+  {% if tab == 'account' %}
   <div class="as-grid">
   <!-- ================= DEMO / LIVE ================= -->
   <div class="card" id="account-mode">
@@ -215,7 +225,7 @@
       <label><input type="radio" name="mode" value="demo" {% if settings.account_mode != 'live' %}checked{% endif %}> Demo</label>
       <label><input type="radio" name="mode" value="live" {% if settings.account_mode == 'live' %}checked{% endif %}> Live</label>
       <button type="submit" class="btn">Save mode</button>
-      <a href="/demo-account" style="margin-left:auto;">Open the T58 demo account &rarr;</a>
+      <a href="/forward-test?view=demo" style="margin-left:auto;">Open the T58 demo account &rarr;</a>
     </form>
   </div>
   <!-- ================= PROFILE PICTURE ================= -->
@@ -333,7 +343,7 @@
       <div class="rp-share">
         <button type="button" class="secondary-btn" id="rp-cert">Research certificate</button>
         <button type="button" class="secondary-btn" id="rp-cert-png">Certificate (PNG)</button>
-        <a class="secondary-btn" href="/achievements" style="text-decoration:none">All achievements</a>
+        <a class="secondary-btn" href="/settings/account?tab=achievements" style="text-decoration:none">All achievements</a>
       </div>
       <p class="field-note">Each showcase badge has a shareable card (SVG or PNG). The certificate lists your counted activity and carries a note that it is not a performance record.</p></div>
   </div>
@@ -542,11 +552,6 @@
   })();
   </script>
 
-  <!-- ================= NOTIFICATIONS (sandwiched between Subscription and the app version) ================= -->
-  {% include '_notification_settings_card.html' %}
-
-  {% include '_briefing_settings_card.html' %}
-
   <!-- ================= APP ================= -->
   <form method="POST" action="/settings/account/check_updates">
     <div class="card">
@@ -573,9 +578,22 @@
     </div>
   </form>
   </div>
+  {% elif tab == 'notifications' %}
+  <div class="acct-pane">
+  {% include '_notification_settings_card.html' %}
+  {% include '_briefing_settings_card.html' %}
+  </div>
+  {% elif tab == 'api-keys' %}
+  <div class="acct-pane">{% include '_acct_api_keys.html' %}</div>
+  {% elif tab == 'achievements' %}
+  <div class="acct-pane">{% include '_acct_achievements.html' %}</div>
+  {% elif tab == 'support' %}
+  <div class="acct-pane">{% include '_acct_support.html' %}</div>
+  {% endif %}
 </div>
 </div>
 </div>
+{% if tab == 'account' %}
 <div id="pz-tip" role="tooltip" hidden></div>
 <script src="/static/t58-chrome.js" defer></script>
 <script src="/static/t58-portfolio.js"></script>
@@ -722,5 +740,6 @@
   if (window.T58Personalize) init(); else window.addEventListener('load', init);
 })();
 </script>
+{% endif %}
 </body>
 </html>

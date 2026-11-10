@@ -5,6 +5,10 @@
 {% include '_head_common.html' %}
 {% include '_lifecycle_css.html' %}
 <style>
+  .dv-seg{display:inline-flex; gap:4px; padding:4px; border:1px solid var(--lc-border); border-radius:12px; margin:6px 0 16px; background:var(--lc-border);}
+  .dv-seg a{padding:8px 16px; border-radius:9px; font-weight:700; font-size:13.5px; color:var(--lc-muted); text-decoration:none;}
+  .dv-seg a small{font-weight:600; font-size:10.5px; opacity:.8; margin-left:4px; text-transform:uppercase; letter-spacing:.05em;}
+  .dv-seg a[aria-selected="true"]{background:var(--lc-acc); color:#04120d;}
   .error { background: var(--err-bg); border: 1px solid var(--err-bd); color: var(--err-fg); padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
   .ft-stats { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; }
   .ft-stat { flex: 1; min-width: 100px; }
@@ -56,8 +60,15 @@
 {% set lc_step = 'deploy' %}
 {% include '_lifecycle_stepper.html' %}
 <div class="lc-crumb">Lifecycle · 6 · <b>Deploy</b></div>
-<h1 class="lc-title">Forward test it on live prices</h1>
-<p class="lc-sub">Deploy is where strategies stop being backtests. Warm up here: run the champion against a real MT5 terminal's live bars (demo account recommended) before any real-money deployment. Needs an MT5 terminal installed and logged in on THIS machine — the server can't reach a terminal on another computer.</p>
+<h1 class="lc-title">Deploy: practice first, then go live</h1>
+<p class="lc-sub">Deploy is where strategies stop being backtests. Start on the T58 demo account (simulated money, real prop-firm rules), then forward test on a live terminal, then go live. Each step is guarded, and nothing here touches real money until you arm Deploy Live on purpose.</p>
+<div class="dv-seg" role="tablist" aria-label="Deploy mode">
+  <a href="/forward-test?view=demo" role="tab" id="dv-tab-demo" data-view="demo">T58 Demo account <small>recommended</small></a>
+  <a href="/forward-test?view=mt5" role="tab" id="dv-tab-mt5" data-view="mt5">MT5 forward test</a>
+</div>
+<div id="dv-pane-demo" {% if view == 'mt5' %}hidden{% endif %}>{% include '_demo_account_panel.html' %}</div>
+<div id="dv-pane-mt5" {% if view != 'mt5' %}hidden{% endif %}>
+<p class="lc-hint" style="margin:0 0 10px;">Deploy is where strategies stop being backtests. Warm up here: run the champion against a real MT5 terminal's live bars (demo account recommended) before any real-money deployment. Needs an MT5 terminal installed and logged in on THIS machine — the server can't reach a terminal on another computer.</p>
 <div class="lc-card" style="margin:10px 0;padding:10px 14px;">
   <div class="lc-hint" style="margin:0;"><b>Your path:</b>
     <a href="/library">1 Create</a> &rarr; <a href="/optimize-simple">2 Optimize</a> &rarr; <a href="/full-pipeline">3 Full Pipeline</a> &rarr; <a href="/validate-simple">4 Validate</a>
@@ -83,24 +94,13 @@
   </div>
 {% endif %}
 
-<div class="lc-card">
-  <h3>Deploy section — where to?</h3>
-  <div class="lc-toolgrid">
-    <a class="lc-toolcard" href="/forward-test"><div class="tname">Forward Test (MT5) — you are here</div><div class="tdesc">Run a strategy against a real terminal's live bars, demo first.</div></a>
-    <a class="lc-toolcard" href="/deploy-live"><div class="tname">Deploy Live</div><div class="tdesc">Real-money deployment — separately guarded and armed on purpose.</div></a>
-    <a class="lc-toolcard" href="/live-market"><div class="tname">Monitor (Live Market)</div><div class="tdesc">Watch live prices and open positions.</div></a>
-    <a class="lc-toolcard" href="/replay"><div class="tname">Interactive Replay</div><div class="tdesc">Play a session back bar by bar and re-decide it.</div></a>
-    <a class="lc-toolcard" href="/webhook-relay"><div class="tname">Webhook Relay (TradingView)</div><div class="tdesc">Forward test a Pine Script strategy from TradingView alerts, on a paper or demo account.</div></a>
-  </div>
-</div>
-
 <div class="lc-run-grid">
 <div class="lc-run-main">
 
 {% if not mt5_accounts %}
 <div class="lc-card">
   <h3>No MT5 account saved yet</h3>
-  <p class="lc-hint">Add one under <a href="/settings/api-keys" style="color:var(--lc-acc);">Settings &rarr; API Keys &rarr; Brokers/Prop Firms</a> first — the form below stays visible so you can see what will run.</p>
+  <p class="lc-hint">Add one under <a href="/settings/account?tab=api-keys" style="color:var(--lc-acc);">Settings &rarr; API Keys &rarr; Brokers/Prop Firms</a> first — the form below stays visible so you can see what will run.</p>
 </div>
 {% endif %}
 
@@ -232,10 +232,34 @@
 </div>
 </div>
 
+</div>
+<div class="lc-card">
+  <h3>More deploy tools</h3>
+  <div class="lc-toolgrid">
+    <a class="lc-toolcard" href="/forward-test?view=demo"><div class="tname">T58 Demo account</div><div class="tdesc">A simulated prop-firm account that trades your strategy from TradingView alerts.</div></a>
+    <a class="lc-toolcard" href="/forward-test?view=mt5"><div class="tname">Forward Test (MT5)</div><div class="tdesc">Run a strategy against a real terminal's live bars, demo first.</div></a>
+    <a class="lc-toolcard" href="/pine-indicator/bridge"><div class="tname">TradingView bridge</div><div class="tdesc">Paste a backtest's settings ID into a Pine script and the exact config shows on your chart.</div></a>
+    <a class="lc-toolcard" href="/deploy-live"><div class="tname">Deploy Live</div><div class="tdesc">Real-money deployment — separately guarded and armed on purpose.</div></a>
+    <a class="lc-toolcard" href="/live-market"><div class="tname">Monitor (Live Market)</div><div class="tdesc">Watch live prices and open positions.</div></a>
+    <a class="lc-toolcard" href="/replay"><div class="tname">Interactive Replay</div><div class="tdesc">Play a session back bar by bar and re-decide it.</div></a>
+    <a class="lc-toolcard" href="/webhook-relay"><div class="tname">Webhook Relay (TradingView)</div><div class="tdesc">Forward test a Pine Script strategy from TradingView alerts, on a paper or demo account.</div></a>
+  </div>
+</div>
+
 </div></div>
 </div>
 </div>
 
+<script>
+(function(){
+  var panes = {demo: document.getElementById('dv-pane-demo'), mt5: document.getElementById('dv-pane-mt5')};
+  function show(v){ if (!panes[v]) v = 'demo';
+    Object.keys(panes).forEach(function(k){ panes[k].hidden = (k !== v); document.getElementById('dv-tab-' + k).setAttribute('aria-selected', k === v ? 'true' : 'false'); });
+    try { history.replaceState(null, '', '/forward-test?view=' + v); } catch (e) {} }
+  document.querySelectorAll('.dv-seg a').forEach(function(a){ a.addEventListener('click', function(e){ e.preventDefault(); show(a.dataset.view); }); });
+  show({{ (view or 'demo')|tojson }});
+})();
+</script>
 <script>
   // v9.8: saved-strategy dropdown drives the same strategy_mode /
   // existing_strategy_* fields /forward-test/start has always read, so

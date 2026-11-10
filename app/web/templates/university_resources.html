@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Resources — University — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+</head>
+<body>
+{% set active_page = 'education' %}
+{% set uni_page = 'resources' %}
+{% set uni_title = 'A running start on trading fundamentals' %}
+{% set uni_blurb = 'Hand-picked reading for before you backtest your first strategy. No engine, no upload, just good material in a sensible order.' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main"><div class="uni">
+
+{% include '_uni_hub.html' %}
+
+<div class="uni-h" id="start"><h2>Start here</h2><span>Three steps, in order</span></div>
+<div class="uni-path">
+  <div class="uni-step">
+    <div class="uni-num">1</div><div class="kicker">T58 guide</div>
+    <h3>30-Day Trading Quickstart Guide</h3>
+    <p>From zero to sim trading in 30 days, built around T58's own MS-LSD market-reading model: setup and structure, liquidity, supply and demand, then entry models.</p>
+    <a class="uni-cta" href="https://docs.google.com/document/d/17tdRY_tzpHOdw8_a1EpAgOmradTbu02Dlo6BOAnK0Wg/edit?usp=drivesdk" target="_blank" rel="noopener">Open the guide &rarr;</a>
+    <div class="uni-meta">Google Docs &middot; opens in a new tab</div>
+  </div>
+  <div class="uni-step">
+    <div class="uni-num">2</div><div class="kicker">T58 strategy</div>
+    <h3>MS-LSD Strategy Doc</h3>
+    <p>The full write-up: timeframe alignment, reading market structure, the three types of liquidity, what makes a valid order block, and both entry models. Always the latest version.</p>
+    <a class="uni-cta" href="https://docs.google.com/document/d/14jubETVbumncdLJrTrw2ke-NxFPXkT34qzH4_Q1BguA/edit?usp=drivesdk" target="_blank" rel="noopener">Open the MS-LSD strategy doc &rarr;</a>
+    <div class="uni-meta">Google Docs &middot; opens in a new tab</div>
+  </div>
+  <div class="uni-step">
+    <div class="uni-num">3</div><div class="kicker">Community</div>
+    <h3>T58 Trading Discord</h3>
+    <p>Talk through MS-LSD setups and prop-firm evaluations, and get support directly from T58.</p>
+    <a class="uni-cta discord" href="https://whop.com/t58-trading/t58-trading-discord/" target="_blank" rel="noopener">Join the Discord &rarr;</a>
+    <div class="uni-meta">Opens in a new tab</div>
+  </div>
+</div>
+
+<div class="uni-h" id="framework"><h2>The MS-LSD framework at a glance</h2><span>The same logic behind the Manual Strategy Builder's advanced conditions</span></div>
+<div class="uni-card">
+  <p class="uni-quote">&ldquo;Never predict the markets. Instead, participate in probability.&rdquo; Price moves because of liquidity and order flow through banks, institutions and news. MS-LSD is the framework for reading that flow.</p>
+  <div class="uni-letters">
+    <div class="uni-letter"><i>M</i><div><b>Market Structure</b><span>Break of Structure, trend and range</span></div></div>
+    <div class="uni-letter"><i>L</i><div><b>Liquidity</b><span>Where stops rest; sweeps</span></div></div>
+    <div class="uni-letter"><i>S</i><div><b>Supply &amp; Demand</b><span>Order blocks and fair value gaps</span></div></div>
+    <div class="uni-letter"><i>D</i><div><b>Entry Models</b><span>How and when to pull the trigger</span></div></div>
+  </div>
+  <div class="uni-flow">
+    <div>HTF directional bias</div><div>Key liquidity</div><div>Area of interest (S&amp;D zone below liquidity)</div><div>Standard confirmation entry (LTF ChoCh)</div>
+  </div>
+  <div class="uni-weeks">
+    <div class="uni-week"><small>Week 1</small><b>Setup &amp; Market Structure</b></div>
+    <div class="uni-week"><small>Week 2</small><b>Liquidity</b></div>
+    <div class="uni-week"><small>Week 3</small><b>Supply &amp; Demand</b></div>
+    <div class="uni-week"><small>Week 4</small><b>Entry Models &amp; Sim Trading</b></div>
+  </div>
+</div>
+
+<div class="uni-h" id="free"><h2>More free places to build your foundation</h2><span>Third-party sites</span></div>
+<div class="uni-links">
+  <a class="uni-link" href="https://www.babypips.com/learn/forex" target="_blank" rel="noopener">
+    <span class="uni-tag">Course &middot; beginner</span><h3>BabyPips: School of Pipsology</h3>
+    <p>The standard free, self-paced forex course. Starts from absolute basics and builds up.</p><span class="go">Open &rarr;</span>
+  </a>
+  <a class="uni-link" href="https://www.investopedia.com/trading-4689660" target="_blank" rel="noopener">
+    <span class="uni-tag">Reference &middot; any level</span><h3>Investopedia: Trading</h3>
+    <p>A reliable reference for looking up any term, order type or concept as it comes up.</p><span class="go">Open &rarr;</span>
+  </a>
+  <a class="uni-link" href="https://www.cmegroup.com/education.html" target="_blank" rel="noopener">
+    <span class="uni-tag">Education &middot; intermediate</span><h3>CME Group Education</h3>
+    <p>Free courses on futures, options and risk management from a major exchange operator.</p><span class="go">Open &rarr;</span>
+  </a>
+</div>
+
+<p class="uni-note">Educational content only, not financial advice. The same disclaimer that applies to every simulated result elsewhere in this app applies here too. External links go to third-party sites this app doesn't control.</p>
+
+</div></div>
+</div>
+</body>
+</html>

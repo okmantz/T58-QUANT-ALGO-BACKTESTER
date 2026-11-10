@@ -1,0 +1,125 @@
+{# T58 Prop Firm demo account, rendered inside the Deploy page (forward_test.html). Needs: acct, tiers, mode, public_url, strategies, deploy_champion, prefill_strategy. #}
+<style>
+  .da-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px;}
+  .da-stat{border:1px solid var(--lc-border); border-radius:10px; padding:10px 12px;} .da-stat small{display:block; color:var(--lc-muted); font-size:11px; text-transform:uppercase; letter-spacing:.6px;}
+  .da-stat b{font-size:19px; font-variant-numeric:tabular-nums;} .da .up{color:var(--lm-up,#3ed685);} .da .down{color:var(--lm-down,#f0596a);}
+  .da-bar{height:10px; border-radius:5px; background:var(--lc-border); overflow:hidden;} .da-bar>i{display:block; height:100%; background:var(--lc-acc); transition:width .4s ease;}
+  table.da-t{width:100%; border-collapse:collapse; font-size:13px;} table.da-t th{font-size:11px; color:var(--lc-muted); text-align:left; text-transform:uppercase; padding:6px 8px; border-bottom:1px solid var(--lc-border2);}
+  table.da-t td{padding:7px 8px; border-bottom:1px solid var(--lc-border);} table.da-t .r{text-align:right; font-variant-numeric:tabular-nums;}
+  pre.da-code{white-space:pre-wrap; overflow-wrap:anywhere; background:var(--lc-border); padding:10px; border-radius:8px; font-size:12px; margin:6px 0;}
+  .da-badge{display:inline-block; padding:2px 8px; border-radius:6px; font-size:11px; font-weight:700; letter-spacing:.06em; vertical-align:middle;}
+  .da-active{background:rgba(62,214,133,.15); color:#3ed685;} .da-passed{background:rgba(91,140,255,.18); color:#7aa2ff;} .da-breached{background:rgba(240,89,106,.18); color:#f0596a;}
+  .da-sizes{display:flex; gap:8px; flex-wrap:wrap;}
+  .da-size{background:transparent !important; color:var(--lc-text,inherit) !important; border:1px solid var(--lc-border2) !important; box-shadow:none !important;}
+  .da-size.on{background:var(--lc-acc) !important; color:#04120d !important; border-color:var(--lc-acc) !important;}
+  .da-steps{display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:14px; margin-top:14px;}
+  .da-num{display:inline-grid; place-items:center; width:22px; height:22px; border-radius:50%; background:var(--lc-acc); color:#04120d; font-size:12px; font-weight:800; margin-right:8px;}
+</style>
+<div class="da" id="da-root">
+{% if mode != 'demo' %}<div class="lc-notice bad">You are in <b>Live</b> mode. The demo account only books trades while the toggle is on <b>Demo</b> (<a href="/settings/account#account-mode">Account settings</a>).</div>{% endif %}
+{% if acct.status != 'active' %}<div class="lc-notice{{ '' if acct.status == 'passed' else ' bad' }}">{{ acct.status_reason }}
+  <form method="POST" action="/demo-account/reset" style="display:inline;margin-left:10px"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="lc-btn" type="submit">Start attempt {{ acct.attempt + 1 }}</button></form></div>{% endif %}
+
+<div class="lc-card">
+  <h3 style="margin:0 0 4px;">T58 Prop Firm demo <span class="da-badge da-{{ acct.status }}" id="da-status">{{ acct.status|upper }}</span></h3>
+  <p class="lc-hint" style="margin:0 0 12px;">A ${{ '{:,.0f}'.format(acct.size) }} simulated prop-firm account that follows the same rules the Full Pipeline tests against: a trailing end-of-day loss floor that locks, a daily soft limit, a profit target and a best-day cap. It trades from your TradingView alerts and every win and loss is booked below.</p>
+  <div class="da-grid">
+    <div class="da-stat"><small>Balance</small><b id="da-bal">${{ '{:,.2f}'.format(acct.balance) }}</b></div>
+    <div class="da-stat"><small>Net P&amp;L</small><b id="da-net" class="{{ 'up' if acct.net_pnl > 0 else 'down' if acct.net_pnl < 0 else '' }}">{{ '{:+,.2f}'.format(acct.net_pnl) }}</b></div>
+    <div class="da-stat"><small>Today</small><b id="da-day" class="{{ 'up' if acct.day_pnl > 0 else 'down' if acct.day_pnl < 0 else '' }}">{{ '{:+,.2f}'.format(acct.day_pnl) }}</b></div>
+    <div class="da-stat"><small>Loss floor</small><b id="da-floor">${{ '{:,.2f}'.format(acct.floor) }}</b></div>
+    <div class="da-stat"><small>Cushion</small><b id="da-cush">${{ '{:,.2f}'.format(acct.cushion) }}</b></div>
+    <div class="da-stat"><small>Daily soft limit</small><b>${{ '{:,.0f}'.format(acct.soft_daily_limit) }}</b>{% if acct.day_stopped %}<small class="down">hit today: stand down</small>{% endif %}</div>
+    <div class="da-stat"><small>Trades · win rate</small><b id="da-trades-n">{{ acct.n_trades }}{% if acct.win_rate is not none %} · {{ acct.win_rate }}%{% endif %}</b></div>
+    <div class="da-stat"><small>Attempt</small><b>#{{ acct.attempt }}</b></div>
+  </div>
+  <div style="margin-top:12px"><small class="lc-hint" id="da-target-txt">Progress to the ${{ '{:,.0f}'.format(acct.profit_target) }} target: {{ acct.target_pct }}%</small>
+    <div class="da-bar"><i id="da-target-bar" style="width:{{ [acct.target_pct, 100]|min }}%"></i></div></div>
+</div>
+
+<div class="da-steps">
+  <div class="lc-card" style="margin:0;">
+    <h3 style="margin:0 0 8px;"><span class="da-num">1</span>Pick the account size</h3>
+    <form method="POST" action="/demo-account/tier" class="da-sizes">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      {% for t in tiers %}<button class="lc-btn da-size{{ ' on' if t == acct.size else '' }}" type="submit" name="size" value="{{ t }}" aria-pressed="{{ 'true' if t == acct.size else 'false' }}">${{ '{:,.0f}'.format(t) }}</button>{% endfor %}
+    </form>
+    <p class="lc-hint">Changing the size starts a fresh account; the loss limit, target and soft limit scale with it.</p>
+  </div>
+  <div class="lc-card" style="margin:0;">
+    <h3 style="margin:0 0 8px;"><span class="da-num">2</span>Choose a strategy to trade it</h3>
+    <label class="flabel" for="da-strategy">Saved strategy</label>
+    <select class="inp" id="da-strategy">
+      <option value="" disabled {% if not (prefill_strategy or deploy_champion) %}selected{% endif %}>Select a strategy&hellip;</option>
+      {% set _want = (prefill_strategy or '').split('::')[-1] or ((deploy_champion.display_name or deploy_champion.filename) if deploy_champion else '') %}
+      {% for t, label in [('manual', 'Manual'), ('python', 'Python'), ('pinescript', 'PineScript'), ('mql5', 'MQL5')] %}
+        {% set _opts = strategies|selectattr('type', 'equalto', t)|list %}
+        {% if _opts %}<optgroup label="{{ label }}">{% for s in _opts %}<option value="{{ s.name }}" {% if _want and (s.name == _want or s.name ~ '.json' == _want) %}selected{% endif %}>{{ s.name }}</option>{% endfor %}</optgroup>{% endif %}
+      {% endfor %}
+    </select>
+    <label class="flabel" for="da-tickers" style="margin-top:8px;">Tickers (optional)</label>
+    <input class="inp" id="da-tickers" placeholder="NQ, ES">
+    <button class="lc-btn primary" type="button" id="da-deploy" style="margin-top:10px;">Get my TradingView alert</button>
+    {% if deploy_champion %}<p class="lc-hint">Preselected: your current champion, <b>{{ deploy_champion.display_name or deploy_champion.filename }}</b>.</p>{% endif %}
+    <div id="da-out" hidden style="margin-top:10px">
+      <b>Webhook URL</b><pre class="da-code" id="da-url"></pre><div id="da-url-note" class="lc-hint"></div>
+      <b>Alert message</b><pre class="da-code" id="da-msg"></pre>
+      <p class="lc-hint">In TradingView: add your Pine strategy, open <i>Create alert</i>, choose the strategy, then paste the URL and message above.</p>
+    </div>
+    <p class="lc-hint">{% if public_url %}Public URL: {{ public_url }}{% else %}No public URL yet. TradingView needs a public https address; set one on the <a href="/webhook-relay">Webhook relay</a> page.{% endif %}</p>
+  </div>
+</div>
+
+<div class="lc-card" style="margin-top:14px;">
+  <h3 style="margin:0 0 8px;">The rules of this account <small class="lc-hint">{{ acct.stage }} · attempt #{{ acct.attempt }}</small></h3>
+  <table class="da-t"><thead><tr><th>Rule</th><th>Limit</th><th>What it means</th><th>Where you stand</th></tr></thead><tbody>
+  {% for r in acct.rules_sheet %}<tr><td><b>{{ r.name }}</b></td><td>{{ r.value }}</td><td>{{ r.plain }}</td><td>{{ r.now }}</td></tr>{% endfor %}
+  </tbody></table>
+  {% if acct.projection %}<p class="lc-hint">Estimate from your {{ acct.projection.basis_trades }} closed trades: about <b>{{ acct.projection.pass_pct }}%</b> chance to pass{% if acct.projection.days_to_pass is not none %}, around <b>{{ acct.projection.days_to_pass }}</b> trading days to go{% endif %}. A guide, not a promise.</p>
+  {% else %}<p class="lc-hint">Once 15 trades have closed, this shows an estimate of your pass chance and time to pass.</p>{% endif %}
+</div>
+
+<div class="lc-card">
+  <h3 style="margin:0 0 8px;">Trade log <small class="lc-hint">every win and loss, newest first</small></h3>
+  <table class="da-t"><thead><tr><th>#</th><th>Closed</th><th>Instrument</th><th>Side</th><th class="r">Qty</th><th class="r">P&amp;L</th><th class="r">Balance</th><th>Result</th></tr></thead><tbody id="da-trades">
+  {% for t in acct.recent_trades %}<tr><td>{{ t.n }}</td><td>{{ t.closed_at }}</td><td>{{ t.root }}</td><td>{{ t.side }}</td><td class="r">{{ t.qty }}</td>
+    <td class="r {{ 'up' if t.pnl > 0 else 'down' if t.pnl < 0 else '' }}">{{ '{:+,.2f}'.format(t.pnl) }}</td><td class="r">${{ '{:,.2f}'.format(t.balance) }}</td><td>{{ t.result|upper }}</td></tr>
+  {% else %}<tr><td colspan="8" class="lc-hint">No trades yet. Pick a strategy above and the first closed trade will show up here.</td></tr>{% endfor %}
+  </tbody></table>
+</div>
+</div>
+<script>
+(function(){
+  var tok = {{ csrf_token()|tojson }}, $ = function(id){ return document.getElementById(id); };
+  function money(v, sign){ var s = Math.abs(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); return (sign ? (v<0?'-':'+') : (v<0?'-':'')) + (sign ? '' : '$') + s; }
+  function cls(el, v){ el.classList.toggle('up', v>0); el.classList.toggle('down', v<0); }
+  $('da-deploy').addEventListener('click', function(){
+    var name = $('da-strategy').value; if (!name) { $('da-strategy').focus(); return; }
+    var btn = this; btn.disabled = true;
+    fetch('/demo-account/deploy', {method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':tok},
+      body: JSON.stringify({strategy: name, tickers: $('da-tickers').value})})
+    .then(function(r){return r.json();}).then(function(d){
+      $('da-out').hidden = false;
+      $('da-url').textContent = d.webhook_url || d.path;
+      $('da-url-note').textContent = d.url_ready ? '' : 'No public URL is set yet: put your https address in front of this path.';
+      $('da-msg').textContent = d.alert_message;
+    }).catch(function(){ $('da-url-note').textContent = 'Could not reach the app. Try again.'; $('da-out').hidden = false; })
+    .then(function(){ btn.disabled = false; });
+  });
+  // keep the numbers fresh without reloading the page (and without disturbing a half-filled form)
+  function refresh(){
+    if (document.visibilityState !== 'visible' || !$('da-root') || $('da-root').offsetParent === null) return;
+    fetch('/api/demo-account').then(function(r){return r.json();}).then(function(d){
+      var a = d.account; if (!a) return;
+      $('da-bal').textContent = money(a.balance); $('da-net').textContent = money(a.net_pnl, true); cls($('da-net'), a.net_pnl);
+      $('da-day').textContent = money(a.day_pnl, true); cls($('da-day'), a.day_pnl);
+      $('da-floor').textContent = money(a.floor); $('da-cush').textContent = money(a.cushion);
+      $('da-trades-n').textContent = a.n_trades + (a.win_rate != null ? ' · ' + a.win_rate + '%' : '');
+      $('da-target-bar').style.width = Math.min(a.target_pct, 100) + '%';
+      $('da-target-txt').textContent = 'Progress to the $' + Math.round(a.profit_target).toLocaleString() + ' target: ' + a.target_pct + '%';
+      var st = $('da-status'); st.textContent = String(a.status).toUpperCase(); st.className = 'da-badge da-' + a.status;
+    }).catch(function(){});
+  }
+  setInterval(refresh, 20000);
+})();
+</script>

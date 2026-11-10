@@ -307,7 +307,7 @@
 
       <section class="adv-sec" id="adv-ai">
         <div class="adv-h"><div class="adv-ic">&#129302;</div><div><div class="adv-t">AI assist <span class="lc-hint">(optional, off by default)</span></div>
-          <div class="adv-d">The search can ask the AI for candidate parameter values once per generation. Every suggestion goes through the same backtest, prop simulation and Monte Carlo as any other candidate &mdash; it proposes numbers for parameters that already exist, never code. Uses the provider chosen under <a href="/settings/api-keys" style="color:var(--lc-acc);">API Keys</a> (a saved Claude / OpenAI key first, Ollama as the fallback).</div></div></div>
+          <div class="adv-d">The search can ask the AI for candidate parameter values once per generation. Every suggestion goes through the same backtest, prop simulation and Monte Carlo as any other candidate &mdash; it proposes numbers for parameters that already exist, never code. Uses the provider chosen under <a href="/settings/account?tab=api-keys" style="color:var(--lc-acc);">API Keys</a> (a saved Claude / OpenAI key first, Ollama as the fallback).</div></div></div>
         <div class="adv-b">
           <label class="checkbox-row"><input type="checkbox" name="ai_enabled" id="ai_enabled" {{ 'checked' if ai_enabled else '' }}><span><b>Enable AI assist for this run</b></span></label>
           <div class="lc-adv-grid">

@@ -6,72 +6,12 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
-<style>
-  .edu-toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 20px; }
-  .edu-toc a {
-    background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px;
-    padding: 6px 14px; font-size: 12px; color: var(--text-muted); text-decoration: none;
-  }
-  .edu-toc a { display: inline-flex; align-items: center; gap: 7px; }
-  .edu-toc a .lu { width: 14px; height: 14px; color: var(--teal); opacity: .9; }
-  .edu-toc a:hover { border-color: var(--teal); color: var(--text); }
-  .edu-toc a.current { border-color: var(--teal); color: var(--text); background: rgba(var(--teal-rgb), .12); font-weight: 600; }
-  .edu-section { display: none; }
-  .edu-section.current {
-    display: block;
-    background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-lg);
-    padding: 22px; margin-bottom: 18px;
-  }
-  .edu-section .eyebrow { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-dim); font-weight: 700; }
-  .edu-section h2 { margin: 4px 0 4px; font-size: 19px; display: flex; align-items: center; gap: 10px; }
-  .edu-section h2 .edu-h-ico { flex: none; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center;
-    background: rgba(var(--teal-rgb), .14); border: 1px solid rgba(var(--teal-rgb), .28); color: var(--teal); }
-  .edu-section h2 .edu-h-ico .lu { width: 18px; height: 18px; }
-  .t58-page-header h1 .lu.edu-title-ico { width: 24px; height: 24px; color: var(--teal); display: inline-block; vertical-align: -4px; margin-right: 8px; }
-  .edu-tip, .edu-warn { display: flex; gap: 9px; align-items: flex-start; line-height: 1.55; }
-  .edu-tip .lu, .edu-warn .lu { width: 15px; height: 15px; margin-top: 2px; }
-  .edu-tip .lu { color: var(--teal); }
-  .edu-warn .lu { color: #ff9c4a; }
-  .edu-lab-tag { display: flex; align-items: center; gap: 6px; }
-  .edu-lab-tag .lu { width: 13px; height: 13px; }
-  .edu-section > p.subtitle { color: var(--text-muted); font-size: 13px; margin: 0 0 14px; }
-  .edu-lesson { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }
-  .edu-lesson:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
-  .edu-lesson h3 { font-size: 14px; margin: 0 0 8px; color: var(--text); }
-  .edu-lesson p { color: var(--text-muted); font-size: 13px; line-height: 1.65; margin: 0 0 10px; }
-  .edu-lesson ul, .edu-lesson ol { color: var(--text-muted); font-size: 13px; line-height: 1.7; padding-left: 20px; margin: 0 0 10px; }
-  .edu-lesson li { margin-bottom: 5px; }
-  .edu-tip {
-    background: rgba(var(--teal-rgb), .08); border: 1px solid rgba(var(--teal-rgb), .3);
-    border-radius: 10px; padding: 10px 14px; font-size: 12px; color: var(--text); margin: 0 0 10px;
-  }
-  .edu-warn {
-    background: rgba(255, 140, 60, .08); border: 1px solid rgba(255, 140, 60, .3);
-    border-radius: 10px; padding: 10px 14px; font-size: 12px; color: var(--text); margin: 0 0 10px;
-  }
-  .edu-example {
-    background: var(--panel-3); border: 1px dashed var(--border-light, var(--border));
-    border-radius: 10px; padding: 10px 14px; font-size: 12px; color: var(--text); margin: 0 0 10px;
-    font-style: italic;
-  }
-  .edu-see-also { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
-  .edu-see-also b { color: var(--text-muted); font-weight: 600; }
-  .edu-nav { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--border); }
-  .edu-nav button {
-    background: var(--panel-3); border: 1px solid var(--border-light); color: var(--text);
-    padding: 10px 18px; border-radius: 8px; font-size: 13px; cursor: pointer;
-  }
-  .edu-nav button:disabled { opacity: .35; cursor: default; }
-  .edu-nav button.primary { background: var(--teal); color: var(--on-teal); border-color: var(--teal); font-weight: 700; }
-  .edu-progress { font-size: 12px; color: var(--text-dim); }
-  .edu-inline-lab { margin: 14px 0 6px; border-left: 3px solid var(--teal); padding-left: 12px; }
-  .edu-inline-lab .edu-lab-tag { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--teal); font-weight: 700; margin-bottom: 6px; }
-  .edu-inline-lab .edu-lab-more { font-size: 11px; color: var(--text-dim); margin-top: -6px; }
-  .edu-inline-lab .edu-lab-more a { color: var(--teal); }
-</style>
 </head>
 <body>
 {% set active_page = 'education' %}
+{% set uni_page = 'courses' %}
+{% set uni_title = 'Learn the lab. Trust the numbers.' %}
+{% set uni_blurb = 'What the numbers and tabs in this app actually mean, and how to think quantitatively about strategy research. Not a generic trading course. If you only read one module, make it Validation Lab.' %}
 {# Lucide icon per module. (content.py keeps its emoji field because the desktop app still renders it.) #}
 {% set edu_icons = {
   'getting-started': 'rocket', 'strategy-development': 'brain', 'backtesting-fundamentals': 'chart-column',
@@ -80,25 +20,29 @@
 } %}
 <div class="t58-shell">
 {% include '_sidebar.html' %}
-<div class="t58-main">
+<div class="t58-main"><div class="uni">
 
-<div class="t58-page-header">
-  <h1><svg class="lu edu-title-ico"><use href="#lu-graduation-cap"/></svg>University</h1>
-  <p>What the numbers and tabs in this app actually mean, and how to think quantitatively about strategy
-  research -- not a generic trading course. Work through the modules below in order, or jump straight to
-  the one you need -- if you only read one, make it Validation Lab. Hands-on labs are built into the lessons they belong to, all five also live together on the <a href="#labs" style="color:var(--teal)">interactive labs</a> tab, and the <a href="#knowledge-check" style="color:var(--teal)">knowledge check</a> is the last module.</p>
-</div>
+{% include '_uni_hub.html' %}
 
-<div class="edu-toc" id="edu-module-tabs">
-  {% for section in sections %}
-  <a href="#{{ section.id }}" data-module="{{ section.id }}"><svg class="lu"><use href="#lu-{{ edu_icons.get(section.id, 'book-open') }}"/></svg>{{ loop.index }}. {{ section.title }}</a>
-  {% endfor %}
-  <a href="#labs" data-module="labs"><svg class="lu"><use href="#lu-flask-conical"/></svg>Interactive labs</a>
-  <a href="#knowledge-check" data-module="knowledge-check"><svg class="lu"><use href="#lu-circle-check"/></svg>Knowledge check</a>
-</div>
+<div class="uni-course">
+  <aside class="uni-outline" aria-label="Course outline">
+    <div class="uni-progress" aria-live="polite">
+      <div class="top"><span>Your progress</span><span id="uni-count">0 of {{ sections|length + 2 }}</span></div>
+      <div class="bar"><i id="uni-bar"></i></div>
+    </div>
+    <ul class="uni-mods" id="edu-module-tabs">
+      {% for section in sections %}
+      <li><a href="#{{ section.id }}" data-module="{{ section.id }}"><span class="n">{{ loop.index }}</span>{{ section.title }}</a></li>
+      {% endfor %}
+      <li class="sep">Practice</li>
+      <li><a href="#labs" data-module="labs"><span class="n"><svg class="lu" style="width:13px;height:13px"><use href="#lu-flask-conical"/></svg></span>Interactive labs</a></li>
+      <li><a href="#knowledge-check" data-module="knowledge-check"><span class="n"><svg class="lu" style="width:13px;height:13px"><use href="#lu-circle-check"/></svg></span>Knowledge check</a></li>
+    </ul>
+  </aside>
 
+  <div>
 {% for section in sections %}
-<div class="edu-section" id="{{ section.id }}" data-module="{{ section.id }}">
+<div class="edu-section uni-module" id="{{ section.id }}" data-module="{{ section.id }}">
   <div class="eyebrow">Module {{ loop.index }} of {{ sections|length }}</div>
   <h2><span class="edu-h-ico"><svg class="lu"><use href="#lu-{{ edu_icons.get(section.id, 'book-open') }}"/></svg></span>{{ section.title }}</h2>
   <p class="subtitle">{{ section.subtitle }}</p>
@@ -114,9 +58,9 @@
       {% elif block.kind == 'steps' %}
         <ol>{% for item in block.items %}<li>{{ item }}</li>{% endfor %}</ol>
       {% elif block.kind == 'tip' %}
-        <div class="edu-tip"><svg class="lu"><use href="#lu-lightbulb"/></svg><span>{{ block.text }}</span></div>
+        <div class="uni-callout"><svg class="lu"><use href="#lu-lightbulb"/></svg><span>{{ block.text }}</span></div>
       {% elif block.kind == 'warn' %}
-        <div class="edu-warn"><svg class="lu"><use href="#lu-triangle-alert"/></svg><span>{{ block.text }}</span></div>
+        <div class="uni-callout warn"><svg class="lu"><use href="#lu-triangle-alert"/></svg><span>{{ block.text }}</span></div>
       {% elif block.kind == 'example' %}
         <div class="edu-example">{{ block.text }}</div>
       {% endif %}
@@ -134,51 +78,60 @@
   </div>
   {% endfor %}
 
-  <div class="edu-nav">
-    <button type="button" class="edu-prev" {% if loop.first %}disabled{% endif %}>&larr; Previous module</button>
+  <div class="uni-pager">
+    <button type="button" class="edu-prev" {% if loop.first %}disabled{% endif %}>&larr; Previous</button>
     <span class="edu-progress">Module {{ loop.index }} of {{ sections|length }}</span>
     <button type="button" class="edu-next primary">{% if loop.last %}Interactive labs &rarr;{% else %}Next module &rarr;{% endif %}</button>
   </div>
 </div>
 {% endfor %}
 
-<div class="edu-section" id="labs" data-module="labs">
+<div class="edu-section uni-module" id="labs" data-module="labs">
   <div class="eyebrow">Hands-on</div>
   <h2><span class="edu-h-ico"><svg class="lu"><use href="#lu-flask-conical"/></svg></span>Interactive labs</h2>
   <p class="subtitle">Don't just read it &mdash; play with it. Drag the sliders, click the buttons, break the account, overfit a strategy on pure noise. Every number you see is computed live in your browser.</p>
   <div id="labs-host"></div>
-  <div class="edu-nav">
-    <button type="button" class="edu-prev">&larr; Previous module</button>
+  <div class="uni-pager">
+    <button type="button" class="edu-prev">&larr; Previous</button>
     <span class="edu-progress">Interactive labs</span>
     <button type="button" class="edu-next primary">Knowledge check &rarr;</button>
   </div>
 </div>
 
-<div class="edu-section" id="knowledge-check" data-module="knowledge-check">
+<div class="edu-section uni-module" id="knowledge-check" data-module="knowledge-check">
   <div class="eyebrow">Check yourself</div>
   <h2><span class="edu-h-ico"><svg class="lu"><use href="#lu-circle-check"/></svg></span>Knowledge check</h2>
   <p class="subtitle">Six quick questions on what the course covered, with an explanation after every answer. Wrong answers teach more than right ones &mdash; read the explanation either way.</p>
   <div id="quiz-host"></div>
-  <div class="edu-nav">
-    <button type="button" class="edu-prev">&larr; Previous module</button>
+  <div class="uni-pager">
+    <button type="button" class="edu-prev">&larr; Previous</button>
     <span class="edu-progress">Knowledge check</span>
     <span></span>
   </div>
 </div>
-
+  </div>
 </div>
+
+</div></div>
 </div>
 <script src="/static/t58-edu-labs.js"></script>
 <script>
   (function () {
-    var labsMounted = false, quizMounted = false;
-    var moduleIds = Array.prototype.map.call(document.querySelectorAll('.edu-section'), function (el) {
-      return el.getAttribute('data-module');
-    });
-    var tabs = document.querySelectorAll('#edu-module-tabs a[data-module]');
+    var labsMounted = false, quizMounted = false, KEY = 't58-uni-progress';
     var sections = document.querySelectorAll('.edu-section');
+    var moduleIds = Array.prototype.map.call(sections, function (el) { return el.getAttribute('data-module'); });
+    var tabs = document.querySelectorAll('#edu-module-tabs a[data-module]');
+    var done = {};
+    try { done = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { done = {}; }
 
-    function showModule(id) {
+    function paintProgress() {
+      var n = moduleIds.filter(function (id) { return done[id]; }).length;
+      document.getElementById('uni-count').textContent = n + ' of ' + moduleIds.length;
+      document.getElementById('uni-bar').style.width = (moduleIds.length ? (100 * n / moduleIds.length) : 0) + '%';
+      tabs.forEach(function (a) { a.classList.toggle('done', !!done[a.getAttribute('data-module')]); });
+    }
+
+    function showModule(id, scroll) {
       if (moduleIds.indexOf(id) === -1) id = moduleIds[0];
       if (id === 'labs' && !labsMounted && window.T58EduLabs) { labsMounted = true; T58EduLabs.mount(document.getElementById('labs-host')); }
       if (id === 'knowledge-check' && !quizMounted && window.T58EduLabs) { quizMounted = true; T58EduLabs.mountQuiz(document.getElementById('quiz-host')); }
@@ -189,45 +142,28 @@
           if (!h.getAttribute('data-mounted')) { h.setAttribute('data-mounted', '1'); T58EduLabs.mountOne(h, h.getAttribute('data-lab')); }
         });
       }
-      sections.forEach(function (el) {
-        el.classList.toggle('current', el.getAttribute('data-module') === id);
-      });
-      tabs.forEach(function (el) {
-        el.classList.toggle('current', el.getAttribute('data-module') === id);
-      });
-      document.querySelector('.t58-page-header').scrollIntoView({ behavior: 'instant', block: 'start' });
+      sections.forEach(function (el) { el.classList.toggle('current', el.getAttribute('data-module') === id); });
+      tabs.forEach(function (el) { el.classList.toggle('current', el.getAttribute('data-module') === id); });
+      if (!done[id]) { done[id] = 1; try { localStorage.setItem(KEY, JSON.stringify(done)); } catch (e) {} }
+      paintProgress();
+      var head = document.querySelector('.uni-tabs');
+      if (scroll && head && head.scrollIntoView) head.scrollIntoView({ block: 'start' });
     }
+    function go(id) { window.location.hash = id; showModule(id, true); }
 
-    tabs.forEach(function (tab) {
-      tab.addEventListener('click', function (e) {
-        e.preventDefault();
-        var id = tab.getAttribute('data-module');
-        window.location.hash = id;
-        showModule(id);
-      });
-    });
-
+    tabs.forEach(function (tab) { tab.addEventListener('click', function (e) { e.preventDefault(); go(tab.getAttribute('data-module')); }); });
     document.querySelectorAll('[data-module-link]').forEach(function (a) {
-      a.addEventListener('click', function (e) { e.preventDefault(); var id = a.getAttribute('data-module-link'); window.location.hash = id; showModule(id); });
+      a.addEventListener('click', function (e) { e.preventDefault(); go(a.getAttribute('data-module-link')); });
     });
     document.querySelectorAll('.edu-next').forEach(function (btn, i) {
-      btn.addEventListener('click', function () {
-        var next = moduleIds[i + 1];
-        if (next) { window.location.hash = next; showModule(next); }
-      });
+      btn.addEventListener('click', function () { var next = moduleIds[i + 1]; if (next) go(next); });
     });
     document.querySelectorAll('.edu-prev').forEach(function (btn, i) {
-      btn.addEventListener('click', function () {
-        var prev = moduleIds[i - 1];
-        if (prev) { window.location.hash = prev; showModule(prev); }
-      });
+      btn.addEventListener('click', function () { var prev = moduleIds[i - 1]; if (prev) go(prev); });
     });
 
-    var initial = (window.location.hash || '').replace('#', '') || moduleIds[0];
-    showModule(initial);
-    window.addEventListener('hashchange', function () {
-      showModule((window.location.hash || '').replace('#', ''));
-    });
+    showModule((window.location.hash || '').replace('#', '') || moduleIds[0], false);
+    window.addEventListener('hashchange', function () { showModule((window.location.hash || '').replace('#', ''), true); });
   })();
 </script>
 </body>

@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>User Manual — University — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+</head>
+<body>
+{% set active_page = 'education' %}
+{% set uni_page = 'manual' %}
+{% set uni_title = 'User Manual' %}
+{% set uni_blurb = 'Everything you need, in the order you will actually use it. New here? Read "Start in 5 minutes" and stop. The rest is a reference to come back to.' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main"><div class="uni">
+
+{% include '_uni_hub.html' %}
+
+<div class="man">
+  <aside class="man-side">
+    <div class="man-search"><svg class="lu"><use href="#lu-search"/></svg><input id="man-q" type="search" placeholder="Search the manual…" autocomplete="off" aria-label="Search the manual"></div>
+    <nav class="man-toc" id="man-toc" aria-label="Manual sections">
+      <a href="#quickstart"><svg class="lu"><use href="#lu-rocket"/></svg>Start in 5 minutes</a>
+      <a href="#map"><svg class="lu"><use href="#lu-layout-dashboard"/></svg>Where everything is</a>
+      <a href="#verdict"><svg class="lu"><use href="#lu-shield-check"/></svg>Reading your verdict</a>
+      <a href="#decision-guide"><svg class="lu"><use href="#lu-sparkles"/></svg>What to do next</a>
+      <a href="#saving"><svg class="lu"><use href="#lu-database"/></svg>Your data &amp; saving</a>
+      <a href="#personalize"><svg class="lu"><use href="#lu-settings"/></svg>Make it yours</a>
+      <a href="#fixes"><svg class="lu"><use href="#lu-life-buoy"/></svg>If something looks wrong</a>
+    </nav>
+  </aside>
+
+  <div class="man-main" id="man-main">
+
+<section class="man-sec" id="quickstart">
+  <div class="uni-eyebrow-sm">Start here</div>
+  <h2>Start in 5 minutes</h2>
+  <p class="lead">Goal: find out whether one strategy is good enough to risk a prop-firm evaluation fee on. You do not need to understand every setting first.</p>
+  <ol class="man-steps">
+    <li><b>Get market data.</b> ES, NQ and GC ship with the app. To add your own, open <a href="/data-center">Data Center</a> and import a CSV, or fetch data with a free key
+      (keys live in <a href="/settings/account?tab=api-keys">Account Settings &rarr; API Keys</a>). A verdict that can say FORWARD-TEST CANDIDATE needs at least 5 years of real, non-synthetic data.</li>
+    <li><b>Pick or build a strategy.</b> Go to <a href="/start-here/create">Create</a>. Use the Discovery Engine to find candidates, the visual Manual builder, or paste Python / PineScript / MQL5.
+      Saved strategies appear in the <a href="/library">Strategy Library</a>.</li>
+    <li><b>Choose your prop firm and risk.</b> On <a href="/full-pipeline">Full Pipeline</a> pick the firm preset (account size, targets and drawdown rules fill in themselves). The default risk is safe to start with.</li>
+    <li><b>Run the Full Pipeline.</b> Press Run. It checks the strategy for hidden cheating (look-ahead), overfitting, performance on data it never saw, Monte Carlo account simulations and the prop-firm rules, then gives one verdict.
+      Big datasets take a while; you can leave the page and it keeps running.</li>
+    <li><b>Read the verdict</b> (below) and follow the <b>Next step</b> button. FORWARD-TEST CANDIDATE goes on to Champion and Deploy; REJECT goes back to Optimize or the Graveyard.</li>
+  </ol>
+  <div class="uni-callout"><svg class="lu"><use href="#lu-lightbulb"/></svg><span>Everything beyond these five steps is optional extra tooling. Ignore it until you have a reason to open it.</span></div>
+</section>
+
+<section class="man-sec" id="map">
+  <div class="uni-eyebrow-sm">Navigation</div>
+  <h2>Where everything is</h2>
+  <p class="lead">The left sidebar has three blocks. Each Strategy Lab step is a single link to a page that holds all of that step's tools. Lost? Use the search box at the top of the sidebar: it finds pages, tools and strategies.</p>
+  <div class="man-map">
+    <div class="man-tile"><h3>Top of the sidebar</h3><ul>
+      <li><a href="/dashboard">Dashboard</a> &ndash; checklist and recent runs</li>
+      <li><a href="/assistant">AI Assistant</a> &ndash; news, scanner, chat</li>
+      <li><a href="/events/">Global Events</a> &ndash; headlines, calendar, regimes</li>
+      <li><a href="/journal">Trading Journal</a> and <a href="/runs">Runs</a> (every past run)</li>
+      <li><a href="/mobile-access">Mobile Access</a> &ndash; QR code for your phone</li></ul></div>
+    <div class="man-tile"><h3>Strategy Lab, seven steps</h3><ul>
+      <li><a href="/start-here/create">1 Create</a> &ndash; Discovery Engine, Manual builder, imports, AI</li>
+      <li><a href="/full-pipeline">2 Test</a> &ndash; Run &amp; Report, Payout tools, Full Pipeline</li>
+      <li><a href="/optimize-simple">3 Optimize</a> &ndash; Refine, Quick Optimize, Multi-Objective</li>
+      <li><a href="/validate-simple">4 Validate</a> &ndash; eight checks, run together or alone</li>
+      <li><a href="/champion-simple">5 Champion</a> &ndash; board, portfolio, ensemble</li>
+      <li><a href="/forward-test">6 Deploy</a> &ndash; Forward Test, Live, T58 Demo account</li>
+      <li><a href="/graveyard">7 Strategy Graveyard</a> &ndash; what failed and why</li></ul></div>
+    <div class="man-tile"><h3>Labs and investing</h3><ul>
+      <li><a href="/quant-lab">Quant Lab</a> &ndash; translators, regime selector, pricing, risk models</li>
+      <li><a href="/research-labs">Research Lab</a> &ndash; statistical-arbitrage and event studies</li>
+      <li><a href="/options-outlook">Options Outlook</a></li>
+      <li><a href="/hedge-fund">Portfolio Builder</a> and <a href="/investing">Investing</a> (paper money by default)</li></ul></div>
+    <div class="man-tile"><h3>Account</h3><ul>
+      <li><a href="/settings/account">Account Settings</a> has five tabs: Account, Notifications, API Keys, Achievements and Support</li>
+      <li><a href="/data-center">Data Center</a> &ndash; import and check market data</li>
+      <li><a href="/library">Strategy Library</a> &ndash; every saved strategy</li></ul></div>
+    <div class="man-tile"><h3>Education</h3><ul>
+      <li><a href="/education">University</a> &ndash; Courses, <a href="/education/resources">Resources</a> and this <a href="/education/manual">User Manual</a></li>
+      <li><a href="/playground">Playground</a> and <a href="/playground/library">Library</a> &ndash; breaks, books, research papers</li></ul></div>
+  </div>
+</section>
+
+<section class="man-sec" id="verdict">
+  <div class="uni-eyebrow-sm">The most important screen</div>
+  <h2>Reading your Full Pipeline verdict</h2>
+  <p class="lead">The verdict is deliberately a high bar, because a false FORWARD-TEST CANDIDATE costs you real evaluation fees. Every report headlines one of these:</p>
+  <div class="man-verdicts">
+    <div class="man-verdict ok"><b class="t">Forward-test candidate</b>The edge was confirmed on data the search never touched, survives realistic costs (doubled), beats random entries, and simulated accounts pass often enough to pay for the fee. Still a backtest: run a forward test before real money.</div>
+    <div class="man-verdict lead"><b class="t">Lead</b>Promising, but something is unproven (usually too few trades, an unconfirmed holdout, or one weak gate). The reasons list names it. Often the fix is more data or more time, not a different strategy.</div>
+    <div class="man-verdict no"><b class="t">Reject</b>A hard failure: look-ahead, a negative edge after costs, or a result that is indistinguishable from luck after counting how many versions were tried.</div>
+  </div>
+  <div class="man-acc">
+    <details><summary>What it checks, in plain words</summary><div class="body"><ul>
+      <li><b>Deflated Sharpe / PBO:</b> if you tried 5,000 variants, the best one looks great by luck. These tests ask whether it is still good <i>after</i> subtracting what luck alone would produce.</li>
+      <li><b>Out-of-sample and holdout:</b> performance on slices the optimizer never saw. Walk-forward folds and the untouched holdout are pooled, so a short holdout can confirm an edge together with the folds.</li>
+      <li><b>Expectancy after 2x costs:</b> average profit per trade (in R, the amount risked) with spreads and slippage doubled. Its lower confidence bound must stay above zero.</li>
+      <li><b>Attempt replay and random-entry null:</b> real fresh-account attempts from many real start dates, and a test against random entries with the same exits.</li>
+      <li><b>Monte Carlo account simulation:</b> chance to pass, chance to bust, chance to reach a first payout, and whether funded accounts survive.</li>
+      <li><b>Speed to payout:</b> the report shows the share of fresh accounts paid within 30 and within 45 days. A strategy a little slower than 30 days is not punished if it reliably pays within 45.</li></ul></div></details>
+    <details><summary>Why does the report list every gate, not just the first failure?</summary><div class="body">So you can see whether a candidate missed by one gate or by five. A candidate that misses exactly one gate is the best one to fix.</div></details>
+    <details><summary>How does position size get chosen?</summary><div class="body">If the strategy only uses a sliver of the firm's drawdown allowance, the pipeline scales planned risk up (never past your per-trade risk cap) and tells you it did, so slow passes are not just under-betting. This applies to that run only and is verified by a re-run.</div></details>
+  </div>
+  <div class="uni-callout warn"><svg class="lu"><use href="#lu-triangle-alert"/></svg><span><b>FORWARD-TEST CANDIDATE needs verified firm rules.</b> A prop-firm preset counts only if its rules were checked against the firm's own page in the last 30 days. If one has gone stale, re-read the firm's page and tick the <i>Rules re-verified</i> box under the rules panel. Do not tick it without actually checking.</span></div>
+</section>
+
+<section class="man-sec" id="decision-guide">
+  <div class="uni-eyebrow-sm">Decision guide</div>
+  <h2>What to do depending on your results</h2>
+  <p class="lead">The sections above are the order to click through the first time. This one is organised by decision point, for when you already have a real result in front of you. Every branch also prints live as a green &ldquo;Next step&rdquo; note right after the run that produced it, from the same logic.</p>
+  <div class="man-acc">
+    <details><summary>After your very first backtest (Run &amp; Report)</summary><div class="body"><ul>
+      <li><b>Zero trades generated</b> &ndash; don't touch risk or prop rules yet. Check the strategy's own entry logic first: too strict a condition, a timeframe mismatch, or a Manual Builder indicator combination that never fires.</li>
+      <li><b>Fewer than ~20 trades</b> &ndash; too few for Monte Carlo or a prop simulation to say much. Try a longer data range, a lower timeframe or a looser entry condition before trusting any pass probability.</li>
+      <li><b>Profit factor below 1.0</b> &ndash; this version loses money over this data. Adjust it by hand, or let the Discovery Engine explore nearby variants.</li>
+      <li><b>Max drawdown above ~40%</b> &ndash; severe for most prop-firm limits (many cap overall drawdown around 8-10%). Tighten the stop or lower risk per trade before moving on.</li>
+      <li><b>Failed the prop-firm simulation despite decent trade stats</b> &ndash; read the failure reason in the report. Daily loss limit and max drawdown are the two most common killers; re-check that the prop-firm rules match your real firm.</li>
+      <li><b>None of the above</b> &ndash; a reasonable first result. Check the eval-pass and first-payout probabilities, then promote to Full Pipeline.</li></ul></div></details>
+    <details><summary>Choosing where to start creating a strategy</summary><div class="body"><ul>
+      <li><b>You already have a setup in mind</b> (rule-based, an MS-LSD-style idea, or existing Python / PineScript / MQL5) &ndash; use the Manual builder or import it. Come back to the Discovery Engine later to see whether a variant beats your own design.</li>
+      <li><b>No specific idea yet</b> &ndash; start with the Discovery Engine. Quick is a fast first pass; Deep is meant to run for a long time and leave you a ranked list of finalists.</li></ul></div></details>
+    <details><summary>Discovery Engine results</summary><div class="body"><ul>
+      <li><b>Nothing survived</b> &ndash; try a wider family selection, more effort, or a different market.</li>
+      <li><b>Some candidates got partway but none cleared every step</b> &ndash; promote the top one into Full Pipeline anyway, or widen the search.</li>
+      <li><b>A clear finalist</b> &ndash; promote it, then run Full Pipeline for a re-validated verdict before considering a live evaluation.</li>
+      <li><b>Remember:</b> the engine's own scores are measured on the data it searched. Full Pipeline re-checks them out of sample, and a big gap between the two means overfitting, not a strong strategy.</li></ul></div></details>
+    <details><summary>Full Pipeline verdict</summary><div class="body"><ul>
+      <li><b>Forward-test candidate</b> &ndash; your strongest evidence yet, but still a backtest. Run a short forward test (MT5) or the T58 Demo account first.</li>
+      <li><b>Lead</b> &ndash; not clearly ready or clearly dead. Try Quick Optimize, or adjust risk settings and re-run. Don't take it live as-is.</li>
+      <li><b>Reject</b> &ndash; doesn't hold up. Go back to the Discovery Engine for a different candidate rather than rescuing this one.</li></ul></div></details>
+    <details><summary>Forward Test and Demo account results</summary><div class="body"><ul>
+      <li><b>Errors during the session</b> &ndash; almost always broker, connection or symbol-mapping issues, not the strategy. Resolve them and run again.</li>
+      <li><b>Zero trades triggered</b> &ndash; can be normal for a low-frequency strategy over a short window. Run longer before concluding anything.</li>
+      <li><b>Live fills diverged from the backtest</b> &ndash; compare the spread, slippage and commission assumptions with what you actually got, then re-run Full Pipeline with updated costs.</li>
+      <li><b>Ran cleanly and roughly matched the backtest</b> &ndash; your strongest evidence yet. Deploy Live is reasonable from here, at reduced size if your firm allows it.</li></ul></div></details>
+  </div>
+</section>
+
+<section class="man-sec" id="saving">
+  <div class="uni-eyebrow-sm">Your data</div>
+  <h2>Your data, your license key, and reinstalling</h2>
+  <p class="lead">Everything personal is filed in a vault under your <b>license key and the email you signed up with</b>: profile picture, username and password, API keys (sealed), accounts, background and colour choices, saved strategies, runs, reports, achievements and your liked or read research papers.</p>
+  <div class="man-acc">
+    <details open><summary>After a reinstall</summary><div class="body">Enter your license key and email on the activation screen. Your vault is restored automatically; sign in with your usual username. This works with the master key too.</div></details>
+    <details><summary>Check what is saved</summary><div class="body"><a href="/settings/account">Account Settings</a> shows a <b>Saved runs</b> card with what is filed and a one-click backup, export and import. Backups also run on their own while you work; use Export for a zip you can keep elsewhere.</div></details>
+  </div>
+  <div class="uni-callout"><svg class="lu"><use href="#lu-lightbulb"/></svg><span>Your vault is only reachable with your license key. Treat the key like a password.</span></div>
+</section>
+
+<section class="man-sec" id="personalize">
+  <div class="uni-eyebrow-sm">Settings</div>
+  <h2>Make it yours</h2>
+  <div class="man-acc">
+    <details open><summary>Look and feel</summary><div class="body">In <a href="/settings/account">Account Settings</a>: background scenes, whole-interface themes, Workspace presets, accent colours and light or dark. Some scenes and presets (Endless Sands, Coastal Italy, Bioluminescence, and the Workspace presets) are earned through achievements, and locked tiles tell you what to do.</div></details>
+    <details><summary>Notifications and Discord</summary><div class="body">Email, Discord and the weekly digest are set up on the <b>Notifications</b> tab of Account Settings. The bell beside your picture is the inbox.</div></details>
+    <details><summary>Achievements and Strategy Library</summary><div class="body">Achievements are on their own tab in Account Settings; the filters show only what you pick. The Strategy Library lets you search, tag-filter and reload any saved strategy.</div></details>
+    <details><summary>Playground and Library</summary><div class="body"><a href="/playground">Playground</a> has focus and fidget tools for breaks and never touches your strategies. <a href="/playground/library">Library</a> holds books and the research-paper shelf: read papers in the app, heart the ones you like and mark them read.</div></details>
+  </div>
+</section>
+
+<section class="man-sec" id="fixes">
+  <div class="uni-eyebrow-sm">Quick fixes</div>
+  <h2>If something looks wrong</h2>
+  <div class="man-acc">
+    <details><summary>My verdict is LEAD only because of data</summary><div class="body">The data has fewer than 5 years, contains synthetic data or still has futures contract-roll jumps. Re-import real back-adjusted data in Data Center.</div></details>
+    <details><summary>The Discovery Engine passes a strategy but Full Pipeline fails it</summary><div class="body">Make sure the prop firm and risk you picked for the search match the ones on Full Pipeline. Otherwise it searched under different rules. A modest gap is expected, because Full Pipeline re-checks on data the search never touched.</div></details>
+    <details><summary>A run seems stuck</summary><div class="body">Press Stop then Start. Hung workers recover automatically and a restart is always safe.</div></details>
+    <details><summary>Settings or runs are missing after a reinstall</summary><div class="body">Re-enter your license key and email, then check the Saved runs card in Account Settings.</div></details>
+    <details><summary>I need more help</summary><div class="body">Open the <b>Support</b> tab in <a href="/settings/account?tab=support">Account Settings</a>, or ask the <a href="/assistant">AI Assistant</a>.</div></details>
+  </div>
+</section>
+
+<div class="man-empty" id="man-empty">Nothing in the manual matches that search.</div>
+  </div>
+</div>
+
+</div></div>
+</div>
+<script>
+(function () {
+  var q = document.getElementById('man-q'), secs = [].slice.call(document.querySelectorAll('.man-sec')), empty = document.getElementById('man-empty');
+  var links = [].slice.call(document.querySelectorAll('#man-toc a'));
+  function filter() {
+    var t = q.value.trim().toLowerCase(), shown = 0;
+    secs.forEach(function (s) {
+      var hit = !t || s.textContent.toLowerCase().indexOf(t) !== -1;
+      s.hidden = !hit; if (hit) shown++;
+      if (t && hit) [].forEach.call(s.querySelectorAll('details'), function (d) { d.open = d.textContent.toLowerCase().indexOf(t) !== -1; });
+    });
+    empty.classList.toggle('on', !shown);
+  }
+  q.addEventListener('input', filter);
+  if ('IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function (es) {
+      es.forEach(function (e) { if (e.isIntersecting) links.forEach(function (a) { a.classList.toggle('on', a.getAttribute('href') === '#' + e.target.id); }); });
+    }, { rootMargin: '-20% 0px -65% 0px' });
+    secs.forEach(function (s) { io.observe(s); });
+  }
+  links.forEach(function (a) { a.addEventListener('click', function (e) {
+    var t = document.querySelector(a.getAttribute('href')); if (!t) return;
+    e.preventDefault(); q.value = ''; filter(); t.scrollIntoView({ behavior: 'smooth', block: 'start' }); history.replaceState(null, '', a.getAttribute('href'));
+  }); });
+})();
+</script>
+</body>
+</html>
