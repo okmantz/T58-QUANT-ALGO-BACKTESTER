@@ -30,3 +30,9 @@ tests/packaging/test_ci_lanes.py
 # licensing and the activation-first gate
 tests/licensing/
 tests/web/test_web_license_gate.py
+
+# 30-day prop research initiative (2026-11-10)
+tests/research/
+tests/portfolio/
+tests/discovery/test_opportunity_scanner.py
+tests/validation/test_prop30_validation.py

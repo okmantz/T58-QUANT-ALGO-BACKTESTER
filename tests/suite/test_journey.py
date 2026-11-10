@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -18,10 +18,15 @@ def iso(tmp_path, monkeypatch):
     return tmp_path
 
 
+def _recent(i):
+    """A date inside the journey's rolling window whatever day the suite runs (hard-coded 2026-10-xx dates aged out of it)."""
+    return (date.today() - timedelta(days=i % 27 + 1)).isoformat()
+
+
 def trades(n, pnl=10.0, **kw):
     for i in range(n):
-        journal_store.upsert_trade({"id": f"t{i}", "date": f"2026-10-{i % 27 + 1:02d}", "instrument": "MES", "pnl": pnl, "source": "Forward Test",
-                                    "exitTime": f"2026-10-{i % 27 + 1:02d}T15:00:00+00:00", **kw})
+        journal_store.upsert_trade({"id": f"t{i}", "date": _recent(i), "instrument": "MES", "pnl": pnl, "source": "Forward Test",
+                                    "exitTime": f"{_recent(i)}T15:00:00+00:00", **kw})
 
 
 def test_fresh_user_starts_at_strategy_with_labelled_example(iso):
@@ -43,7 +48,7 @@ def test_forward_requirement_counts_down(iso, monkeypatch):
 
 def test_violating_trades_do_not_qualify(iso):
     trades(5)
-    journal_store.upsert_trade({"id": "bad", "date": "2026-10-02", "pnl": 5, "source": "Forward Test", "violations": ["Oversized"]})
+    journal_store.upsert_trade({"id": "bad", "date": _recent(1), "pnl": 5, "source": "Forward Test", "violations": ["Oversized"]})
     from app.journey.state import _forward_inputs
     f = _forward_inputs()
     assert f["trades"] == 6 and f["qualifying"] == 5
