@@ -1,4 +1,4 @@
-"""T58 market data pack: one canonical, versioned NQ / ES / MNQ / MES dataset with a FROZEN sealed window.
+"""T58 market data pack: one canonical, versioned ES / NQ / GC (plus MES / MNQ / MGC) dataset with a FROZEN sealed window.
 
 Why: when every user (and every run) carves its own "last 20%" holdout from whatever file it loaded, the holdout drifts as data is
 appended and nobody can say which bars were ever used to choose a strategy. The pack fixes the boundary on a calendar date
@@ -7,7 +7,7 @@ for the sealed window knows the data changed under it and must treat prior seale
 
 * Dev window    : everything before ``SEALED_FROM`` (>= 5 years, so the READY data gate can pass).
 * Sealed window : ``SEALED_FROM`` onward. Read it through ``app.discovery_engine.holdout.SealedLedger`` (each read is a booked look).
-* MES / MNQ     : the same price series as ES / NQ with a tenth of the dollars per point -- one canonical history, two contract specs.
+* MES / MNQ / MGC : the same price series as ES / NQ / GC with a tenth of the dollars per point -- one canonical history, two contract specs.
 * Frozen        : ``python scripts/freeze_data_pack.py`` writes the manifest. ``verify()`` compares the files on disk against it.
 """
 from __future__ import annotations
@@ -29,6 +29,8 @@ PACK_SYMBOLS = {
     "NQ": ("NQ1!/futures_NQ.F_1m.parquet", "NQ", 20.0),
     "MES": ("ES1!/futures_ES.F_1m.parquet", "ES", 5.0),
     "MNQ": ("NQ1!/futures_NQ.F_1m.parquet", "NQ", 2.0),
+    "GC": ("GC1!/futures_GC.F_1m.parquet", "GC", 100.0),
+    "MGC": ("GC1!/futures_GC.F_1m.parquet", "GC", 10.0),
 }
 
 
@@ -135,7 +137,7 @@ def verify(root: Path | None = None, loader=_default_loader) -> dict:
 
 
 def load_split(symbol: str, root: Path | None = None, loader=_default_loader) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """(dev, sealed) bars for NQ / ES / MNQ / MES. MES/MNQ share the ES/NQ price history."""
+    """(dev, sealed) bars for ES / NQ / GC / MES / MNQ / MGC. The micros share their parent contract's price history."""
     sym = symbol.upper()
     if sym not in PACK_SYMBOLS:
         raise KeyError(f"{symbol} is not in the T58 data pack ({', '.join(PACK_SYMBOLS)})")
