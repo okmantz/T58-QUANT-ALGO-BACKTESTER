@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Evaluation Guardian — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<link rel="stylesheet" href="/static/t58-suite.css">
+<style>
+  .g-layout { display: grid; grid-template-columns: minmax(280px, 380px) 1fr; gap: 18px; align-items: start; }
+  @media (max-width: 900px) { .g-layout { grid-template-columns: 1fr; } }
+  .g-check { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 10px 0; border-top: 1px solid var(--border); }
+  .g-action { border: 1px solid var(--border-light); border-radius: 12px; padding: 14px; }
+  .g-action.ok { border-color: rgba(var(--ok-rgb), .6); } .g-action.warn { border-color: rgba(240, 180, 41, .7); } .g-action.bad { border-color: rgba(var(--coral-rgb), .7); }
+  .s-field select { display: block; width: 100%; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header"><h1>Evaluation Guardian</h1><p>Watches every limit on your account (daily loss, drawdown, target, consistency, days, contracts, exposure, news and trading hours) and acts before one is broken.</p></div>
+<div class="s-wrap">
+  <div class="s-h2">Live account</div>
+  <div class="s-card" id="live"><div class="s-note">Loading...</div></div>
+  <div class="s-h2">Check an account</div>
+  <div class="g-layout">
+    <div class="s-card" id="form"></div>
+    <div id="result"></div>
+  </div>
+  <div class="s-strip" style="margin-top:18px">The values shown in the example are hypothetical and do not describe any real firm or account. Rules come from the firm preset or the numbers you type; firms change rules, so confirm them on the firm's own page. The Guardian adds brakes on top of the firm's own risk engine and does not replace it.</div>
+  <div style="margin-top:12px"><span class="t58-brand">T58</span></div>
+</div></div></div>
+<script src="/static/t58-suite.js"></script>
+<script>
+(function () {
+  var el = T58.el, money = T58.money, F = {};
+  var EX = { account_size: 50000, profit_target: 4000, daily_loss_limit: 2000, max_drawdown: 3300, balance: 51250, equity: 50350, start_of_day_balance: 51250, peak_equity: 51250, open_contracts: 1, trading_days: 4 };
+  function build() {
+    var box = document.getElementById('form'); box.textContent = '';
+    var pl = el('select', 's-select'); var o0 = el('option', null, 'Type the limits myself'); o0.value = ''; pl.appendChild(o0); F.preset_key = pl;
+    fetch('/api/prop-presets/keys').then(function (r) { return r.json(); }).then(function (d) { d.presets.forEach(function (p) { var o = el('option', null, p.label); o.value = p.key; pl.appendChild(o); }); });
+    var l = el('label', 's-field', 'Firm plan'); l.appendChild(pl); box.appendChild(l);
+    var sp = el('select', 's-select'); [['balanced', 'Balanced'], ['conservative', 'Conservative'], ['accelerated', 'Accelerated']].forEach(function (x) { var o = el('option', null, x[1]); o.value = x[0]; sp.appendChild(o); }); F.preset = sp;
+    var l2 = el('label', 's-field', 'Risk preset'); l2.appendChild(sp); box.appendChild(l2);
+    var fields = [['account_size', 'Account size'], ['profit_target', 'Profit target ($)'], ['daily_loss_limit', 'Daily loss limit ($)'], ['max_drawdown', 'Max drawdown ($)'], ['balance', 'Balance'], ['equity', 'Equity (with open P&L)'], ['start_of_day_balance', 'Start-of-day balance'], ['peak_equity', 'Equity high (trailing floor)'], ['open_contracts', 'Open contracts'], ['trading_days', 'Trading days so far']];
+    fields.forEach(function (f) { var x = T58.field(f[1], 'number', EX[f[0]]); F[f[0]] = x.input; box.appendChild(x.label); });
+    var nl = el('label', 's-field'); var nc = el('input'); nc.type = 'checkbox'; nc.style.cssText = 'width:auto;display:inline;margin-right:8px'; nl.appendChild(nc); nl.appendChild(document.createTextNode('Enforce news restrictions')); F.news = nc; box.appendChild(nl);
+    var row = el('div', 's-row'); var go = el('button', 's-btn primary', 'Check'); go.type = 'button'; go.addEventListener('click', run); row.appendChild(go);
+    var ex = el('button', 's-btn', 'Load example'); ex.type = 'button'; ex.addEventListener('click', function () { pl.value = ''; Object.keys(EX).forEach(function (k) { F[k].value = EX[k]; }); run(); }); row.appendChild(ex); box.appendChild(row);
+  }
+  function run() {
+    var s = {}; ['balance', 'equity', 'start_of_day_balance', 'peak_equity', 'open_contracts', 'trading_days'].forEach(function (k) { s[k] = F[k].value; });
+    var body = { preset_key: F.preset_key.value, preset: F.preset.value, news_restricted: F.news.checked, state: s, account_size: F.account_size.value, profit_target: F.profit_target.value, daily_loss_limit: F.daily_loss_limit.value, max_drawdown: F.max_drawdown.value, drawdown_type: 'trailing' };
+    T58.api('POST', '/api/guardian/evaluate', body).then(function (d) { if (!d.ok) { T58.toast(d.error); return; } show(document.getElementById('result'), d.report, true); });
+  }
+  function show(box, r, withNote) {
+    box.textContent = '';
+    var m = r.metrics, top = el('div', 's-card');
+    top.appendChild(T58.kv([['Balance', money(m.balance)], ['Daily loss remaining', money(m.daily_loss_remaining)], ['Drawdown cushion', money(m.drawdown_cushion)], ['Target remaining', money(m.profit_target_remaining)]]));
+    box.appendChild(top);
+    var a = r.action, ac = el('div', 'g-action ' + T58.levelKind(a.level)); ac.style.margin = '14px 0';
+    var h = el('div', 's-row'); h.appendChild(el('strong', null, a.label)); h.appendChild(T58.badge(a.level.toUpperCase(), T58.levelKind(a.level))); ac.appendChild(h);
+    ac.appendChild(el('div', 's-note', a.can_open ? ('New entries allowed at ' + Math.round(a.size_multiplier * 100) + '% size.') : 'No new entries.'));
+    a.reasons.forEach(function (x) { ac.appendChild(el('div', null, x)).style.fontSize = '13px'; }); box.appendChild(ac);
+    var c = el('div', 's-card');
+    r.checks.forEach(function (k) {
+      var row = el('div', 'g-check'); row.appendChild(el('strong', null, k.label)); row.appendChild(T58.badge(k.level === 'ok' ? 'OK' : k.level.toUpperCase(), T58.levelKind(k.level)));
+      var t = el('div', 's-note', k.message); row.appendChild(t); if (k.used != null) { var mt = T58.meter(k.used, T58.levelKind(k.level)); mt.style.gridColumn = '1 / -1'; row.appendChild(mt); } c.appendChild(row);
+    });
+    box.appendChild(c);
+  }
+  function live() {
+    fetch('/api/guardian/latest').then(function (r) { return r.json(); }).then(function (d) {
+      var box = document.getElementById('live'); box.textContent = '';
+      if (!d.report) { box.appendChild(el('div', 's-note', 'No live account is reporting. When a deployment runs with the Guardian on, its limits appear here and update every few seconds.')); }
+      else { var w = el('div'); show(w, d.report); box.appendChild(w); }
+      box.appendChild(el('div', 's-note', d.news_coverage.text));
+    });
+  }
+  build(); run(); live(); setInterval(live, 10000);
+})();
+</script>
+</body></html>

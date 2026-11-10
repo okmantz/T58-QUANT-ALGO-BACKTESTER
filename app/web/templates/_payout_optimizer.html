@@ -1,0 +1,53 @@
+{# Automated Payout Optimization + Evaluation Guardian settings. Included on the page where a deployment is started; posts its fields with the form. #}
+<link rel="stylesheet" href="/static/t58-suite.css">
+<div class="{{ po_card_class|default('card') }}" id="po-card">
+  <h2>Payout optimizer &amp; Guardian</h2>
+  <p class="s-note" style="margin:0 0 10px">Risk is tuned to what the account needs at each stage. Presets change how big and how early the brakes come; they never go past the firm's hard limits, and the Guardian can only add brakes.</p>
+  <div class="s-row" id="po-presets" role="radiogroup" aria-label="Risk preset"></div>
+  <input type="hidden" name="payout_preset" id="po-preset" value="balanced">
+  <div class="s-note" id="po-blurb" style="margin:8px 0"></div>
+  <div class="row" style="margin-top:8px">
+    <div><label for="po-stage">Lifecycle stage</label>
+      <select name="payout_stage" id="po-stage">
+        <option value="evaluation">Evaluation: pass without excessive breach risk</option>
+        <option value="newly_funded">Newly funded: preserve account survival</option>
+        <option value="approaching_payout">Approaching payout: satisfy payout conditions</option>
+        <option value="post_first_payout">After first payout: preserve the cushion</option>
+        <option value="scaling">Scaling: maximize sustainable withdrawals</option>
+      </select></div>
+    <div><label for="po-firm">Firm rules to enforce</label>
+      <select name="firm_preset" id="po-firm"><option value="">Use the limits entered above</option></select></div>
+  </div>
+  <label style="display:flex;gap:8px;align-items:center;margin-top:10px"><input type="checkbox" name="guardian_on" value="1" checked style="width:auto"> Evaluation Guardian on (warn, reduce, block, flatten, halt for the day)</label>
+  <label style="display:flex;gap:8px;align-items:center;margin-top:6px"><input type="checkbox" name="enforce_news" value="1" checked style="width:auto"> Block entries around high-impact news (economic calendar)</label>
+  <label style="display:flex;gap:8px;align-items:center;margin-top:6px"><input type="checkbox" name="optimizer_sizes_risk" value="1" style="width:auto"> Let the optimizer set per-trade risk (otherwise your risk setting stays)</label>
+  <div class="s-note" style="margin:12px 0 6px">How per-trade risk changes by stage on a fresh account with the limits above. Illustrative: it moves with your balance and cushion while you trade.</div>
+  <table class="s-table" id="po-table"><thead><tr><th>Stage</th><th>Risk / trade</th><th>Day stop</th><th>Notes</th></tr></thead><tbody></tbody></table>
+</div>
+<script>
+(function () {
+  var PRESETS = [['conservative', 'Conservative'], ['balanced', 'Balanced'], ['accelerated', 'Accelerated']];
+  var BLURB = { conservative: 'Smaller size, earlier warnings. Slower, but built to keep the account alive.', balanced: 'The Rulebook v2 policy as written.', accelerated: 'Bigger size and later brakes to reach targets faster. Still stopped by the hard limits.' };
+  var card = document.getElementById('po-card'), hid = document.getElementById('po-preset'), box = document.getElementById('po-presets');
+  function money(n) { return '$' + Math.round(n).toLocaleString(); }
+  function val(name, d) { var e = document.querySelector('[name="' + name + '"]'); return e && e.value !== '' ? e.value : d; }
+  function setPreset(k) {
+    hid.value = k; document.getElementById('po-blurb').textContent = BLURB[k];
+    box.querySelectorAll('button').forEach(function (b) { b.classList.toggle('on', b.dataset.k === k); b.setAttribute('aria-checked', b.dataset.k === k); });
+    refresh();
+  }
+  PRESETS.forEach(function (p) { var b = document.createElement('button'); b.type = 'button'; b.className = 's-chip'; b.dataset.k = p[0]; b.textContent = p[1]; b.setAttribute('role', 'radio'); b.addEventListener('click', function () { setPreset(p[0]); }); box.appendChild(b); });
+  function refresh() {
+    var q = 'preset=' + hid.value + '&account_size=' + val('account_size', 100000) + '&daily_loss=' + val('daily_loss', 5) + '&max_dd=' + val('max_dd', 10);
+    fetch('/api/payout-optimizer/stages?' + q).then(function (r) { return r.json(); }).then(function (d) {
+      if (!d.ok) return; var tb = document.querySelector('#po-table tbody'); tb.textContent = '';
+      d.stages.forEach(function (s) { var tr = document.createElement('tr'); [s.label, money(s.risk_per_trade), money(s.day_stop), s.clamps.length ? 'Capped by hard limit' : ''].forEach(function (x) { var td = document.createElement('td'); td.textContent = x; tr.appendChild(td); }); tb.appendChild(tr); });
+    }).catch(function () {});
+  }
+  ['account_size', 'daily_loss', 'max_dd'].forEach(function (n) { var e = document.querySelector('[name="' + n + '"]'); if (e) e.addEventListener('change', refresh); });
+  fetch('/api/prop-presets/keys').then(function (r) { return r.json(); }).then(function (d) {
+    var sel = document.getElementById('po-firm'); (d.presets || []).forEach(function (p) { var o = document.createElement('option'); o.value = p.key; o.textContent = p.label; sel.appendChild(o); });
+  }).catch(function () {});
+  setPreset('balanced');
+})();
+</script>

@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Accounts — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<link rel="stylesheet" href="/static/t58-suite.css">
+</head>
+<body>
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header"><h1>Accounts</h1><p>Every evaluation and funded account in one place: status, payouts, the payout calendar, what you have spent, and strategy health.</p></div>
+<div class="s-wrap">
+  <div id="health"></div>
+  <div class="s-bar" id="tabs"></div>
+  <div id="view"></div>
+  <div style="margin-top:24px"><span class="t58-brand">T58</span></div>
+</div></div></div>
+<script src="/static/t58-suite.js"></script>
+<script>
+(function () {
+  var el = T58.el, money = T58.money, D = null, tab = 'accounts';
+  var TABS = [['accounts', 'Accounts'], ['calendar', 'Payout calendar'], ['costs', 'Challenge costs'], ['copier', 'Copier']];
+  function load() { return fetch('/api/desk').then(function (r) { return r.json(); }).then(function (d) { D = d; render(); }); }
+  function render() {
+    var t = document.getElementById('tabs'); t.textContent = '';
+    TABS.forEach(function (x) { var b = el('button', 's-chip' + (tab === x[0] ? ' on' : ''), x[1]); b.type = 'button'; b.addEventListener('click', function () { tab = x[0]; render(); }); t.appendChild(b); });
+    var h = document.getElementById('health'); h.textContent = '';
+    var bad = D.health_alerts.filter(function (a) { return a.level !== 'ok'; });
+    if (bad.length) { var c = el('div', 's-card'); c.style.marginBottom = '14px'; c.appendChild(el('strong', null, 'Strategy health')); bad.forEach(function (a) { var r = el('div', 's-row'); r.appendChild(T58.badge(a.level.toUpperCase(), T58.levelKind(a.level))); r.appendChild(el('span', null, a.title + '. ' + a.detail)); c.appendChild(r); }); h.appendChild(c); }
+    var v = document.getElementById('view'); v.textContent = '';
+    ({ accounts: viewAccounts, calendar: viewCalendar, costs: viewCosts, copier: viewCopier })[tab](v);
+  }
+  function act(label, fn, kind) { var b = el('button', 's-btn sm', label); b.type = 'button'; b.addEventListener('click', fn); return b; }
+  function put(id, body) { return T58.api('PUT', '/api/desk/accounts/' + id, body).then(function (r) { if (!r.ok) T58.toast(r.error); return load(); }); }
+  function viewAccounts(v) {
+    var e = D.economics, top = el('div', 's-card'); top.appendChild(el('div', 's-note', e.headline));
+    top.appendChild(T58.kv([['Fees spent', money(e.fees_spent)], ['Pass rate', e.pass_rate == null ? '—' : Math.round(e.pass_rate * 100) + '%'], ['Payouts', money(e.payouts_received)], ['Net', money(e.net, true)], ['Common bust cause', e.most_common_bust_label || '—']]));
+    v.appendChild(top);
+    var bar = el('div', 's-bar'); bar.style.marginTop = '14px'; var add = el('button', 's-btn primary', 'Add account'); add.type = 'button'; add.addEventListener('click', addAccount); bar.appendChild(add); v.appendChild(bar);
+    var wrap = el('div', 's-table-wrap'), t = el('table', 's-table'); var hd = el('tr'); ['Account', 'Stage', 'Status', 'Fee', 'Bought', 'Payouts', ''].forEach(function (x) { hd.appendChild(el('th', null, x)); }); t.appendChild(hd);
+    D.accounts.forEach(function (a) {
+      var tr = el('tr'); tr.appendChild(el('td', null, a.label)); tr.appendChild(el('td', null, a.stage)); var s = el('td'); s.appendChild(T58.badge(a.status, a.status === 'passed' ? 'ok' : (a.status === 'failed' ? 'bad' : ''))); tr.appendChild(s);
+      tr.appendChild(el('td', null, money(a.fee))); tr.appendChild(el('td', null, a.purchased_on)); tr.appendChild(el('td', null, money(a.payouts.reduce(function (n, p) { return n + p.amount; }, 0))));
+      var td = el('td'); td.style.whiteSpace = 'normal';
+      if (a.stage === 'evaluation' && a.status === 'active') { td.appendChild(act('Passed', function () { put(a.id, { status: 'passed' }); })); }
+      if (a.stage === 'evaluation' && a.status === 'passed') { td.appendChild(act('Funded', function () { put(a.id, { stage: 'funded', status: 'active', funded_on: new Date().toISOString().slice(0, 10) }); })); }
+      if (a.status === 'active') { td.appendChild(act('Failed', function () { failed(a); })); td.appendChild(act('Reset', function () { reset(a); })); }
+      if (a.stage === 'funded') { td.appendChild(act('Log payout', function () { payout(a); })); }
+      td.appendChild(act('Delete', function () { if (confirm('Delete ' + a.label + '? Its attempts stay in My Attempts only if you keep them; this removes the account row.')) T58.api('DELETE', '/api/desk/accounts/' + a.id).then(load); }));
+      td.querySelectorAll('button').forEach(function (b) { b.style.marginRight = '4px'; }); tr.appendChild(td); t.appendChild(tr);
+    });
+    if (!D.accounts.length) { var r = el('tr'), c = el('td', null, 'No accounts yet. Add one here or press "I bought this" on Buy Challenge.'); c.colSpan = 7; r.appendChild(c); t.appendChild(r); }
+    wrap.appendChild(t); v.appendChild(wrap);
+  }
+  function addAccount() {
+    T58.modal('Add account', function (m, close) {
+      var fs = { firm: T58.field('Firm', 'text', ''), label: T58.field('Label', 'text', ''), size: T58.field('Account size', 'number', 50000), fee: T58.field('Fee paid', 'number', 0), platform: T58.field('Platform (optional)', 'text', ''), strategy: T58.field('Strategy (optional)', 'text', '') };
+      Object.keys(fs).forEach(function (k) { m.appendChild(fs[k].label); });
+      var go = el('button', 's-btn primary', 'Add'); go.type = 'button'; go.addEventListener('click', function () { var b = {}; Object.keys(fs).forEach(function (k) { b[k] = fs[k].input.value; }); T58.api('POST', '/api/desk/accounts', b).then(function (r) { if (r.ok) { close(); load(); } else T58.toast(r.error); }); }); m.appendChild(go);
+    });
+  }
+  function causeSelect() { var s = el('select', 's-select'); Object.keys(D.bust_causes).forEach(function (k) { var o = el('option', null, D.bust_causes[k]); o.value = k; s.appendChild(o); }); return s; }
+  function failed(a) { T58.modal('Mark ' + a.label + ' failed', function (m, close) { var s = causeSelect(); var l = el('label', 's-field', 'What ended it?'); l.appendChild(s); m.appendChild(l); var go = el('button', 's-btn primary', 'Save'); go.type = 'button'; go.addEventListener('click', function () { put(a.id, { status: 'failed', bust_cause: s.value }).then(close); }); m.appendChild(go); }); }
+  function reset(a) { T58.modal('Reset ' + a.label, function (m, close) { var s = causeSelect(), f = T58.field('Reset fee paid', 'number', 0); var l = el('label', 's-field', 'What ended the old attempt?'); l.appendChild(s); m.appendChild(l); m.appendChild(f.label); var go = el('button', 's-btn primary', 'Reset'); go.type = 'button'; go.addEventListener('click', function () { T58.api('POST', '/api/desk/accounts/' + a.id + '/reset', { fee: f.input.value, bust_cause: s.value }).then(function (r) { if (!r.ok) T58.toast(r.error); close(); load(); }); }); m.appendChild(go); }); }
+  function payout(a) { T58.modal('Log a payout', function (m, close) { var d = T58.field('Date', 'date', new Date().toISOString().slice(0, 10)), n = T58.field('Amount received', 'number', ''); m.appendChild(d.label); m.appendChild(n.label); var go = el('button', 's-btn primary', 'Save'); go.type = 'button'; go.addEventListener('click', function () { T58.api('POST', '/api/desk/accounts/' + a.id + '/payouts', { date: d.input.value, amount: n.input.value }).then(function (r) { if (!r.ok) T58.toast(r.error); close(); load(); }); }); m.appendChild(go); }); }
+  function viewCalendar(v) {
+    var c = el('div', 's-card'); c.appendChild(el('div', 's-note', 'Dates are estimates from each firm\'s payout frequency, counting trade days as weekdays. Confirm in the firm\'s own payout dashboard.'));
+    if (!D.calendar.length) c.appendChild(el('div', 's-note', 'No funded accounts yet.'));
+    D.calendar.forEach(function (e) { var r = el('div', 's-row'); r.style.cssText = 'padding:8px 0;border-top:1px solid var(--border);justify-content:space-between'; var l = el('div'); l.appendChild(el('strong', null, e.label)); l.appendChild(el('div', 's-note', e.note)); r.appendChild(l);
+      r.appendChild(T58.badge(e.date ? (e.kind === 'eligible' ? 'Eligible now (' + e.date + ')' : e.date + ' · in ' + e.days_away + ' days') : 'No date', e.kind === 'eligible' ? 'ok' : '')); c.appendChild(r); });
+    var dl = el('a', 's-btn sm', 'Download .ics'); dl.href = '/api/desk/payout-calendar.ics'; dl.style.marginTop = '10px'; c.appendChild(dl); v.appendChild(c);
+  }
+  function viewCosts(v) {
+    var c = D.costs, top = el('div', 's-card'); top.appendChild(T58.kv([['Total spent', money(c.total_spent)], ['Payouts', money(c.total_payouts)], ['Net', money(c.net, true)], ['To break even', money(c.to_break_even)], ['Subscriptions', money(c.subscriptions_total)]])); v.appendChild(top);
+    var bar = el('div', 's-bar'); bar.style.marginTop = '14px'; var add = el('button', 's-btn primary', 'Log a cost'); add.type = 'button'; add.addEventListener('click', function () {
+      T58.modal('Log a cost', function (m, close) { var k = el('select', 's-select'); ['purchase', 'reset', 'activation', 'subscription', 'other'].forEach(function (x) { var o = el('option', null, x); o.value = x; k.appendChild(o); }); var l = el('label', 's-field', 'Kind'); l.appendChild(k); m.appendChild(l);
+        var f = T58.field('Firm', 'text', ''), a = T58.field('Amount', 'number', ''), d = T58.field('Date', 'date', new Date().toISOString().slice(0, 10)); [f, a, d].forEach(function (x) { m.appendChild(x.label); });
+        var go = el('button', 's-btn primary', 'Save'); go.type = 'button'; go.addEventListener('click', function () { T58.api('POST', '/api/desk/costs', { kind: k.value, firm: f.input.value, amount: a.input.value, date: d.input.value }).then(function (r) { if (!r.ok) T58.toast(r.error); close(); load(); }); }); m.appendChild(go); });
+    }); bar.appendChild(add); v.appendChild(bar);
+    var wrap = el('div', 's-table-wrap'), t = el('table', 's-table'), hd = el('tr'); ['Month', 'Spent', 'Payouts', 'Net', 'Cumulative'].forEach(function (x) { hd.appendChild(el('th', null, x)); }); t.appendChild(hd);
+    c.months.forEach(function (m) { var tr = el('tr'); [m.month, money(m.spent), money(m.payouts), money(m.net, true), money(m.cumulative_net, true)].forEach(function (x) { tr.appendChild(el('td', null, x)); }); t.appendChild(tr); });
+    if (!c.months.length) { var r = el('tr'), td = el('td', null, 'No costs logged yet.'); td.colSpan = 5; r.appendChild(td); t.appendChild(r); }
+    wrap.appendChild(t); v.appendChild(wrap);
+    var byf = el('div', 's-card'); byf.style.marginTop = '14px'; byf.appendChild(el('strong', null, 'By firm')); Object.keys(c.by_firm).forEach(function (k) { var r = el('div', 's-row'); r.style.justifyContent = 'space-between'; r.appendChild(el('span', null, k)); r.appendChild(el('span', null, money(c.by_firm[k]))); byf.appendChild(r); }); v.appendChild(byf);
+  }
+  function viewCopier(v) {
+    var c = el('div', 's-card'); c.appendChild(el('strong', null, 'Strategy Copier'));
+    c.appendChild(el('div', 's-note', 'One strategy trades on a leader account and mirrors to follower accounts, each sized on its own balance and each held to its own firm\'s rules. Set it up on the Deploy page; this panel shows the group while it is running.'));
+    var body = el('div', 's-note', 'Checking...'); c.appendChild(body);
+    var go = el('a', 's-btn primary', 'Open Deploy Live'); go.href = '/deploy-live'; go.style.alignSelf = 'flex-start'; c.appendChild(go); v.appendChild(c);
+    fetch('/deploy-live/status.json').then(function (r) { return r.json(); }).then(function (s) {
+      body.textContent = '';
+      if (!s || !s.running) { body.textContent = 'No live session is running.'; return; }
+      body.appendChild(document.createTextNode('Leader on ' + s.platform + ': balance ' + money(s.balance) + ', ' + s.n_trades_closed + ' trades closed.'));
+      (s.followers || []).forEach(function (f) { var r = el('div', 's-row'); r.appendChild(el('strong', null, f.nickname || f.label || 'Follower')); r.appendChild(el('span', 's-note', f.state || f.status || '')); body.appendChild(r); });
+      if (s.guardian) { var g = el('div', 's-row'); g.appendChild(T58.badge('Guardian ' + s.guardian.level, T58.levelKind(s.guardian.level))); g.appendChild(el('span', 's-note', s.guardian.headline)); body.appendChild(g); }
+    }).catch(function () { body.textContent = 'Live status is not available (live deployment is disabled or locked).'; });
+  }
+  load();
+})();
+</script>
+</body></html>

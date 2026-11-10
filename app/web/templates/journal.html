@@ -89,7 +89,7 @@
 (function () {
   'use strict';
   var S = { settings: null, trades: [], stats: null, tab: 'overview', editing: null };
-  var TABS = [['overview', 'Overview'], ['log', 'Trade Log'], ['playbooks', 'Playbooks'], ['tags', 'Tags'], ['analytics', 'Analytics']];
+  var TABS = [['overview', 'Overview'], ['log', 'Trade Log'], ['playbooks', 'Playbooks'], ['tags', 'Tags'], ['analytics', 'Analytics'], ['behavior', 'Behavior'], ['stats', 'Statistics'], ['attempts', 'My Attempts']];
   var PALETTE = ['#E8A33D', '#3FD1A0', '#5B9BD5', '#B285E0', '#E07BA6', '#E0913D', '#F0616D', '#4FC3D9', '#8FCB4A', '#9AA3B2'];
   var view = document.getElementById('view');
 
@@ -100,7 +100,7 @@
     return fetch(url, { method: method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }).then(function (r) { return r.json(); });
   }
   function load() {
-    return fetch('/api/journal').then(function (r) { return r.json(); }).then(function (d) { S.settings = d.settings; S.trades = d.trades; S.stats = d.stats; render(); });
+    return fetch('/api/journal/sync', { method: 'POST' }).catch(function () {}).then(function () { return fetch('/api/journal'); }).then(function (r) { return r.json(); }).then(function (d) { S.settings = d.settings; S.trades = d.trades; S.stats = d.stats; render(); });
   }
   /* ---------- trade screenshots ---------- */
   var SHOT_URL = '/api/journal/screenshots/';
@@ -355,10 +355,64 @@
   }
   document.getElementById('modal-back').addEventListener('click', function (e) { if (e.target.id === 'modal-back') closeModal(); });
 
+
+  /* ---------- Behavior / Statistics / My Attempts (auto-populated journal) ---------- */
+  function card(title, sub) { var c = el('div', 'j-card'); if (title) c.appendChild(el('h3', null, title)); if (sub) { var p = el('div', null, sub); p.style.cssText = 'color:var(--text-muted);font-size:13px;margin:-4px 0 10px'; c.appendChild(p); } return c; }
+  function note(text) { var p = el('div', null, text); p.style.cssText = 'color:var(--text-muted);font-size:13px;padding:10px 0'; return p; }
+  function viewBehavior() {
+    var loading = note('Analysing your trades...'); view.appendChild(loading);
+    fetch('/api/journal/behavior').then(function (r) { return r.json(); }).then(function (d) {
+      view.textContent = '';
+      var dg = d.diagnosis, c = card('Strategy failure or trader failure?', 'Rule-following trades measure the strategy. Trades with a recorded rule violation measure you.');
+      var col = { strategy: '#E5484D', both: '#E5484D', trader: '#E8A33D', ok: '#3FD1A0', unclear: '#9AA3B2' }[dg.verdict] || '#9AA3B2';
+      var h = el('div', null, dg.headline); h.style.cssText = 'font-size:17px;font-weight:700;color:' + col + ';margin-bottom:6px'; c.appendChild(h);
+      c.appendChild(note(dg.detail)); view.appendChild(c);
+      var c2 = card('What your trades say about you', d.trades + ' trades analysed. Each line shows the numbers behind it.');
+      d.insights.forEach(function (i) {
+        var row = el('div'); row.style.cssText = 'padding:10px 0;border-top:1px solid var(--border-light)';
+        var t = el('div', null, i.title); t.style.cssText = 'font-weight:600;color:' + ({ bad: '#E5484D', warn: '#E8A33D', info: '#3FD1A0' }[i.severity] || 'inherit'); row.appendChild(t); row.appendChild(note(i.detail)); c2.appendChild(row);
+      });
+      if (d.unclassified_regime) c2.appendChild(note(d.unclassified_regime + ' trade(s) have no market-regime tag, so volatility-based patterns only use the tagged ones.'));
+      view.appendChild(c2);
+    });
+  }
+  function viewStats() {
+    view.appendChild(note('Loading...'));
+    var by = S.statsBy || 'month';
+    fetch('/api/journal/statistics?by=' + by).then(function (r) { return r.json(); }).then(function (d) {
+      view.textContent = '';
+      var c = card('Compare ' + by + 's'); var bar = el('div'); bar.style.marginBottom = '10px';
+      ['month', 'year'].forEach(function (k) { var b = el('button', 'j-btn' + (by === k ? ' primary' : ''), k === 'month' ? 'Months' : 'Years'); b.type = 'button'; b.style.marginRight = '6px'; b.addEventListener('click', function () { S.statsBy = k; render(); }); bar.appendChild(b); });
+      c.appendChild(bar);
+      if (!d.rows.length) { c.appendChild(note('No trades yet.')); view.appendChild(c); return; }
+      var tb = el('table'); tb.style.cssText = 'width:100%;border-collapse:collapse;font-size:13px';
+      var hd = el('tr'); ['Period', 'Trades', 'P&L', 'vs prev', 'Win %', 'Avg R', 'Profit factor', 'Max DD', 'Rule breaks'].forEach(function (x) { var th = el('th', null, x); th.style.cssText = 'text-align:right;padding:6px 8px;color:var(--text-muted);font-weight:600'; hd.appendChild(th); }); tb.appendChild(hd);
+      d.rows.forEach(function (r) {
+        var tr = el('tr'); var cells = [r.period, r.trades, money(r.pnl, true), r.pnl_change == null ? '--' : money(r.pnl_change, true), r.win_rate + '%', r.avg_r == null ? '--' : r.avg_r, r.profit_factor == null ? '--' : r.profit_factor, money(r.max_drawdown), r.violations];
+        cells.forEach(function (x, i) { var td = el('td', null, x); td.style.cssText = 'text-align:right;padding:6px 8px;border-top:1px solid var(--border-light)'; if (i === 2) td.style.color = r.pnl >= 0 ? '#3FD1A0' : '#E5484D'; if (i === 0) td.style.fontWeight = '600'; tr.appendChild(td); });
+        tb.appendChild(tr);
+      });
+      c.appendChild(tb); c.appendChild(note('Best: ' + d.best + '. Worst: ' + d.worst + '.')); view.appendChild(c);
+    });
+  }
+  function viewAttempts() {
+    view.appendChild(note('Loading...'));
+    fetch('/api/journal/attempts').then(function (r) { return r.json(); }).then(function (d) {
+      view.textContent = '';
+      var c = card('My Attempts', d.headline); var g = el('div'); g.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:10px 0';
+      [['Fees spent', money(d.fees_spent)], ['Pass rate', d.pass_rate == null ? '--' : Math.round(d.pass_rate * 100) + '%' + (d.thin_evidence ? ' (thin)' : '')], ['Most common bust cause', d.most_common_bust_label || '--'], ['Payouts received', money(d.payouts_received)], ['Net', money(d.net, true)], ['Cost per pass', d.cost_per_pass == null ? '--' : money(d.cost_per_pass)]].forEach(function (k) { g.appendChild(kpi(k[0], k[1])); });
+      c.appendChild(g); view.appendChild(c);
+      var c2 = card('Attempts'); if (!d.attempts.length) c2.appendChild(note('No attempts saved yet. Add an account on the Accounts page or log a purchase on Buy Challenge.'));
+      d.attempts.forEach(function (a) { var r = el('div', null, (a.firm || 'Firm') + ' ' + (a.size ? '$' + a.size.toLocaleString() : '') + ' -- ' + a.outcome + (a.bust_cause ? ' (' + a.bust_cause.replace(/_/g, ' ') + ')' : '') + (a.started ? ' -- ' + a.started : '')); r.style.cssText = 'padding:8px 0;border-top:1px solid var(--border-light);font-size:13px'; c2.appendChild(r); });
+      view.appendChild(c2);
+      if (d.comparison) { var c3 = card('Real versus simulated'); c3.appendChild(note('Real pass rate ' + Math.round(d.comparison.real_pass_rate * 100) + '% versus ' + Math.round(d.comparison.simulated_pass_rate * 100) + '% simulated (' + d.comparison.sim_kind + ').')); view.appendChild(c3); }
+    });
+  }
+
   function render() {
     renderTabs(); view.textContent = '';
     if (!S.settings) return;
-    ({ overview: viewOverview, log: viewLog, playbooks: viewPlaybooks, tags: viewTags, analytics: viewAnalytics })[S.tab]();
+    ({ overview: viewOverview, log: viewLog, playbooks: viewPlaybooks, tags: viewTags, analytics: viewAnalytics, behavior: viewBehavior, stats: viewStats, attempts: viewAttempts })[S.tab]();
   }
   load();
 })();

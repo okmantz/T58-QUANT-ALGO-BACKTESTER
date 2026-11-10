@@ -1,4 +1,5 @@
 {% include '_lucide_sprite.html' %}
+<script src="/static/t58-journey.js" defer></script>
 <style>
   /* Main sidebar icons (the section headers and the top-level pages) glow in the UI colour; the pages INSIDE an opened
      dropdown stay grey and monotone so the header icon stays the one that pops. */
@@ -215,6 +216,26 @@
   </details>
 
   <div class="t58-nav-divider"></div>
+  <div class="t58-nav-section-label">Prop Journey</div>
+  <details class="t58-nav-group" {{ 'open' if active_page in ['mission', 'guardian', 'accounts', 'buy_challenge', 'research_integrity'] else '' }}>
+    <summary><span class="t58-nav-icon"><svg class="lu"><use href="#lu-flag"/></svg></span> Prop Journey <span class="chev"><svg class="lu"><use href="#lu-chevron-right"/></svg></span></summary>
+    <div class="t58-nav-group-items">
+      <a href="/mission" class="t58-nav-item {{ 'active' if active_page == 'mission' else '' }}">
+        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-flag"/></svg></span><span class="label">First Payout Mission</span>
+      </a>
+      <a href="/guardian" class="t58-nav-item {{ 'active' if active_page == 'guardian' else '' }}">
+        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-shield-check"/></svg></span><span class="label">Evaluation Guardian</span>
+      </a>
+      <a href="/research-integrity" class="t58-nav-item {{ 'active' if active_page == 'research_integrity' else '' }}">
+        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-microscope"/></svg></span><span class="label">Research Integrity</span>
+      </a>
+      <a href="/accounts" class="t58-nav-item {{ 'active' if active_page == 'accounts' else '' }}">
+        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-layers"/></svg></span><span class="label">Accounts</span>
+      </a>
+    </div>
+  </details>
+
+  <div class="t58-nav-divider"></div>
   <div class="t58-nav-section-label">Account</div>
 
   <!-- (11) Account -- Account Settings is one tabbed page (account, notifications,
@@ -230,6 +251,9 @@
       </a>
       <a href="/library" class="t58-nav-item {{ 'active' if active_page == 'strategy_library' else '' }}">
         <span class="t58-nav-icon"><svg class="lu"><use href="#lu-library"/></svg></span><span class="label">Strategy Library</span>
+      </a>
+      <a href="/buy-challenge" class="t58-nav-item {{ 'active' if active_page == 'buy_challenge' else '' }}">
+        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-shopping-cart"/></svg></span><span class="label">Buy Challenge</span>
       </a>
     </div>
   </details>

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>First Payout Mission — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<link rel="stylesheet" href="/static/t58-suite.css">
+<style>
+  .m-stage { display: grid; grid-template-columns: 34px 1fr; gap: 12px; padding: 14px 0; border-top: 1px solid var(--border); }
+  .m-dot { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--border-light); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 800; color: var(--text-muted); }
+  .m-stage.done .m-dot { background: var(--ok); border-color: var(--ok); color: #04120e; }
+  .m-stage.current .m-dot { border-color: var(--teal); color: var(--teal); box-shadow: 0 0 0 4px rgba(var(--teal-rgb), .15); }
+  .m-stage.upcoming { opacity: .72; }
+  .m-req { display: flex; gap: 8px; font-size: 13px; padding: 3px 0; }
+  .m-req i { font-style: normal; width: 16px; flex: none; }
+  .m-alert { border-radius: 10px; padding: 10px 14px; margin-bottom: 8px; font-size: 13px; border: 1px solid var(--border-light); }
+  .m-alert.bad { border-color: rgba(var(--coral-rgb), .6); background: rgba(var(--coral-rgb), .08); }
+  .m-alert.warn { border-color: rgba(240, 180, 41, .6); background: rgba(240, 180, 41, .08); }
+  .m-alert.ok { border-color: rgba(var(--ok-rgb), .6); background: rgba(var(--ok-rgb), .08); }
+</style>
+</head>
+<body>
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header"><h1>First Payout Mission</h1><p>Seven steps from a strategy to your first payout. This page updates itself as you hit milestones and tells you the one thing to do next.</p></div>
+<div class="s-wrap">
+  <div id="alerts"></div>
+  <div class="s-card" id="next"></div>
+  <div class="s-h2">Mission dashboard</div>
+  <div id="dash"></div>
+  <div class="s-h2">Your journey</div>
+  <div class="s-card" id="stages"></div>
+  <div class="s-h2">Mission settings</div>
+  <div class="s-card" id="settings"></div>
+  <div style="margin-top:24px"><span class="t58-brand">T58</span></div>
+</div></div></div>
+<script src="/static/t58-suite.js"></script>
+<script>
+(function () {
+  var el = T58.el, money = T58.money;
+  function load() { return fetch('/api/journey').then(function (r) { return r.json(); }).then(render); }
+  function render(d) {
+    var a = document.getElementById('alerts'); a.textContent = '';
+    d.alerts.forEach(function (x) { a.appendChild(el('div', 'm-alert ' + x.level, x.text)); });
+    var n = document.getElementById('next'); n.textContent = '';
+    var cur = d.stages.filter(function (s) { return s.key === d.current; })[0];
+    n.appendChild(el('div', 's-note', 'NEXT STEP · ' + (cur ? cur.label : '')));
+    d.next_actions.forEach(function (t) { n.appendChild(el('div', null, t)).style.cssText = 'font-size:17px;font-weight:700'; });
+    if (cur) { var go = el('a', 's-btn primary', 'Go'); go.href = cur.href; go.style.alignSelf = 'flex-start'; n.appendChild(go); }
+    var db = document.getElementById('dash'); db.textContent = ''; var x = d.dashboard;
+    var card = el('div', 's-card');
+    card.appendChild(T58.kv([['Progress', d.done + ' of ' + d.total + ' steps'], ['Estimated days to first payout', x.estimated_days == null ? '—' : Math.round(x.estimated_days)], ['Estimated expenses', x.estimated_expenses == null ? '—' : money(x.estimated_expenses)], ['Spent so far', money(x.spent_so_far)]]));
+    card.appendChild(T58.meter(d.progress_pct / 100));
+    card.appendChild(el('div', 's-note', (x.illustrative ? 'ILLUSTRATIVE EXAMPLE. ' : '') + x.note));
+    db.appendChild(card);
+    var st = document.getElementById('stages'); st.textContent = '';
+    d.stages.forEach(function (s, i) {
+      var row = el('div', 'm-stage ' + s.state); row.appendChild(el('div', 'm-dot', s.state === 'done' ? '✓' : String(i + 1)));
+      var b = el('div'); var h = el('div', 's-row'); h.appendChild(el('strong', null, s.label));
+      h.appendChild(T58.badge(s.state === 'done' ? 'Done' : (s.state === 'current' ? 'You are here' : 'Upcoming'), s.state === 'done' ? 'ok' : (s.state === 'current' ? 'warn' : '')));
+      var go = el('a', 's-btn sm', 'Open'); go.href = s.href; h.appendChild(go); b.appendChild(h);
+      s.requirements.forEach(function (r) { var q = el('div', 'm-req'); q.appendChild(el('i', null, r.met === true ? '✓' : (r.met === false ? '○' : '·')));
+        var t = el('div'); t.appendChild(el('span', null, r.label)); if (r.detail) { var dd = el('div', 's-note', r.detail); t.appendChild(dd); } q.appendChild(t); b.appendChild(q); });
+      row.appendChild(b); st.appendChild(row);
+    });
+    st.appendChild(el('div', 's-note', '✓ met   ○ not met yet   · not tracked automatically'));
+    renderSettings(d);
+  }
+  function renderSettings(d) {
+    var box = document.getElementById('settings'); box.textContent = ''; var c = d.settings;
+    var plan = el('select', 's-select'); var none = el('option', null, 'No plan chosen'); none.value = ''; plan.appendChild(none);
+    fetch('/api/prop-presets/keys').then(function (r) { return r.json(); }).then(function (p) { p.presets.forEach(function (x) { var o = el('option', null, x.label); o.value = x.key; if (x.key === c.preset_key) o.selected = true; plan.appendChild(o); }); });
+    var l = el('label', 's-field', 'Target plan'); l.appendChild(plan); box.appendChild(l);
+    var f1 = T58.field('Forward trades required', 'number', c.forward_trades_required), f2 = T58.field('Forward days required', 'number', c.forward_days_required), f3 = T58.field('Backtest max drawdown in dollars (optional, enables the drawdown alert)', 'number', c.backtest_max_drawdown == null ? '' : c.backtest_max_drawdown);
+    [f1, f2, f3].forEach(function (f) { box.appendChild(f.label); });
+    var sv = el('button', 's-btn primary', 'Save'); sv.type = 'button'; sv.addEventListener('click', function () {
+      T58.api('PUT', '/api/mission/settings', { preset_key: plan.value, forward_trades_required: f1.input.value, forward_days_required: f2.input.value, backtest_max_drawdown: f3.input.value }).then(function (r) { T58.toast(r.ok ? 'Saved' : r.error); if (r.ok) load(); });
+    }); box.appendChild(sv);
+  }
+  load(); setInterval(load, 60000);
+})();
+</script>
+</body></html>

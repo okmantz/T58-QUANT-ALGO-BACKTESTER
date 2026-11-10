@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Buy Challenge — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<link rel="stylesheet" href="/static/t58-suite.css">
+</head>
+<body>
+{% set active_page = 'buy_challenge' %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Buy Challenge</h1>
+  <p>Every firm and plan side by side: price, rules, algo policy and discount code. Pick the plan, then buy it at the firm's own checkout.</p>
+</div>
+<div class="s-wrap">
+  <div class="s-strip" id="disclaimer"></div>
+  <div class="s-bar">
+    <input class="s-input" id="q" type="search" placeholder="Search firms" aria-label="Search firms">
+    <span id="assetChips"></span>
+    <button class="s-chip" id="algoOnly" type="button" aria-pressed="false">Algo allowed only</button>
+    <select class="s-select" id="sort" aria-label="Sort firms">
+      <option value="price">Lowest price</option><option value="split">Highest profit split</option><option value="algo">Algo friendly first</option><option value="name">Name</option>
+    </select>
+  </div>
+  <div class="s-h2">Firms</div>
+  <div class="s-grid" id="firms"></div>
+
+  <div class="s-h2">Plans <span class="s-note" style="text-transform:none;letter-spacing:0">— tick up to 4 to compare</span></div>
+  <div class="s-bar" id="sizeChips"></div>
+  <div class="s-table-wrap"><table class="s-table" id="plans"></table></div>
+  <div class="s-tray" id="tray" hidden></div>
+
+  <div class="s-h2" id="cmpTitle" hidden>Side-by-side</div>
+  <div class="s-bar" id="cmpBar" hidden>
+    <button class="s-chip" id="diffOnly" type="button" aria-pressed="false">Show differences only</button>
+    <button class="s-btn sm" id="shareBtn" type="button">Copy share link</button>
+  </div>
+  <div class="s-table-wrap" id="cmpWrap" hidden><table class="s-table" id="cmp"></table></div>
+  <div style="margin-top:24px"><span class="t58-brand">T58</span></div>
+</div>
+</div></div>
+
+<div class="s-modal-back" id="mb"><div class="s-modal" id="modal"></div></div>
+
+<script>
+(function () {
+  'use strict';
+  var D = null, S = { q: '', asset: 'All', algo: false, sort: 'price', size: 0, pick: [], diff: false };
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function money(n) { return n == null ? '—' : '$' + Number(n).toLocaleString(undefined, { maximumFractionDigits: 2, minimumFractionDigits: n % 1 ? 2 : 0 }); }
+  function k(n) { return n >= 1000 ? (n / 1000) + 'K' : String(n); }
+  function toast(t) { var d = el('div', 's-toast', t); document.body.appendChild(d); setTimeout(function () { d.remove(); }, 2200); }
+  function api(m, u, b) { return fetch(u, { method: m, headers: { 'Content-Type': 'application/json' }, body: b ? JSON.stringify(b) : undefined }).then(function (r) { return r.json(); }); }
+  function copy(text) {
+    var done = function () { toast('Copied ' + text); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, function () { fallback(text); done(); });
+    else { fallback(text); done(); }
+  }
+  function fallback(t) { var a = el('textarea'); a.value = t; document.body.appendChild(a); a.select(); try { document.execCommand('copy'); } catch (e) {} a.remove(); }
+
+  function load() { return fetch('/api/buy-challenge/catalog').then(function (r) { return r.json(); }).then(function (d) { D = d; document.getElementById('disclaimer').textContent = d.disclaimer; render(); applyHash(); }); }
+
+  function chips(box, items, cur, onpick) {
+    box.textContent = '';
+    items.forEach(function (it) { var b = el('button', 's-chip' + (String(cur) === String(it[0]) ? ' on' : ''), it[1]); b.type = 'button'; b.addEventListener('click', function () { onpick(it[0]); }); box.appendChild(b); });
+  }
+
+  function firmCard(f) {
+    var c = el('div', 's-card');
+    var top = el('div', 's-row'); top.style.justifyContent = 'space-between';
+    var t = el('div'); t.appendChild(el('h3', null, f.firm)); t.appendChild(el('div', 'sub', f.asset + (f.platforms ? ' · ' + f.platforms : '')));
+    top.appendChild(t);
+    top.appendChild(el('span', 's-badge ' + (f.algo_all ? 'ok' : (f.algo_allowed ? 'warn' : '')), f.algo_all ? '✓ Algo allowed' : (f.algo_allowed ? 'Algo: some plans' : 'Algo not confirmed')));
+    c.appendChild(top);
+    var kv = el('div', 's-kv');
+    [['From', money(f.from_price)], ['Best split', f.best_split ? f.best_split + '%' : '—'], ['Plans', f.plans]].forEach(function (x) { var d = el('div'); d.appendChild(el('div', 'k', x[0])); d.appendChild(el('div', 'v', String(x[1]))); kv.appendChild(d); });
+    c.appendChild(kv);
+    c.appendChild(el('div', 'sub', 'Sizes: ' + f.sizes.map(k).join(' · ')));
+    var o = f.offer;
+    if (o.code) {
+      var box = el('div', 's-code'); var left = el('div'); left.appendChild(el('code', null, o.code));
+      var meta = (o.discount_pct ? o.discount_pct + '% off' : (o.discount_note || 'Discount code')) + (o.expired ? ' · expired' : '') + (o.checked_on ? ' · checked ' + o.checked_on : '');
+      var m = el('div', 's-note', meta); left.appendChild(m); box.appendChild(left);
+      var cb = el('button', 's-btn sm', 'Copy code'); cb.type = 'button'; cb.disabled = false; cb.addEventListener('click', function () { copy(o.code); }); box.appendChild(cb);
+      c.appendChild(box);
+    } else {
+      var nb = el('div', 's-code'); nb.appendChild(el('span', 's-note', 'No code on file. Add one you have checked.'));
+      var ab = el('button', 's-btn sm', 'Add code'); ab.type = 'button'; ab.addEventListener('click', function () { editOffer(f); }); nb.appendChild(ab); c.appendChild(nb);
+    }
+    var row = el('div', 's-row');
+    if (f.link_confirmed) {
+      var a = el('a', 's-btn primary', 'Go to ' + f.firm); a.href = f.checkout_url; a.target = '_blank'; a.rel = 'noopener noreferrer'; row.appendChild(a);
+    } else {
+      var sb = el('button', 's-btn', 'Add firm link'); sb.type = 'button'; sb.addEventListener('click', function () { editOffer(f); }); row.appendChild(sb);
+    }
+    var eb = el('button', 's-btn sm', 'Edit offer'); eb.type = 'button'; eb.addEventListener('click', function () { editOffer(f); }); row.appendChild(eb);
+    c.appendChild(row);
+    if (!f.link_confirmed) c.appendChild(el('div', 's-note', 'The firm\'s website could not be confirmed, so no link is shown until you add one.'));
+    return c;
+  }
+
+  function editOffer(f) {
+    var m = document.getElementById('modal'); m.textContent = ''; m.appendChild(el('h3', null, f.firm + ' — code and links'));
+    var vals = { code: f.offer.code, discount_pct: f.offer.discount_pct == null ? '' : f.offer.discount_pct, discount_note: f.offer.discount_note, checkout_url: f.checkout_url === f.site_url ? '' : f.checkout_url, site_url: f.link_confirmed ? f.site_url : '', expires: f.offer.expires };
+    var fields = [['code', 'Discount code'], ['discount_pct', 'Discount % (optional, used to show the price with code)'], ['discount_note', 'What the code gives (optional)'], ['checkout_url', 'Checkout / offer page URL (optional)'], ['site_url', 'Firm website URL'], ['expires', 'Expires (YYYY-MM-DD, optional)']];
+    var inputs = {};
+    fields.forEach(function (x) { var l = el('label', 's-field', x[1]); var i = el('input', 's-input'); i.value = vals[x[0]]; inputs[x[0]] = i; l.appendChild(i); m.appendChild(l); });
+    m.appendChild(el('div', 's-note', 'Enter only a code you have confirmed at the firm\'s own checkout. T58 stamps it with today\'s date and cannot verify that it works.'));
+    var bar = el('div', 's-row'); bar.style.marginTop = '14px';
+    var sv = el('button', 's-btn primary', 'Save'); sv.type = 'button'; sv.addEventListener('click', function () {
+      var body = {}; Object.keys(inputs).forEach(function (n) { body[n] = inputs[n].value; });
+      api('PUT', '/api/buy-challenge/offers/' + encodeURIComponent(f.firm), body).then(function (d) { if (d.ok) { closeModal(); load(); } else toast(d.error || 'Could not save'); });
+    });
+    var cx = el('button', 's-btn', 'Cancel'); cx.type = 'button'; cx.addEventListener('click', closeModal);
+    bar.appendChild(sv); bar.appendChild(cx); m.appendChild(bar); document.getElementById('mb').classList.add('show');
+  }
+  function closeModal() { document.getElementById('mb').classList.remove('show'); }
+  document.getElementById('mb').addEventListener('click', function (e) { if (e.target.id === 'mb') closeModal(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeModal(); });
+
+  function visibleFirms() {
+    var q = S.q.toLowerCase();
+    var list = D.firms.filter(function (f) { return (!q || f.firm.toLowerCase().indexOf(q) >= 0) && (S.asset === 'All' || f.asset.indexOf(S.asset) >= 0) && (!S.algo || f.algo_allowed); });
+    var by = { price: function (a, b) { return (a.from_price == null) - (b.from_price == null) || a.from_price - b.from_price; }, split: function (a, b) { return (b.best_split || 0) - (a.best_split || 0); },
+      algo: function (a, b) { return (b.algo_all - a.algo_all) || (b.algo_allowed - a.algo_allowed) || a.firm.localeCompare(b.firm); }, name: function (a, b) { return a.firm.localeCompare(b.firm); } };
+    return list.sort(by[S.sort]);
+  }
+  function visiblePlans(firms) {
+    var names = {}; firms.forEach(function (f) { names[f.firm] = 1; });
+    return D.plans.filter(function (p) { return names[p.firm] && (!S.size || p.size === S.size) && (!S.algo || p.algo_allowed); });
+  }
+
+  var COLS = [
+    ['Plan', function (p) { return p.label; }, null],
+    ['Price', function (p) { return p.price_with_code != null ? money(p.price_with_code) + ' (was ' + money(p.price) + ')' : money(p.price); }, function (p) { return p.price_with_code != null ? p.price_with_code : p.price; }, 'min'],
+    ['Reset', function (p) { return money(p.reset); }, function (p) { return p.reset; }, 'min'],
+    ['Split', function (p) { return p.split_pct == null ? '—' : p.split_pct + '%'; }, function (p) { return p.split_pct; }, 'max'],
+    ['Target', function (p) { return money(p.target); }, function (p) { return p.target; }, 'min'],
+    ['Daily loss', function (p) { return p.daily_loss == null ? 'None' : money(p.daily_loss); }, function (p) { return p.daily_loss == null ? 1e12 : p.daily_loss; }, 'max'],
+    ['Max drawdown', function (p) { return money(p.max_dd) + ' ' + p.dd_type; }, function (p) { return p.max_dd; }, 'max'],
+    ['Consistency', function (p) { return p.consistency_pct ? p.consistency_pct + '%' : 'None'; }, function (p) { return p.consistency_pct ? -p.consistency_pct : 0; }, 'max'],
+    ['Min days', function (p) { return String(p.min_days || 0); }, function (p) { return p.min_days || 0; }, 'min'],
+    ['Max contracts', function (p) { return p.max_contracts == null ? '—' : String(p.max_contracts); }, function (p) { return p.max_contracts; }, 'max'],
+    ['Algo trading', function (p) { return p.algo_allowed ? '✓ Allowed' : 'Not confirmed'; }, function (p) { return p.algo_allowed ? 1 : 0; }, 'max'],
+    ['Rules checked', function (p) { return p.rules_verified_on ? p.rules_verified_on + (p.rules_tier ? ' (' + p.rules_tier + ')' : '') : 'unverified'; }, null],
+    ['Price checked', function (p) { return p.price_checked || '—'; }, null],
+    ['Your pass rate (sim)', function (p) { return p.pass_rate == null ? '—' : Math.round(p.pass_rate * 100) + '%'; }, function (p) { return p.pass_rate; }, 'max'],
+    ['Cost to pass', function (p) { return money(p.expected_cost_to_pass); }, function (p) { return p.expected_cost_to_pass; }, 'min']
+  ];
+
+  function renderPlans(plans) {
+    var t = document.getElementById('plans'); t.textContent = ''; t.className = 's-table plans';
+    var hd = el('tr'); hd.appendChild(el('th', null, ''));
+    ['Plan', 'Price', 'Reset', 'Split', 'Target', 'Daily loss', 'Max DD', 'Algo', ''].forEach(function (h) { hd.appendChild(el('th', null, h)); }); t.appendChild(hd);
+    plans.forEach(function (p) {
+      var tr = el('tr'); var td0 = el('td'); var cb = el('input'); cb.type = 'checkbox'; cb.checked = S.pick.indexOf(p.key) >= 0; cb.setAttribute('aria-label', 'Compare ' + p.label);
+      cb.addEventListener('change', function () { toggle(p.key, cb); }); td0.appendChild(cb); tr.appendChild(td0);
+      var c1 = el('td', null, p.label); c1.style.fontWeight = '600'; tr.appendChild(c1);
+      tr.appendChild(el('td', null, p.price_with_code != null ? money(p.price_with_code) + ' w/ code' : money(p.price)));
+      tr.appendChild(el('td', null, money(p.reset))); tr.appendChild(el('td', null, p.split_pct == null ? '—' : p.split_pct + '%'));
+      tr.appendChild(el('td', null, money(p.target))); tr.appendChild(el('td', null, p.daily_loss == null ? 'None' : money(p.daily_loss)));
+      tr.appendChild(el('td', null, money(p.max_dd))); var ta = el('td'); ta.appendChild(el('span', 's-badge ' + (p.algo_allowed ? 'ok' : ''), p.algo_allowed ? '✓ Algo' : '—')); tr.appendChild(ta);
+      var tb = el('td'); var f = D.firms.filter(function (x) { return x.firm === p.firm; })[0];
+      if (f && f.link_confirmed) { var a = el('a', 's-btn sm', 'Buy at firm'); a.href = f.checkout_url; a.target = '_blank'; a.rel = 'noopener noreferrer'; tb.appendChild(a); }
+      var bb = el('button', 's-btn sm', 'I bought this'); bb.type = 'button'; bb.style.marginLeft = '6px'; bb.addEventListener('click', function () { bought(p); }); tb.appendChild(bb); tr.appendChild(tb);
+      t.appendChild(tr);
+    });
+    if (!plans.length) { var e = el('tr'); var d = el('td', null, 'No plans match these filters.'); d.colSpan = 10; e.appendChild(d); t.appendChild(e); }
+  }
+
+  function toggle(key, cb) {
+    var i = S.pick.indexOf(key);
+    if (i >= 0) S.pick.splice(i, 1);
+    else if (S.pick.length >= 4) { cb.checked = false; toast('Compare up to 4 plans.'); return; } else S.pick.push(key);
+    renderCompare(); try { history.replaceState(null, '', S.pick.length ? '#c=' + S.pick.join(',') : location.pathname); } catch (e) {}
+  }
+  function applyHash() {
+    var m = /c=([a-z0-9_,]+)/.exec(location.hash || ''); if (!m) return;
+    S.pick = m[1].split(',').filter(function (x) { return D.plans.some(function (p) { return p.key === x; }); }).slice(0, 4); render();
+  }
+  function renderCompare() {
+    var picks = S.pick.map(function (key) { return D.plans.filter(function (p) { return p.key === key; })[0]; }).filter(Boolean);
+    var tray = document.getElementById('tray'); tray.textContent = '';
+    ['cmpTitle', 'cmpBar', 'cmpWrap'].forEach(function (id) { document.getElementById(id).hidden = picks.length < 2; });
+    tray.hidden = !picks.length;
+    if (picks.length) {
+      tray.appendChild(el('strong', null, picks.length + ' selected'));
+      var sizes = {}; picks.forEach(function (p) { sizes[p.size] = 1; });
+      if (Object.keys(sizes).length > 1) { var mb = el('button', 's-btn sm', 'Match account sizes'); mb.type = 'button'; mb.addEventListener('click', matchSizes); tray.appendChild(mb); }
+      var cl = el('button', 's-btn sm', 'Clear'); cl.type = 'button'; cl.addEventListener('click', function () { S.pick = []; render(); try { history.replaceState(null, '', location.pathname); } catch (e) {} }); tray.appendChild(cl);
+    }
+    var t = document.getElementById('cmp'); t.textContent = ''; if (picks.length < 2) return;
+    var hd = el('tr'); hd.appendChild(el('th', null, ''));
+    picks.forEach(function (p) { hd.appendChild(el('th', null, p.firm)); }); t.appendChild(hd);
+    COLS.forEach(function (c) {
+      var vals = picks.map(function (p) { return c[1](p); });
+      var same = vals.every(function (v) { return v === vals[0]; });
+      if (S.diff && same) return;
+      var tr = el('tr'); var h = el('td', null, c[0]); h.style.color = 'var(--text-muted)'; tr.appendChild(h);
+      var best = null;
+      if (c[2] && c[3]) { var nums = picks.map(function (p) { return c[2](p); }).filter(function (v) { return v != null; }); if (nums.length > 1) best = c[3] === 'min' ? Math.min.apply(null, nums) : Math.max.apply(null, nums); }
+      picks.forEach(function (p, i) { var td = el('td', null, vals[i]); if (!same) td.className = 'diff'; if (best != null && c[2](p) === best && !same) td.className = 'best'; tr.appendChild(td); });
+      t.appendChild(tr);
+    });
+    var act = el('tr'); act.appendChild(el('td', null, ''));
+    picks.forEach(function (p) { var td = el('td'); var f = D.firms.filter(function (x) { return x.firm === p.firm; })[0]; if (f && f.link_confirmed) { var a = el('a', 's-btn sm primary', 'Buy at firm'); a.href = f.checkout_url; a.target = '_blank'; a.rel = 'noopener noreferrer'; td.appendChild(a); } act.appendChild(td); });
+    t.appendChild(act);
+  }
+  function matchSizes() {
+    var picks = S.pick.map(function (key) { return D.plans.filter(function (p) { return p.key === key; })[0]; });
+    var target = picks[0].size, next = [];
+    picks.forEach(function (p) { var alt = D.plans.filter(function (x) { return x.firm === p.firm && x.size === target; })[0]; if (alt) next.push(alt.key); else if (p.size === target) next.push(p.key); });
+    if (next.length < 2) { toast('No other firm has a ' + k(target) + ' plan in your selection.'); return; }
+    S.pick = next; render();
+  }
+  function bought(p) {
+    if (!confirm('Add ' + p.label + ' to your accounts? This logs the fee in My Attempts and starts the evaluation attempt.')) return;
+    api('POST', '/api/buy-challenge/purchase', { preset_key: p.key }).then(function (d) { toast(d.ok ? 'Added to your accounts and My Attempts.' : (d.error || 'Could not add')); });
+  }
+
+  function render() {
+    var assets = ['All']; D.firms.forEach(function (f) { f.asset.split(' / ').forEach(function (a) { if (assets.indexOf(a) < 0) assets.push(a); }); });
+    chips(document.getElementById('assetChips'), assets.map(function (a) { return [a, a]; }), S.asset, function (a) { S.asset = a; render(); });
+    var firms = visibleFirms(); var box = document.getElementById('firms'); box.textContent = '';
+    firms.forEach(function (f) { box.appendChild(firmCard(f)); });
+    if (!firms.length) box.appendChild(el('div', 's-note', 'No firms match these filters.'));
+    var sizes = {}; D.plans.forEach(function (p) { sizes[p.size] = 1; });
+    var items = [[0, 'All sizes']].concat(Object.keys(sizes).map(Number).sort(function (a, b) { return a - b; }).map(function (s) { return [s, '$' + k(s)]; }));
+    chips(document.getElementById('sizeChips'), items, S.size, function (s) { S.size = s; render(); });
+    renderPlans(visiblePlans(firms)); renderCompare();
+    document.getElementById('algoOnly').classList.toggle('on', S.algo); document.getElementById('algoOnly').setAttribute('aria-pressed', S.algo);
+    document.getElementById('diffOnly').classList.toggle('on', S.diff);
+  }
+  document.getElementById('q').addEventListener('input', function (e) { S.q = e.target.value; render(); });
+  document.getElementById('sort').addEventListener('change', function (e) { S.sort = e.target.value; render(); });
+  document.getElementById('algoOnly').addEventListener('click', function () { S.algo = !S.algo; render(); });
+  document.getElementById('diffOnly').addEventListener('click', function () { S.diff = !S.diff; render(); });
+  document.getElementById('shareBtn').addEventListener('click', function () { copy(location.origin + location.pathname + '#c=' + S.pick.join(',')); });
+  load();
+})();
+</script>
+</body>
+</html>

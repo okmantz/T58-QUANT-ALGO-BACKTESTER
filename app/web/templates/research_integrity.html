@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Research Integrity — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<link rel="stylesheet" href="/static/t58-suite.css">
+</head>
+<body>
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header"><h1>Research Integrity</h1><p>Does the lab hand out strategies when there is nothing to find, and does it find an edge when one is planted? These checks gate new strategy families.</p></div>
+<div class="s-wrap">
+  <div id="gate"></div>
+  <div class="s-grid" id="cards"></div>
+  <div class="s-h2">Detection by planted edge size</div>
+  <div class="s-table-wrap"><table class="s-table" id="planted"></table></div>
+  <div class="s-h2">Reproducible benchmark suite</div>
+  <div class="s-card" id="bench"></div>
+  <div style="margin-top:24px"><span class="t58-brand">T58</span></div>
+</div></div></div>
+<script src="/static/t58-suite.js"></script>
+<script>
+(function () {
+  var el = T58.el, pct = function (x) { return x == null ? '—' : (x * 100).toFixed(1) + '%'; };
+  function when(t) { return t ? new Date(t * 1000).toLocaleString() : 'never'; }
+  function card(title, rows, foot) { var c = el('div', 's-card'); c.appendChild(el('div', 's-note', title.toUpperCase())); rows.forEach(function (r) { if (typeof r === 'string') c.appendChild(el('div', null, r)); else c.appendChild(r); }); if (foot) c.appendChild(el('div', 's-note', foot)); return c; }
+  function big(t, kind) { var d = el('div', null, t); d.style.cssText = 'font-size:26px;font-weight:800;font-variant-numeric:tabular-nums'; if (kind) d.style.color = kind; return d; }
+  function load() { fetch('/api/research-integrity').then(function (r) { return r.json(); }).then(render); }
+  function render(d) {
+    var g = document.getElementById('gate'); g.textContent = '';
+    var box = el('div', 's-card'); var h = el('div', 's-row'); h.appendChild(el('strong', null, 'Gate status')); h.appendChild(T58.badge(d.gate.open ? 'OPEN' : 'CLOSED', d.gate.open ? 'ok' : 'bad')); box.appendChild(h);
+    box.appendChild(el('div', 's-note', d.gate.state.text)); (d.gate.reasons || []).forEach(function (r) { box.appendChild(el('div', 's-note', '• ' + r)); }); g.appendChild(box);
+    var c = document.getElementById('cards'); c.textContent = '';
+    var np = d.null_test_progress, frac = np.total ? np.done / np.total : (np.completed_runs / np.required_runs);
+    c.appendChild(card('Null-test progress', [big(np.running ? np.done + ' / ' + np.total : np.completed_runs + ' / ' + np.required_runs), T58.meter(Math.min(1, frac))], np.running ? 'A study is running now.' : 'Completed no-edge runs in the saved study versus the ' + np.required_runs + ' the gate requires.'));
+    var f = d.false_positive; c.appendChild(card('False-positive rate', [big(f.measured ? pct(f.rate) : 'not measured', f.measured && f.rate < f.target ? 'var(--ok)' : null), f.measured ? 'Upper bound ' + pct(f.upper95) + ' at 95% confidence over ' + f.n_null + ' runs. Target under ' + pct(f.target) + '.' : ''], f.measured ? (f.fresh ? '' : 'Stale: measured before the latest code change or over 90 days ago.') : 'The surrogate study has not run on this install.'));
+    var p = d.statistical_power; c.appendChild(card('Statistical power', [big(p.strong_edges == null ? 'not measured' : pct(p.strong_edges), p.strong_edges != null && p.strong_edges >= d.detection.target ? 'var(--ok)' : null)], p.note));
+    var ds = d.detection; c.appendChild(card('Detection rate', [big(ds.mean_power_strong == null ? '—' : pct(ds.mean_power_strong)), 'Mean over +0.20R and +0.30R plants. Gate needs at least ' + pct(ds.target) + '.']));
+    var e = d.engine; c.appendChild(card('Engine version', [big((e.current_code_hash || '').slice(0, 10)), e.code_hash ? (e.report_code_matches_current ? 'The saved study was run by this exact code.' : 'The code changed since the saved study (' + (e.code_hash || '').slice(0, 10) + '): re-run it.') : 'No study saved yet.'], 'Benchmark chain ' + e.benchmark_version));
+    c.appendChild(card('Dataset fingerprint', [big(d.dataset_fingerprint), 'Identifies the exact surrogate data and settings the benchmark uses.']));
+    var lv = d.last_successful_validation; c.appendChild(card('Last successful validation', [big(lv ? when(lv.created_at) : 'never'), lv ? 'Gate was open after this study.' : 'No study has opened the gate yet.']));
+    c.appendChild(card('Real-data false-discovery rate', [big('Not measured', 'var(--amber)'), d.real_data_fdr.text]));
+    var t = document.getElementById('planted'); t.textContent = ''; var hd = el('tr'); ['Planted edge', 'Measured R', 'Found', 'Runs', 'Detection rate'].forEach(function (x) { hd.appendChild(el('th', null, x)); }); t.appendChild(hd);
+    ds.by_size.forEach(function (r) { var tr = el('tr'); ['+' + r.target_r.toFixed(2) + 'R', r.measured_r == null ? '—' : r.measured_r.toFixed(3) + 'R', r.found, r.runs, pct(r.detection_rate)].forEach(function (x) { tr.appendChild(el('td', null, String(x))); }); t.appendChild(tr); });
+    if (!ds.by_size.length) { var tr = el('tr'), td = el('td', null, 'No planted-edge results yet.'); td.colSpan = 5; tr.appendChild(td); t.appendChild(tr); }
+    renderBench(d);
+  }
+  function renderBench(d) {
+    var b = document.getElementById('bench'); b.textContent = ''; var r = d.benchmark;
+    b.appendChild(el('div', 's-note', 'A fast, seeded statistical-chain benchmark: it runs in about 30 seconds and always gives the same numbers for the same settings. It is NOT the production engine (that is the slow surrogate study above); it checks the statistics themselves. Pass: under 5% false discoveries over at least 60 no-edge runs, at least 50% power on planted +0.20R and +0.30R edges, at least 10 runs per size.'));
+    if (r) {
+      var h = el('div', 's-row'); h.appendChild(T58.badge(r.passed ? 'PASS' : 'FAIL', r.passed ? 'ok' : 'bad')); h.appendChild(T58.badge(r.current ? 'current code' : 'older version', r.current ? '' : 'warn')); b.appendChild(h);
+      b.appendChild(T58.kv([['False discoveries', r.null_candidates + ' / ' + r.n_null + ' (' + pct(r.null_rate) + ')'], ['95% upper bound', pct(r.null_rate_upper95)], ['Seed', r.seed], ['Version', r.version], ['Dataset', r.dataset_fingerprint], ['Ran', when(r.created_at)]]));
+      r.planted.forEach(function (p) { b.appendChild(el('div', null, 'Planted +' + p.target_r.toFixed(2) + 'R (measured ' + p.measured_r.toFixed(3) + 'R): found ' + p.found + ' of ' + p.runs)); });
+      (r.reasons || []).forEach(function (x) { b.appendChild(el('div', 's-note', '• ' + x)); });
+    } else b.appendChild(el('div', null, 'The benchmark has not been run yet.'));
+    var run = el('button', 's-btn primary', d.benchmark_job.running ? 'Running...' : 'Run benchmark'); run.type = 'button'; run.disabled = d.benchmark_job.running; run.style.alignSelf = 'flex-start';
+    run.addEventListener('click', function () { T58.api('POST', '/api/research-integrity/benchmark').then(function (x) { T58.toast(x.ok ? 'Started. This takes about 30 seconds.' : x.error); load(); }); }); b.appendChild(run);
+    if (d.benchmark_job.error) b.appendChild(el('div', 's-note', 'Last run failed: ' + d.benchmark_job.error));
+    b.appendChild(el('div', 's-note', 'Command line: python -m scripts.run_integrity_benchmark'));
+  }
+  load(); setInterval(load, 5000);
+})();
+</script>
+</body></html>

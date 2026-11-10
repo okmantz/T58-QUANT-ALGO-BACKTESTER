@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Strategy Family Map — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<link rel="stylesheet" href="/static/t58-suite.css">
+<style>
+  .fm-chart { width: 100%; height: auto; background: var(--panel-2); border: 1px solid var(--border); border-radius: 14px; }
+  .fm-chart text { fill: var(--text-muted); font-size: 11px; }
+  .fm-bub { cursor: pointer; stroke-width: 2; fill-opacity: .55; }
+  .fm-bub:hover, .fm-bub.sel { fill-opacity: .85; }
+  .fm-legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--text-muted); margin: 10px 0 16px; }
+  .fm-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+</style>
+</head>
+<body>
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header"><h1>Strategy Family Map</h1><p>Which kinds of strategy make money, hold up under higher costs, work on several instruments, or are just copies of each other. Click a family for its numbers. <a href="/graveyard">Back to the Graveyard</a> · <a href="/discovery-engine">Discovery Engine</a></p></div>
+<div class="s-wrap">
+  <div class="s-strip" id="note"></div>
+  <svg class="fm-chart" id="chart" viewBox="0 0 900 460" role="img" aria-label="Family map: profitable share on the horizontal axis, statistically significant share on the vertical axis"></svg>
+  <div class="fm-legend">
+    <span><i style="background:var(--ok)"></i>Survives doubled costs</span><span><i style="background:var(--amber)"></i>Mixed</span><span><i style="background:var(--coral)"></i>Fails under higher costs</span><span><i style="background:var(--text-dim)"></i>Not enough data</span>
+    <span>Bubble size = candidates tested · dashed ring = redundant (many near-copies)</span>
+  </div>
+  <div class="s-grid" id="detail"></div>
+  <div class="s-h2">All families</div>
+  <div class="s-table-wrap"><table class="s-table" id="tbl"></table></div>
+  <div style="margin-top:24px"><span class="t58-brand">T58</span></div>
+</div></div></div>
+<script src="/static/t58-suite.js"></script>
+<script>
+(function () {
+  var el = T58.el, NS = 'http://www.w3.org/2000/svg', D = null, sel = null;
+  function pct(x) { return x == null ? '—' : Math.round(x * 100) + '%'; }
+  function color(f) { if (f.survives_cost == null) return 'var(--text-dim)'; return f.survives_cost >= 0.5 ? 'var(--ok)' : (f.survives_cost >= 0.2 ? 'var(--amber)' : 'var(--coral)'); }
+  function se(tag, attrs) { var e = document.createElementNS(NS, tag); Object.keys(attrs || {}).forEach(function (k) { e.setAttribute(k, attrs[k]); }); return e; }
+  function load() { fetch('/api/family-map').then(function (r) { return r.json(); }).then(function (d) { D = d; document.getElementById('note').textContent = d.note; draw(); detail(); table(); }); }
+  function draw() {
+    var c = document.getElementById('chart'); c.textContent = ''; var L = 60, T = 20, W = 820, H = 380;
+    for (var i = 0; i <= 4; i++) { var x = L + W * i / 4, y = T + H - H * i / 4;
+      c.appendChild(se('line', { x1: x, y1: T, x2: x, y2: T + H, stroke: 'var(--border)' })); c.appendChild(se('line', { x1: L, y1: y, x2: L + W, y2: y, stroke: 'var(--border)' }));
+      var t1 = se('text', { x: x, y: T + H + 18, 'text-anchor': 'middle' }); t1.textContent = (i * 25) + '%'; c.appendChild(t1);
+      var t2 = se('text', { x: L - 8, y: y + 4, 'text-anchor': 'end' }); t2.textContent = (i * 25) + '%'; c.appendChild(t2); }
+    var xl = se('text', { x: L + W / 2, y: T + H + 40, 'text-anchor': 'middle' }); xl.textContent = 'Profitable after costs (share of candidates)'; c.appendChild(xl);
+    var yl = se('text', { x: 14, y: T + H / 2, 'text-anchor': 'middle', transform: 'rotate(-90 14 ' + (T + H / 2) + ')' }); yl.textContent = 'Statistically significant (share)'; c.appendChild(yl);
+    var shown = 0;
+    D.families.forEach(function (f, i) {
+      if (f.profitable == null) return; shown++;
+      var cx = L + W * f.profitable, cy = T + H - H * (f.significant == null ? 0 : f.significant), r = 8 + Math.min(28, Math.sqrt(f.candidates) * 1.6);
+      var b = se('circle', { cx: cx, cy: cy, r: r, fill: color(f), stroke: color(f), class: 'fm-bub' + (sel === f.family ? ' sel' : '') });
+      if (f.tags.indexOf('redundant') >= 0) b.setAttribute('stroke-dasharray', '4 3');
+      b.setAttribute('tabindex', '0'); b.setAttribute('role', 'button'); b.setAttribute('aria-label', f.label + ': ' + pct(f.profitable) + ' profitable');
+      b.addEventListener('click', function () { sel = f.family; draw(); detail(); }); c.appendChild(b);
+      var tx = se('text', { x: cx, y: cy - r - 4, 'text-anchor': 'middle' }); tx.textContent = f.label; c.appendChild(tx);
+    });
+    if (!shown) { var m = se('text', { x: 450, y: 210, 'text-anchor': 'middle' }); m.textContent = 'Not enough tested candidates yet. Run Search Lab or the Discovery Engine and this map fills in.'; c.appendChild(m); }
+  }
+  function detail() {
+    var box = document.getElementById('detail'); box.textContent = '';
+    var f = D.families.filter(function (x) { return x.family === sel; })[0] || D.families[0]; if (!f) return;
+    var c = el('div', 's-card'); c.style.gridColumn = '1 / -1'; var h = el('div', 's-row'); h.appendChild(el('h3', null, f.label)); f.tags.forEach(function (t) { h.appendChild(T58.badge(t, t === 'redundant' ? 'warn' : 'ok')); }); c.appendChild(h);
+    c.appendChild(el('div', null, f.verdict));
+    c.appendChild(T58.kv([['Candidates', f.candidates], ['In your Library', f.survivors], ['Profitable', pct(f.profitable) + ' (n=' + f.profitable_n + ')'], ['Significant', pct(f.significant) + (f.significance_basis ? ' · ' + f.significance_basis : '')], ['Survives doubled costs', pct(f.survives_cost) + ' (n=' + f.survives_cost_n + ')'], ['Redundant', pct(f.redundancy)], ['Prop-rule fit', f.prop_fit_pct == null ? '—' : Math.round(f.prop_fit_pct) + '% eval pass']]));
+    c.appendChild(el('div', 's-note', 'Profitable on: ' + (f.instruments_profitable.join(', ') || 'no instrument yet') + '. Tested on: ' + (f.instruments_tested.join(', ') || '—') + '. A dash means fewer than ' + D.min_n + ' candidates carry that figure.'));
+    box.appendChild(c);
+  }
+  function table() {
+    var t = document.getElementById('tbl'); t.textContent = ''; var hd = el('tr'); ['Family', 'Candidates', 'Library', 'Profitable', 'Significant', 'Survives 2x cost', 'Redundant', 'Instruments', 'Prop fit'].forEach(function (x) { hd.appendChild(el('th', null, x)); }); t.appendChild(hd);
+    D.families.forEach(function (f) { var tr = el('tr'); tr.style.cursor = 'pointer'; tr.addEventListener('click', function () { sel = f.family; draw(); detail(); });
+      [f.label, f.candidates, f.survivors, pct(f.profitable), pct(f.significant), pct(f.survives_cost), pct(f.redundancy), f.instruments_profitable.length, f.prop_fit_pct == null ? '—' : Math.round(f.prop_fit_pct) + '%'].forEach(function (x) { tr.appendChild(el('td', null, String(x))); }); t.appendChild(tr); });
+  }
+  load();
+})();
+</script>
+</body></html>
