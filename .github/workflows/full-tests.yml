@@ -1,15 +1,19 @@
 name: full-tests
 
-# The COMPLETE test suite (fast + slow tests), run in parallel. It is deliberately separate from the build workflows
-# so uploading files and building the apps never waits on it.
+# The FULL regression: every test, fast and slow, split into 4 weight-balanced shards that run in parallel on separate runners
+# (see tests/ci_lanes.py; the split is deterministic, so every shard computes the same assignment from the same checkout).
 #
-# Runs: every night, on version tags, on pull requests, and whenever you press "Run workflow".
+# It is deliberately NOT part of the pull-request loop. Pull requests run the FAST LANE (unit + parity, under ~3 minutes) in
+# web-cross-platform.yml, so a fix bundle gets an answer in minutes instead of ~14.
+#
+# Runs: every night, on version tags, whenever you press "Run workflow", and on a pull request that carries the `full-tests` label.
 
 on:
   schedule:
     - cron: "17 7 * * *"
   pull_request:
     branches: [ main ]
+    types: [ labeled, synchronize, reopened ]
   push:
     tags: [ "v*" ]
   workflow_dispatch: {}
@@ -19,10 +23,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  full:
-    name: full suite (Linux, parallel)
+  shard:
+    name: shard ${{ matrix.shard }}/4 (Linux)
+    # On pull requests only when the label is present; always on schedule, tags and manual runs.
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-tests')
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [ 1, 2, 3, 4 ]
     steps:
       - uses: actions/checkout@v5
         with:
@@ -40,5 +50,18 @@ jobs:
           pip install -r config/requirements.txt pytest pytest-xdist
       - name: Rebuild the data manifest (fails on UNREADABLE, e.g. a missing parquet engine)
         run: python scripts/build_data_manifest.py
-      - name: Run every test
-        run: xvfb-run -a pytest -q -p no:cacheprovider tests -n auto --durations=25
+      - name: Run shard ${{ matrix.shard }} of 4
+        run: xvfb-run -a pytest -q -p no:cacheprovider tests --shard ${{ matrix.shard }}/4 -n auto --durations=15
+
+  # One required check to point branch protection at: green only when every shard is green (or skipped on an unlabeled PR).
+  full-suite:
+    name: full suite (all shards)
+    needs: shard
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Every shard must have passed or been skipped
+        run: |
+          result="${{ needs.shard.result }}"
+          echo "shards: $result"
+          [ "$result" = "success" ] || [ "$result" = "skipped" ]

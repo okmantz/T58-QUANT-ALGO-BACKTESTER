@@ -2,8 +2,9 @@ name: web-cross-platform
 
 # THE web-app build: one workflow, one zip per OS.
 #
-#   test   FAST pytest tier on Linux, in parallel (pytest-xdist) -- runs beside the build, it does NOT gate it.
-#          The slow tests (tests/slow_tests.txt) and a full-suite run live in full-tests.yml (nightly / manual / tags).
+#   test   FAST LANE on Linux, in parallel (pytest-xdist): unit + parity tests only (tests/fast_lane.txt), target < 3 minutes.
+#          It gates the build. The rest of the suite (Flask/Tk/search/long tests) is the FULL regression in full-tests.yml:
+#          4 parallel shards, nightly / tags / manual / PRs labelled `full-tests`.
 #   build  Windows + macOS + Linux, each: install -> web tests -> start the real
 #          server from source and request every page -> PyInstaller one-folder
 #          build (build_tools/t58_web.spec) -> start the FROZEN app and request
@@ -38,9 +39,9 @@ permissions:
 
 jobs:
   test:
-    name: fast tests (Linux, parallel)
+    name: fast lane (unit + parity, Linux)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
         with:
@@ -54,8 +55,8 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r config/requirements.txt pytest pytest-xdist
-      - name: Run the fast tests
-        run: pytest -q -p no:cacheprovider tests -m "not slow" -n auto --durations=15
+      - name: Run the fast lane (unit + parity)
+        run: pytest -q -p no:cacheprovider tests -m "fast and not slow" -n auto --durations=15
 
   build:
     name: ${{ matrix.label }}
@@ -113,7 +114,8 @@ jobs:
           for p in launchers/run_web.py app/web/server.py app/web/launcher.py app/web/templates app/web/static \
                    build_tools/t58_web.spec build_tools/spec_common.py build_tools/package_release.py \
                    build_tools/frozen_smoke.py build_tools/bake_license_config.py config/pyproject.toml \
-                   strategies scripts/web_smoke_test.py; do
+                   strategies scripts/web_smoke_test.py data/data_pack.json data/data_manifest.json \
+                   "data/raw/ES1!" "data/raw/NQ1!" "data/raw/GC1!"; do
             [ -e "$p" ] || { echo "MISSING: $p"; missing=1; }
           done
           [ "$missing" = 0 ] || exit 1
