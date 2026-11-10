@@ -56,7 +56,7 @@ T58-Market-Data**); extract it next to the `.exe`. Tagged releases (`v*`) attach
 | Windows | double-click `launchers\run_web.bat` |
 | macOS | double-click `launchers/run_web.command` (first time: right-click, Open; if it will not run, `chmod +x launchers/run_web.command launchers/run_web.sh`) |
 | Linux | `bash launchers/run_web.sh` |
-| Chromebook (Linux/Crostini on) | download the *Chromebook* (or *Chromebook-ARM*) zip, then `bash install_chromebook.sh`; see [docs/INSTALL_CHROMEBOOK.md](docs/INSTALL_CHROMEBOOK.md) |
+| Chromebook (Linux/Crostini on) | download the *Chromebook* (or *Chromebook-ARM*) zip, then `bash install_chromebook.sh`; see [docs/GUIDES.md#installing-on-a-chromebook](docs/GUIDES.md#installing-on-a-chromebook) |
 | Manual | `pip install -r config/requirements.txt` then `python launchers/run_web.py` |
 
 The first run creates a private `.venv`. If port 5000 is busy the app picks the next free one and prints the address and a QR code.
@@ -90,9 +90,9 @@ New buyers: [docs/buyer/INSTALL.md](docs/buyer/INSTALL.md), then [docs/buyer/QUI
 
 | Stage | Tools |
 |---|---|
-| **Create** | Strategy Discovery Engine (pick a market and prop firm; Speed Run, Search Lab, Evolution Lab and the deep Forge gauntlet are its presets), plain-English / Python / PineScript / MQL5 import, the no-code Manual builder, Generate Strategies (AI), Research Agent (read-only engine calls, never invented numbers) |
-| **Test** | Full Pipeline (the one run allowed to produce a verdict; its Advanced options are sectioned, and **Run Batch / Schedule Batch** live in *Advanced → Batch & scheduling*), Run & Report, Payout Probability (eval pass, funded, payout 1, 2 ... with an optional scaling stress test), Prop-Firm Recommender (ranks every preset against your trade sequence) |
-| **Optimize** | Search Lab (5-stage funnel to a leaderboard), Iterative Refinement (GA), Full Pipeline, Optimize (Quick Optimize: searches the most recent 150k bars by default, adjustable under Advanced), Multi-Objective (NSGA-II Pareto front), Evolution Lab (unattended generate, filter, validate, mutate, ranked by PROP FITNESS) |
+| **Create** | Strategy Discovery Engine (pick a market and prop firm; the old Speed Run, Search Lab, Evolution Lab and Forge pages are retired: their searches are its presets), plain-English / Python / PineScript / MQL5 import, the no-code Manual builder, Generate Strategies (AI), AI Research (ask a question or run analyses; read-only engine calls, never invented numbers) |
+| **Test** | Full Pipeline (the one run allowed to produce a verdict; its Advanced options are sectioned, and **Run Batch / Schedule Batch** live in *Advanced → Batch & scheduling*), Run & Report, Payout Planner (expected attempts, fees and days to a first payout; Lucid 50k vs 100k; parallel evaluations), Payout Probability (eval pass, funded, payout 1, 2 ... with an optional scaling stress test), Prop-Firm Recommender (ranks every preset against your trade sequence) |
+| **Optimize** | Iterative Refinement (GA), Full Pipeline, Optimize (Quick Optimize: searches the most recent 150k bars by default, adjustable under Advanced), Multi-Objective (NSGA-II Pareto front), the Discovery Engine's evolution preset (unattended generate, filter, validate, mutate, ranked by PROP FITNESS) |
 | **Validate** | One page, eight checks you tick and run together or alone: Monte Carlo, CPCV, PBO, Walk-Forward, Walk-Forward-Aware GA, Parameter Sensitivity, Parameter Robustness, Regime Survival |
 | **Champion** | The Champion board: every validated strategy with its T58 score, a podium (1st/2nd/3rd), a short promotion assessment and a **Promote to Champion** button on each row, plus a side-by-side replacement comparison when a promoted strategy overlaps an existing champion on the same market. Multi-Asset Portfolio, Multi-Strategy Ensemble, Family Diversity, Automated Portfolio Composer |
 | **Deployment** | Deploy page with a portfolio overview (per account: firm, live P&L, open and recent trades, algo health), Forward Test (MT5 demo), Webhook Relay (TradingView), Overnight Autopilot, Auto-Retune, Deploy Live, Live PnL pill, Live Market monitor |
@@ -266,6 +266,7 @@ daily soft limit, profit target, best-day cap). Run create -> test -> optimize -
 TradingView webhook URL and the Pine alert message. Every alert from your Pine strategy goes through the same webhook relay a real account uses, and each closed trade
 is booked as a visible win or loss; the account passes or breaches like a real evaluation. The deploy-live page warns you to switch to **Live** before connecting a real
 prop-firm account, and saving broker credentials or starting a real session is refused in Demo mode.
+The demo page lists every rule of the account in plain words (profit target, maximum loss, daily limit, best-day rule, minimum days) with where you stand, and estimates your pass chance once 15 trades have closed; the Deploy page carries a card pointing to it.
 
 ## Monte Carlo
 
@@ -344,7 +345,9 @@ Both fail loudly on anything unsupported instead of producing a silently wrong b
 ## Tests
 
 ```bash
-pytest -q tests
+python scripts/run_tests.py --fast        # unit + parity lane (pytest -m "fast and not slow"), runs on every push
+pytest -q tests                           # everything
+pytest -q tests --shard 1/4               # one quarter of the full suite (CI runs 4 shards nightly)
 ```
 
 Brand colors: `assets/brand/palette.md`.
@@ -353,14 +356,4 @@ Brand colors: `assets/brand/palette.md`.
 
 Simulated results are estimates derived from historical data and resampling. Past performance and simulated outcomes do not guarantee future results.
 
-
-## What changed on 2026-11-07
-
-- **Chromebook build** (x86_64 and ARM64), built in a Debian 12 container so it matches ChromeOS's Linux (Crostini).
-- **Investing tab** (Hedge Fund Manager > Investing): search stocks, indices and crypto; SEC EDGAR financial statements and filings; an undervaluation
-  screen; manual orders; automated investing tuned by a 6-question profile; backtests; paper mode by default. See [docs/INVESTING.md](docs/INVESTING.md).
-- **Prop-firm lifecycle is the default objective everywhere**: P(pass evaluation), P(funded), P(funded survival), P(pass AND payout), time to target in
-  *calendar* days. A **net-profit** mode for live accounts is a selectable option on every form. See [docs/PROP_LIFECYCLE.md](docs/PROP_LIFECYCLE.md).
-- **Hypothesis-first discovery** (Discovery Engine > families > "Hypothesis-first") and **all families enabled by default** (`T58_USE_ALL_FAMILIES=0` restores the narrowed set).
-- **Canonical engine reconciliation** (`app/backtest/reconcile.py`): the fast path is checked trade-by-trade against the scalar reference engine.
-- **SEC EDGAR live filings** (8-K / 10-Q / 10-K) in Global Events.
+What changed in each release: [docs/CHANGELOG.md](docs/CHANGELOG.md).
