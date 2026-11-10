@@ -199,8 +199,8 @@ def test_risk_amount_and_position_size_vectorized_match_scalar():
 
 def test_is_vectorizable_allows_perbar_stops_rejects_unsupported():
     """v5: per-bar stop_loss_distance / take_profit_distance arrays (ATR
-    stops) are now vectorizable; trailing stops, breakeven triggers and
-    partial exits still force the scalar path."""
+    stops) are now vectorizable, as are trailing stops and break-even;
+    partial exits and resting-order strategies still force the scalar path."""
     base = dict(name="x", source_type="python", signals=pd.Series([0]))
     assert is_vectorizable(StrategyResult(**base, stop_loss_pips=20.0, take_profit_pips=40.0))
     assert is_vectorizable(StrategyResult(**base, stop_loss_distance=pd.Series([0.5])))
@@ -211,12 +211,13 @@ def test_is_vectorizable_allows_perbar_stops_rejects_unsupported():
         **base, stop_loss_distance=pd.Series([0.5]), trailing_stop_distance=pd.Series([0.5])))
     assert not is_vectorizable(StrategyResult(
         **base, stop_loss_distance=pd.Series([0.5]), trailing_stop_distance=0.5))
-    assert not is_vectorizable(StrategyResult(
+    # 2026-11: break-even vectorizes now
+    assert is_vectorizable(StrategyResult(
         **base, stop_loss_distance=pd.Series([0.5]), breakeven_trigger_r=1.5))
     assert not is_vectorizable(StrategyResult(
         **base, stop_loss_distance=pd.Series([0.5]), partial_exit={"r_multiple": 1.0, "fraction": 0.5}))
     assert is_vectorizable(StrategyResult(**base, trailing_stop_distance=pd.Series([0.5])))
-    assert not is_vectorizable(StrategyResult(**base, breakeven_trigger_r=1.5))
+    assert is_vectorizable(StrategyResult(**base, breakeven_trigger_r=1.5))
 
 
 def test_position_size_parity_with_contract_size():
@@ -514,3 +515,75 @@ def test_trailing_stop_differs_from_no_trailing():
     with_tr = run_vectorized_batch(df, [VectorizedCandidate("a", sig, None, None, stop_distances=sl, trail_distances=tr)], risk)["a"].trades
     without = run_vectorized_batch(df, [VectorizedCandidate("a", sig, None, None, stop_distances=sl)], risk)["a"].trades
     assert [t.exit_price for t in with_tr] != [t.exit_price for t in without]
+
+
+# ---------------------------------------------------------------------------------------------------------
+# 2026-11: break-even trigger and time-invalidation stop on the fast path (trade-by-trade parity with the scalar engine)
+# ---------------------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("be_r", [0.5, 1.0, 2.0])
+@pytest.mark.parametrize("trail", [False, True])
+@pytest.mark.parametrize("seed", [3, 7, 21])
+def test_breakeven_matches_scalar_engine(be_r, trail, seed):
+    df = _gapless_df(seed=seed)
+    n = len(df)
+    sig = _alternating_signals(n, seed=seed + 200)
+    sig[-5:] = 0
+    idx = np.arange(n)
+    sl_dist = pd.Series(1.0 + 0.2 * np.sin(idx / 25.0))
+    tp_dist = pd.Series(3.0 + 0.3 * np.cos(idx / 31.0))
+    tr_dist = pd.Series(0.9 + 0.1 * np.cos(idx / 17.0)) if trail else None
+    risk = RiskConfig(initial_balance=10_000.0, risk_value=1.0, pip_size=0.01, spread_pips=1.0,
+                      slippage_pips=0.5, commission_per_trade=0.5, max_trades_per_day=999)
+    scalar_trades, _ = run_execution(
+        df, pd.Series(sig), risk, None, None, stop_loss_distance=sl_dist, take_profit_distance=tp_dist,
+        trailing_stop_distance=tr_dist, breakeven_trigger_r=be_r,
+    )
+    out = run_vectorized_batch(
+        df, [VectorizedCandidate("c", sig, None, None, stop_distances=sl_dist.to_numpy(), take_distances=tp_dist.to_numpy(),
+                                 trail_distances=None if tr_dist is None else tr_dist.to_numpy(), breakeven_trigger_r=be_r)], risk)
+    assert len(scalar_trades) > 15
+    _assert_trades_match_lag_shift(scalar_trades, out["c"].trades, df)
+
+
+def test_breakeven_is_not_silently_ignored():
+    df = _gapless_df(seed=5)
+    n = len(df)
+    sig = _alternating_signals(n, seed=9)
+    sig[-5:] = 0
+    sl, tp = np.full(n, 1.5), np.full(n, 4.0)
+    risk = RiskConfig(initial_balance=10_000.0, risk_value=1.0, pip_size=0.01, max_trades_per_day=999)
+    on = run_vectorized_batch(df, [VectorizedCandidate("a", sig, None, None, stop_distances=sl, take_distances=tp, breakeven_trigger_r=0.5)], risk)["a"].trades
+    off = run_vectorized_batch(df, [VectorizedCandidate("a", sig, None, None, stop_distances=sl, take_distances=tp)], risk)["a"].trades
+    assert [t.exit_price for t in on] != [t.exit_price for t in off]
+
+
+@pytest.mark.parametrize("seed", [3, 7, 21])
+@pytest.mark.parametrize("hours,band", [(1.0, 0.8), (3.0, 1.5)])
+def test_time_stop_matches_scalar_engine(seed, hours, band):
+    df = _gapless_df(seed=seed)
+    n = len(df)
+    sig = np.zeros(n, dtype=np.int8)
+    rng = np.random.default_rng(seed)
+    state = 0
+    for i in range(n):                                   # long holds, so positions actually go stale
+        if rng.random() < 0.02:
+            state = int(rng.choice([-1, 0, 1]))
+        sig[i] = state
+    sig[-5:] = 0
+    risk = RiskConfig(initial_balance=10_000.0, risk_value=1.0, pip_size=0.01, spread_pips=1.0, slippage_pips=0.5,
+                      commission_per_trade=0.5, max_trades_per_day=999, time_stop_hours=hours, time_stop_atr_band=band)
+    sl_dist = pd.Series(np.full(n, 4.0))
+    scalar_trades, _ = run_execution(df, pd.Series(sig), risk, None, None, stop_loss_distance=sl_dist)
+    out = run_vectorized_batch(df, [VectorizedCandidate("c", sig, None, None, stop_distances=sl_dist.to_numpy())], risk)
+    assert any(t.exit_reason == "time_stop" for t in scalar_trades), "fixture must exercise the time stop"
+    _assert_trades_match_lag_shift(scalar_trades, out["c"].trades, df)
+
+
+def test_is_vectorizable_gate_after_widening():
+    from app.backtest.vectorized_fastpath import risk_is_vectorizable
+    base = dict(name="x", source_type="python", signals=pd.Series([0]))
+    assert is_vectorizable(StrategyResult(**base, stop_loss_distance=pd.Series([0.5]), breakeven_trigger_r=1.0))
+    assert not is_vectorizable(StrategyResult(**base, stop_loss_distance=pd.Series([0.5]), partial_exit={"r": 1.0, "fraction": 0.5}))
+    assert not is_vectorizable(StrategyResult(**base, entry_orders=[object()]))
+    assert risk_is_vectorizable(RiskConfig(time_stop_hours=4.0))
+    assert not risk_is_vectorizable(RiskConfig(flatten_time_ct="15:55"))
