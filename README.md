@@ -229,28 +229,14 @@ economic question: `EV = p × q × V − p × A − c`. For firms that charge a 
 Combine, $49 per month) `c` is the monthly price × the months the evaluation is expected to take (median time to pass,
 rounded up to whole 30-day periods), so slow passers are no longer priced as if they paid for one month.
 
-## T58 Prop Firm Rulebook v2
+## Prop firm rulebook (inside the engine, not a page)
 
-The **Prop Firm Rulebook v2** page (sidebar) replaces the old Edge Rulebook. v2 designs a strategy *backwards from the account's rules and pay structure* and
-holds every engine (create, test, optimize, validate, deploy) to the same eight gates, each a number the app computes:
-
-| Gate | Question | Verdict it unlocks |
-|---|---|---|
-| G0 | Rules sheet complete, sourced and < 30 days old (one blank stops everything) | LEAD |
-| G1 | Mechanism and counterparty written down before any data is touched | LEAD |
-| G2 | Pre-registered trial (family, sign, breadth, seal date); at most 3 looks per family | LEAD |
-| G3 | Development evidence: `E_plan = observed edge - E[max N] x SE >= +0.05R`, >= 400 trades over >= 150 days, plus leg / top-3 / quarter / year / neighbour / lookahead checks | FORWARD-TEST CANDIDATE |
-| G4 | Day behaviour (2 to 4 trades a day, day-stop = min(3R, 60% of the soft limit)) | FORWARD-TEST CANDIDATE |
-| G5 | Lifecycle under the v2 sizing policy (Wilson 5th-percentile pass / payout bars, EV at E_plan with payouts cut 50%) | FORWARD-TEST CANDIDATE |
-| G6 | Live-sim forward test, kill line LLR (H1 = +0.10R) at -2.25 | EVALUATE |
-| G7 | Capped paid attempts (score +1.5 paid / -0.9 unpaid, scale at +2.2, retire at -2.2, max 6) | scale to FUNDED |
-
-Sizing (`app/prop/lifecycle_v2.py`): evaluation risk 7.5% of the loss limit (x0.5 below half the cushion, x0.25 below a quarter, floor one micro);
-funded risk 5% of the cushion, capped at 5% of the limit and recomputed after each payout; day stop as above. Source: `app/validation/rulebook.py`,
-`app/prop/lifecycle_v2.py`, `app/forward_test/sprt_monitor.py`. The Full Pipeline writes `rulebook_v2` into its audit evidence and the verdict ladder
-demotes a candidate whose gate failed. The discovery engine runs G3 as a mandatory promotion step (`rulebook_g3`) with N = the lifetime effective trial count.
-The Rulebook's payout terms (qualifying-day size, cumulative minimum, buffer, split) are assumptions in `PayoutTerms` until the firm's own page is
-entered on the rules sheet (G0): treat G5's dollar figures as a model, not a quote.
+There is no Rulebook page. The rulebook library (`app/validation/rulebook.py`, `app/prop/lifecycle_v2.py`, `app/forward_test/sprt_monitor.py`) runs inside
+the pipeline: the Full Pipeline writes `rulebook_v2` into its audit evidence and the verdict ladder demotes a candidate whose gate failed, and the discovery
+engine runs G3 as a mandatory promotion step (`rulebook_g3`) with N = the lifetime effective trial count. Each discovery run's notes record the look count and G0
+(rules sheet) status, so you see the effect without a screen to manage. Gates: G0 rules sheet complete and fresh, G1 mechanism written down, G2 pre-registered
+trial (max 3 looks per family), G3 development evidence (`E_plan = observed edge - E[max N] x SE >= +0.05R`, >= 400 trades), G4 day behaviour, G5 lifecycle under the
+v2 sizing policy, G6 forward-test kill line, G7 capped paid attempts. Payout terms are assumptions in `PayoutTerms`: treat G5's dollar figures as a model, not a quote.
 
 ### Net profit mode
 
@@ -261,8 +247,8 @@ cost stress at 1.5x / 2x and month stability (`app/validation/net_profit_tester.
 ## Demo and Live accounts
 
 New users start in **Demo**. Account settings has a Demo / Live toggle; the header shows a live P&L tracker next to the bell and profile picture (badge, running P&L, colour).
-Demo is a **T58 Prop Firm simulation at 25k / 50k / 100k** (`app/demo_account/`): the same rule shape the Rulebook tests against (trailing end-of-day loss floor that locks,
-daily soft limit, profit target, best-day cap). Run create -> test -> optimize -> validate, then open **T58 Demo account** and press *Get my alert*: it creates the
+Demo is a **T58 Prop Firm simulation at 25k / 50k / 100k** (`app/demo_account/`): the same rule shape the pipeline tests against (trailing end-of-day loss floor that locks,
+daily soft limit, profit target, best-day cap). Run create -> test -> optimize -> validate, then open **Deploy → T58 demo account**, pick a saved strategy and press *Get my alert*: it creates the
 TradingView webhook URL and the Pine alert message. Every alert from your Pine strategy goes through the same webhook relay a real account uses, and each closed trade
 is booked as a visible win or loss; the account passes or breaches like a real evaluation. The deploy-live page warns you to switch to **Live** before connecting a real
 prop-firm account, and saving broker credentials or starting a real session is refused in Demo mode.
@@ -298,12 +284,12 @@ strategies to compare, and you can promote a strategy from there. See the Deploy
   High-vol or Event-driven, each with the exact rule and numbers that produced it), key macro releases (CPI, PPI, jobs, GDP, PCE, rates), central-bank
   decision dates, market sessions, futures stats, volatility regime, correlation matrix, cross-asset monitor and geopolitics. Context, not a signal; see
   [docs/GLOBAL_EVENTS.md](docs/GLOBAL_EVENTS.md).
-- **Options Outlook** (Black-Scholes candidates with an optional AI narrative), the **AI Assistant** dashboard (news, scanner, chat) and a beginner **Resources** guide.
+- **Options Outlook** (Black-Scholes candidates with an optional AI narrative), the **AI Assistant** dashboard (news, scanner, chat) and a beginner reading list under **University → Resources**.
 
 ## Account, ranks and themes
 
-**Account Settings** holds your research profile: a rank and title earned from XP, collectible metallic badges, a three-badge showcase, shareable
-achievement cards and downloadable certificates (SVG or PNG). The **Achievements** page filters by status, difficulty and category. Six scenes unlock
+**Account Settings** is one page with tabs (Account, Notifications, API Keys, Achievements, Support) and holds your research profile: a rank and title earned from XP, collectible metallic badges, a three-badge showcase, shareable
+achievement cards and downloadable certificates (SVG or PNG). The **Achievements** tab filters by status, difficulty and category. Six scenes unlock
 through achievements (Obsidian Gold, Sakura Reverie, Abyssal Blue, Endless Sands, Coastal Italy, Bioluminescence; locked tiles show what to do), five
 whole-interface themes and five **Workspace presets** (Obsidian, Cyberpunk, Nordic, Evergreen, Sovereign -- each an earned reward) can be switched on,
 and your theme, preset, accent and background sync with the account. The Sakura, Abyssal and other animated scenes follow one shared clock, so the
@@ -314,7 +300,7 @@ leaderboards: nothing in the app talks to a T58 server for that.
 ## Settings and defaults
 
 - **AI Assist** is off by default. The provider setting defaults to **Auto**: if a Claude or OpenAI key is saved it is used first, and any failure or a missing key
-  falls back to Ollama (local, free). Picking Claude, OpenAI or Ollama explicitly under **API Keys → AI provider** pins it (a pinned cloud provider still falls back to
+  falls back to Ollama (local, free). Picking Claude, OpenAI or Ollama explicitly under **Account Settings → API Keys → AI provider** pins it (a pinned cloud provider still falls back to
   Ollama if its call fails). The model only proposes values for already-discovered tunable parameters, never code, and every suggestion goes
   through the same backtest, prop-sim and Monte Carlo pipeline.
 - **Costs are never zero by default**: realistic spread and slippage plus $3 per trade commission (`app/backtest/risk.py`). You can set any cost to 0.
@@ -325,9 +311,9 @@ leaderboards: nothing in the app talks to a T58 server for that.
   (`app/orchestration/ready_bar.py`), so a change to a default changes every page and popup that quotes it.
 - **Explanations everywhere**: terms such as win rate, trades, profit factor, drawdown, T58 score and the READY bar are clickable for a plain-language popup
   (definitions in `app/scoring/metric_defs.py`, served at `/api/metrics`).
-- **Market data pack**: `data/data_pack.json` freezes a canonical NQ / ES / MNQ / MES history with the sealed window fixed on a calendar date
+- **Market data pack**: `data/data_pack.json` freezes a canonical ES / NQ / GC (and micro) history with the sealed window fixed on a calendar date
   (`2025-09-01`) and a content hash of that window. `python scripts/freeze_data_pack.py --verify` (or `/api/data-pack`) says whether the files still match.
-  MES and MNQ reuse the ES and NQ price history with a tenth of the dollars per point. See [docs/DATA_COVERAGE.md](docs/DATA_COVERAGE.md).
+  Only ES, NQ and GC ship in the download; other markets are a separate extended pack (the pooled-edge test needs 8 markets and says INSUFFICIENT until it is added). See [docs/DATA_COVERAGE.md](docs/DATA_COVERAGE.md).
 - **Licensing**: master key (offline, owner), Google Sheet keys (customers) or an optional license server. See [docs/LICENSING.md](docs/LICENSING.md).
 - **Speed switches** (environment variables): `T58_MC_VECTORIZE=0` (Monte Carlo falls back to the per-path loop), `T58_LOOKAHEAD_DISK_CACHE=0`,
   `T58_CACHE_DIR`, `T58_MODULE_CACHE=0` (a strategy with mutable module state sets `T58_STATEFUL = True`).
