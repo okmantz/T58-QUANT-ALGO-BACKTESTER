@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """One-command test runner.
 
-    python scripts/run_tests.py             # FAST tier, parallel  (minutes)   <- use this before building
+    python scripts/run_tests.py --fast      # FAST LANE: unit + parity tests (~3 min)   <- run this before every push
+    python scripts/run_tests.py             # standard tier: everything except the slow tests, parallel
     python scripts/run_tests.py --full      # everything, parallel
+    python scripts/run_tests.py --full --shard 2/4   # one weight-balanced quarter of the full regression (what nightly CI runs)
     python scripts/run_tests.py --web       # just the web/dashboard tests
     python scripts/run_tests.py --refresh-slow   # re-time the whole suite and rewrite tests/slow_tests.txt
 
@@ -33,7 +35,9 @@ def _xdist() -> list[str]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--fast", action="store_true", help="the fast lane only: unit + parity tests listed in tests/fast_lane.txt")
     ap.add_argument("--full", action="store_true", help="run every test, slow ones included")
+    ap.add_argument("--shard", default=None, help="INDEX/TOTAL, e.g. 2/4: run one weight-balanced shard of the selected tests")
     ap.add_argument("--web", action="store_true", help="only tests/web")
     ap.add_argument("--refresh-slow", action="store_true", help="time the whole suite and rewrite tests/slow_tests.txt")
     ap.add_argument("extra", nargs="*", help="extra pytest arguments")
@@ -56,8 +60,12 @@ def main() -> int:
         return rc
 
     cmd = base + (["tests/web"] if a.web else ["tests"]) + _xdist()
-    if not a.full:
+    if a.fast:
+        cmd += ["-m", "fast and not slow"]
+    elif not a.full:
         cmd += ["-m", "not slow"]
+    if a.shard:
+        cmd += ["--shard", a.shard]
     return subprocess.call(cmd + a.extra, cwd=ROOT)
 
 
