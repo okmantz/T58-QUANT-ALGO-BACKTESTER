@@ -32,8 +32,3 @@ def test_suggest_loop_config_rejects_invalid_input():
     assert r.get_json()["ok"] is False
 
 
-def test_search_form_still_loads_with_the_new_suggest_button():
-    client = app.test_client()
-    r = client.get("/search")
-    assert r.status_code == 200
-    assert b"Suggest settings from my prop rules" in r.data

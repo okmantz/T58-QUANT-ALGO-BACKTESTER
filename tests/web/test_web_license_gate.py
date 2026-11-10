@@ -108,13 +108,14 @@ def _follow_redirects_manually(client, url, limit=10):
     raise AssertionError(f"redirect loop (> {limit} hops): {chain}")
 
 
-def test_unlicensed_and_locked_does_not_redirect_loop():
-    """Regression: unlicensed + a lock password used to bounce /lock -> /activate -> /lock forever
-    (browser: ERR_TOO_MANY_REDIRECTS). The lock page must render; unlocking then reaches /activate."""
+def test_unlicensed_with_a_stale_lock_password_lands_on_activation_not_the_lock_page():
+    """A reinstall can leave an old lock password behind. The FIRST screen must still be the license key + email page, never a
+    password prompt, and the redirect chain must not loop."""
     from app.accounts.settings import AccountSettings
 
     locked = AccountSettings(password_hash="pbkdf2$sha256$1000$aa$bb")
     with patch.object(license_client, "validate", return_value=(False, "Not activated.")), \
+         patch.object(license_client, "validate_fast_start", return_value=(False, "Not activated.")), \
          patch("app.accounts.settings.load_account_settings", return_value=locked), \
          patch.object(license_client, "load_state") as mock_state:
         mock_state.return_value.email = ""
@@ -122,7 +123,50 @@ def test_unlicensed_and_locked_does_not_redirect_loop():
         for start in ("/lock?next=/activate", "/activate", "/dashboard", "/"):
             r, chain = _follow_redirects_manually(c, start)
             assert r.status_code == 200, (start, chain)
-            assert b"lock" in r.data.lower(), (start, chain)
+            body = r.data.lower()
+            assert b"license" in body, (start, chain)
+            assert b'name="password"' not in body, (start, chain)
+
+
+def test_first_activation_clears_a_leftover_lock_password(monkeypatch, tmp_path):
+    """After the license is accepted on a fresh install, the leftover password must be gone so the app opens straight away."""
+    from app.accounts import settings as account_settings
+
+    monkeypatch.setattr(account_settings, "get_app_base_dir", lambda: tmp_path)
+    account_settings.save_account_settings(account_settings.AccountSettings(
+        display_name="Old", password_hash=account_settings.hash_password("old-secret")))
+    assert account_settings.load_account_settings().has_password
+    monkeypatch.setattr(license_client, "load_state", lambda: license_client.LicenseState())
+    monkeypatch.setattr(license_client, "_activate_impl", lambda *a, **k: (True, "Activated."))
+    ok, _msg = license_client.activate("me@example.com", "T58-TEST-KEY")
+    assert ok
+    after = account_settings.load_account_settings()
+    assert not after.has_password
+    assert after.display_name == "Old"        # only the lock is dropped, never the profile
+
+
+def test_reactivating_an_existing_install_keeps_its_lock_password(monkeypatch, tmp_path):
+    from app.accounts import settings as account_settings
+
+    monkeypatch.setattr(account_settings, "get_app_base_dir", lambda: tmp_path)
+    account_settings.save_account_settings(account_settings.AccountSettings(password_hash=account_settings.hash_password("keep-me")))
+    monkeypatch.setattr(license_client, "load_state",
+                        lambda: license_client.LicenseState(email="me@example.com", license_key="T58-OLD-KEY"))
+    monkeypatch.setattr(license_client, "_activate_impl", lambda *a, **k: (True, "Activated."))
+    ok, _msg = license_client.activate("me@example.com", "T58-NEW-KEY")
+    assert ok
+    assert account_settings.load_account_settings().has_password
+
+
+def test_licensed_and_locked_still_shows_the_lock_page():
+    from app.accounts.settings import AccountSettings
+
+    locked = AccountSettings(password_hash="pbkdf2$sha256$1000$aa$bb")
+    with patch.object(license_client, "validate", return_value=(True, "Active.")), \
+         patch("app.accounts.settings.load_account_settings", return_value=locked):
+        c = app.test_client()
+        r, chain = _follow_redirects_manually(c, "/dashboard")
+    assert r.status_code == 200 and b'name="password"' in r.data.lower(), chain
 
 
 def test_lock_next_param_is_same_site_only():

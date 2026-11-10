@@ -93,11 +93,6 @@ def _poll_until_done(client, job_id: str, timeout: float = 600.0) -> dict:
     raise AssertionError(f"multi-instrument job {job_id} did not finish within {timeout}s")
 
 
-def test_multi_instrument_form_loads():
-    client = app.test_client()
-    r = client.get("/search/multi-instrument")
-    assert r.status_code == 200
-    assert b"Multi-instrument search" in r.data
 
 
 def test_multi_instrument_start_requires_at_least_two_datasets(_isolated_raw_data_dir):

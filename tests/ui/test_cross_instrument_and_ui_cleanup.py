@@ -343,19 +343,8 @@ def test_dashboard_has_no_market_data_library(client):
 # 4. Evolution Lab lists are dropdowns (with Select all) and still submit the same fields
 # ---------------------------------------------------------------------------
 
-def test_evolution_families_are_a_dropdown(client):
-    body = client.get("/evolution").get_data(as_text=True)
-    assert 'id="evo-families-list" data-t58-multiselect' in body
-    assert body.count('name="families"') > 5, "every family checkbox must still be submitted with the form"
-    assert "t58SetCheckboxes('evo-families-list'" not in body, "old always-open Select All buttons should be gone"
 
 
-def test_multi_instrument_evolution_lists_are_dropdowns(client):
-    body = client.get("/evolution/multi-instrument").get_data(as_text=True)
-    assert 'id="mi-evo-datasets-list"' in body
-    assert 'id="mi-evo-families-list" data-t58-multiselect' in body
-    assert 'name="datasets"' in body and 'name="families"' in body
-    assert "AAA_5M.csv" in body
 
 
 def test_multiselect_component_has_select_all_clear_and_search():

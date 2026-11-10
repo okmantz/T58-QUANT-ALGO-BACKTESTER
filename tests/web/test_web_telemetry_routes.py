@@ -181,10 +181,6 @@ def test_search_and_speed_run_job_pages_carry_banner_swarm_and_chat(real_client)
         assert "t58-pc-launcher" in html, tool
 
 
-def test_evolution_page_has_banner_and_swarm(real_client):
-    html = real_client.get("/evolution").get_data(as_text=True)
-    assert 'data-progress-url="/evolution/status.json"' in html and 'data-progress-key="progress"' in html
-    assert "/api/telemetry/swarm/evolution" in html
 
 
 def test_dashboard_dropped_the_survivors_strip_but_keeps_the_universe_link(real_client):

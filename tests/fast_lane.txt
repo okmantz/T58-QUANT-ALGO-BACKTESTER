@@ -1,0 +1,32 @@
+# Fast lane = unit + parity tests (pytest -m "fast and not slow"). One repo-relative prefix per line:
+#   a folder ends with "/", a single file does not. Everything NOT listed still runs in the full regression
+#   (nightly / tags / on demand, split into shards: pytest --shard 1/4 ... 4/4).
+# Heavy search / pipeline / strategy-space tests run in the full regression shards, not here.
+# Keep this lane under ~3 minutes on a 4-core runner. Flask-client, Tk, network-style and long search tests belong in the full run.
+
+# engine, fills, indicators, vectorized fastpath (parity with the full engine)
+tests/backtest/test_vectorized_fastpath.py
+tests/backtest/test_vector_store.py
+tests/backtest/test_cost_parity.py
+tests/backtest/test_adaptive_risk_modes.py
+tests/backtest/test_indicator_cache.py
+tests/backtest/test_indicator_disk_cache.py
+tests/test_vector_account_parity.py
+tests/test_tv_bridge.py
+tests/test_breakdowns_and_ablation_view.py
+tests/test_zones.py
+
+# prop-firm rules, simulators, payout maths
+tests/prop/
+
+# scoring, verdict ladder and gates
+tests/scoring/
+
+# data: importers, health checks, storage, data pack, starter bundle
+tests/data/
+tests/packaging/test_starter_data_bundle.py
+tests/packaging/test_ci_lanes.py
+
+# licensing and the activation-first gate
+tests/licensing/
+tests/web/test_web_license_gate.py

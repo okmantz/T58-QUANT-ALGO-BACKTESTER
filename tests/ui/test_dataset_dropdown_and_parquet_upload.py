@@ -66,8 +66,6 @@ def _seed_dataset(instrument: str, filename: str) -> None:
 @pytest.mark.parametrize(
     "route,form_page",
     [
-        ("/search", "search.html"),
-        ("/evolution", "evolution.html"),
         ("/refine", "refine.html"),
         ("/full-pipeline", "full_pipeline.html"),
     ],
@@ -85,25 +83,8 @@ def test_market_data_dropdown_shows_grouped_dataset(client, route, form_page):
     assert "EURUSD5.csv" in body
 
 
-def test_evolution_multi_instrument_groups_checkboxes(client):
-    _seed_dataset("XAUUSD", "XAUUSD15.csv")
-    _seed_dataset("GBPUSD", "GBPUSD5.csv")
-    resp = client.get("/evolution/multi-instrument")
-    assert resp.status_code == 200
-    body = resp.get_data(as_text=True)
-    assert "XAUUSD" in body
-    assert "GBPUSD" in body
-    assert "XAUUSD15.csv" in body
 
 
-def test_search_multi_instrument_groups_checkboxes(client):
-    _seed_dataset("XAUUSD", "XAUUSD15.csv")
-    _seed_dataset("GBPUSD", "GBPUSD5.csv")
-    resp = client.get("/search/multi-instrument")
-    assert resp.status_code == 200
-    body = resp.get_data(as_text=True)
-    assert 'class="dataset-group-label"' in body
-    assert "XAUUSD" in body and "GBPUSD" in body
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +153,7 @@ def test_parquet_upload_accepted_end_to_end(client):
 # Bug 1b: file picker accept attributes hid parquet/tsv/txt/archives
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("route", ["/search", "/evolution", "/refine"])
+@pytest.mark.parametrize("route", ["/refine"])
 def test_upload_input_accepts_non_csv_market_data_formats(client, route):
     resp = client.get(route)
     body = resp.get_data(as_text=True)

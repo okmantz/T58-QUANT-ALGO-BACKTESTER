@@ -48,17 +48,6 @@ def test_research_form_loads():
     assert b"Research Director" in r.data
 
 
-def test_forge_form_has_pip_detect_wiring():
-    """Regression guard for the missing-pip-size-detect bug: forge.html
-    must expose the same detect button/field/JS hook evolution.html
-    already has, not a bare hardcoded 0.0001 field."""
-    client = app.test_client()
-    r = client.get("/forge")
-    assert r.status_code == 200
-    body = r.get_data(as_text=True)
-    assert "forgeDetectPipSize" in body
-    assert 'id="forge_pip_size_field"' in body
-    assert "/data/detect-pip-size" in body
 
 
 def test_research_run_requires_strategy_selection():

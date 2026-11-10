@@ -220,7 +220,7 @@ def test_pipeline_recovery_actions_inherit_run_risk():
 
 
 @pytest.mark.parametrize("path", [
-    "/search", "/evolution", "/full-pipeline", "/validate-simple", "/champion-simple",
+    "/full-pipeline", "/validate-simple", "/champion-simple",
 ])
 def test_guided_next_step_pages_render(path):
     """Sibling next-step landings out of a completed pipeline (Validate
@@ -229,6 +229,12 @@ def test_guided_next_step_pages_render(path):
     /activate in an unlicensed test client, by design, not a crash.)"""
     client = app.test_client()
     assert client.get(path).status_code == 200
+
+
+@pytest.mark.parametrize("path", ["/search", "/evolution"])
+def test_retired_lab_pages_redirect(path):
+    """Search Lab / Evolution Lab were retired; the routes redirect."""
+    assert app.test_client().get(path).status_code == 302
 
 
 # ----------------------------------------------------------------------

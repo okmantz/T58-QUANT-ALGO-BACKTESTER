@@ -87,11 +87,6 @@ def _poll_until_done(client, job_id: str, timeout: float = 600.0) -> dict:
     raise AssertionError(f"search job {job_id} did not finish within {timeout}s")
 
 
-def test_search_form_loads():
-    client = app.test_client()
-    r = client.get("/search")
-    assert r.status_code == 200
-    assert b"Search Lab" in r.data
 
 
 def test_search_job_status_404_for_unknown_job():

@@ -61,6 +61,7 @@ os.environ.setdefault("T58_SKIP_CLOCK_EPOCH", "1")   # the one-time clock-epoch 
 # right for a running app, never wanted mid-test-suite. Must be set BEFORE app.web.server is imported.
 os.environ.setdefault("T58_DISABLE_MEMORY_WATCHDOG", "1")
 os.environ.setdefault("T58_DISABLE_GRAVEYARD_READBACK", "1")   # Search/Evolution graveyard read-back: tests append to a shared file, so opt in per test
+os.environ.setdefault("T58_INDICATOR_DISK_CACHE", "0")   # the shared indicator disk tier is exercised by its own tests, not littered by every backtest test
 
 import pytest
 
@@ -229,12 +230,61 @@ def _litter_snapshot() -> set:
     return found
 
 
+_SAMPLE_REL = ("data", "raw", "EURUSD", "EURUSD_5M_sample.csv")
+_sample_generated = None
+
+
+def _write_synthetic_eurusd_sample(path) -> None:
+    """Deterministic stand-in for the EURUSD 5-minute sample some tests read from the working tree.
+
+    The real file is not part of the repository (market data is not committed), so a clean checkout / CI runner used to fail
+    ~60 tests with FileNotFoundError. This writes ~14 weeks of Mon-Fri 5-minute bars (seeded random walk with slow trend
+    regimes and a daily volatility cycle), and the session removes it again afterwards. A real file is never overwritten."""
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.default_rng(20240101)
+    days = pd.bdate_range("2024-01-01", periods=70)
+    stamps = np.concatenate([(d + pd.to_timedelta(np.arange(288) * 5, unit="m")).values for d in days])
+    n = len(stamps)
+    hour = pd.DatetimeIndex(stamps).hour.to_numpy()
+    vol = 0.00018 * (0.6 + 0.8 * np.exp(-((hour - 14) ** 2) / 30.0))
+    drift = 0.00001 * np.sin(np.arange(n) / 1500.0)
+    close = 1.10 + np.cumsum(rng.normal(drift, vol))
+    open_ = np.concatenate([[close[0]], close[:-1]])
+    span = np.abs(rng.normal(0, vol * 0.7))
+    frame = pd.DataFrame({
+        "timestamp": pd.DatetimeIndex(stamps).strftime("%Y-%m-%d %H:%M:%S"),
+        "open": open_.round(5), "high": (np.maximum(open_, close) + span).round(5),
+        "low": (np.minimum(open_, close) - span).round(5), "close": close.round(5),
+        "volume": rng.integers(50, 500, n),
+    })
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    frame.to_csv(tmp, index=False)
+    tmp.replace(path)
+
+
 def pytest_sessionstart(session):
-    global _litter_before
+    global _litter_before, _sample_generated
     _litter_before = _litter_snapshot()
+    from pathlib import Path
+    sample = Path(__file__).resolve().parents[1].joinpath(*_SAMPLE_REL)
+    if not hasattr(session.config, "workerinput") and not sample.exists():     # controller only; workers share the file
+        _write_synthetic_eurusd_sample(sample)
+        _sample_generated = sample
+        _litter_before = _litter_snapshot()          # it is ours to remove below, not "litter" to report
 
 
 def pytest_sessionfinish(session, exitstatus):
+    global _sample_generated
+    if _sample_generated is not None and not hasattr(session.config, "workerinput"):
+        try:
+            _sample_generated.unlink()
+            _sample_generated.parent.rmdir()
+        except OSError:
+            pass
+        _sample_generated = None
     new = sorted(_litter_snapshot() - _litter_before)
     if not new:
         return
@@ -276,18 +326,41 @@ def _stub_ollama_readiness(request, monkeypatch):
 # plain `pytest` (or the full-tests workflow) still runs everything. Refresh the list with
 # `python scripts/run_tests.py --refresh-slow` after adding heavy tests.
 # ---------------------------------------------------------------------------
+def pytest_addoption(parser):
+    parser.addoption("--shard", action="store", default=None,
+                     help="INDEX/TOTAL (1-based). Run only this weight-balanced, file-level shard of the collected tests, "
+                          "e.g. --shard 2/4. Used by the nightly full-regression workflow.")
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "slow: long-running test listed in tests/slow_tests.txt (deselect with -m 'not slow')")
+    config.addinivalue_line("markers", "fast: unit + parity lane listed in tests/fast_lane.txt (select with -m 'fast and not slow')")
 
 
 def pytest_collection_modifyitems(config, items):
     from pathlib import Path
 
+    from tests import ci_lanes
+
+    slow: set[str] = set()
     listing = Path(__file__).with_name("slow_tests.txt")
-    if not listing.exists():
-        return
-    slow = {ln.strip() for ln in listing.read_text(encoding="utf-8").splitlines() if ln.strip() and not ln.startswith("#")}
-    marker = pytest.mark.slow
+    if listing.exists():
+        slow = {ln.strip() for ln in listing.read_text(encoding="utf-8").splitlines() if ln.strip() and not ln.startswith("#")}
+    slow_marker, fast_marker = pytest.mark.slow, pytest.mark.fast
+    prefixes = ci_lanes.read_prefixes()
     for item in items:
         if item.nodeid.split("[", 1)[0] in slow or item.nodeid in slow:
-            item.add_marker(marker)
+            item.add_marker(slow_marker)
+        if ci_lanes.is_fast(item.nodeid, prefixes):
+            item.add_marker(fast_marker)
+
+    shard = ci_lanes.parse_shard(config.getoption("--shard"))
+    if shard is None:
+        return
+    index, total = shard
+    assignment = ci_lanes.assign_shards(ci_lanes.file_weights([i.nodeid for i in items], slow), total)
+    keep = [i for i in items if assignment.get(i.nodeid.split("::", 1)[0]) == index]
+    dropped = [i for i in items if assignment.get(i.nodeid.split("::", 1)[0]) != index]
+    if dropped:
+        config.hook.pytest_deselected(items=dropped)
+    items[:] = keep

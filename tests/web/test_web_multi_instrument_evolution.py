@@ -87,11 +87,6 @@ def _poll_until_stopped(client, group_id: str, timeout: float = 600.0) -> dict:
     raise AssertionError(f"multi-instrument evolution group {group_id} did not stop within {timeout}s")
 
 
-def test_multi_instrument_evolution_form_loads():
-    client = app.test_client()
-    r = client.get("/evolution/multi-instrument")
-    assert r.status_code == 200
-    assert b"Multi-instrument evolution lab" in r.data
 
 
 def test_multi_instrument_evolution_requires_at_least_two_datasets(_isolated_raw_data_dir):
