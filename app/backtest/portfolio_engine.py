@@ -1298,7 +1298,11 @@ class _PortfolioEngine:
             "mode": L[0].risk.sizing_mode, "entries_considered": considered_total,
             "entries_taken": len([t for t in trades if t.exit_reason != "partial_take_profit"]),
             "skipped_for_sizing": floor_episodes_total, "skipped_for_sizing_bars": floor_total,
-            "skip_rate": (floor_episodes_total / considered_total) if considered_total else 0.0,
+            # 2026-11-10 audit (P1): per SIGNAL (episodes over episodes + entries taken), matching sizing_halt["skip_ratio"]; the old
+            # denominator counted every bar a persisting signal reached sizing, making the rate several times too small.
+            "signals_seen": floor_episodes_total + len([t for t in trades if t.exit_reason != "partial_take_profit"]),
+            "skip_rate": (floor_episodes_total / (floor_episodes_total + len([t for t in trades if t.exit_reason != "partial_take_profit"])))
+            if (floor_episodes_total + len([t for t in trades if t.exit_reason != "partial_take_profit"])) else 0.0,
             "skip_reasons": dict(skip_reasons_total), "stop_capped": sum(lg.stop_capped for lg in L),
             "micro_fallback": sum(lg.micro for lg in L),
         }
@@ -1346,7 +1350,8 @@ class _PortfolioEngine:
                                  f"the {_fills.MAX_CONTRACTS_BEFORE_IMPACT_WARN}-contract guardrail (largest {max(lg.impact):.0f}); "
                                  "filled at the quoted price with no market impact modelled.")
             if lg.floor_skips:
-                warn_msgs.append(f"[{lg.name}] {lg.floor_skips} potential entr{'y' if lg.floor_skips == 1 else 'ies'} were skipped "
+                warn_msgs.append(f"[{lg.name}] {lg.floor_episodes} potential entr{'y' if lg.floor_episodes == 1 else 'ies'} "
+                                 f"(signals; {lg.floor_skips} bar-level retries) were skipped "
                                  "because sizing rounded down to 0 whole contracts at the configured risk.")
             if lg.blocked_cap or lg.clipped_cap:
                 warn_msgs.append(f"[{lg.name}] portfolio capacity: {lg.blocked_cap} entr{'y' if lg.blocked_cap == 1 else 'ies'} refused, "

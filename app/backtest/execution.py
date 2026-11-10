@@ -1688,7 +1688,13 @@ def run_execution(
         "entries_taken": len([t for t in trades if t.exit_reason != "partial_take_profit"]),
         "skipped_for_sizing": zero_size_skip_episodes,
         "skipped_for_sizing_bars": zero_size_contract_floor_count,
-        "skip_rate": (zero_size_skip_episodes / sizing_considered_count) if sizing_considered_count else 0.0,
+        # 2026-11-10 audit (P1): the rate is per SIGNAL, the same unit as sizing_halt["skip_ratio"]: skipped signal episodes over
+        # (episodes + entries actually taken). It used to divide episodes by ``entries_considered``, which counts every BAR on which a
+        # persisting signal reached sizing, so one unaffordable signal that lasted 100 bars made the rate ~100x too small (4.0% of signals
+        # printed as 0.6%) and disagreed with the report's own "signals skipped" line.
+        "signals_seen": zero_size_skip_episodes + len([t for t in trades if t.exit_reason != "partial_take_profit"]),
+        "skip_rate": (zero_size_skip_episodes / (zero_size_skip_episodes + len([t for t in trades if t.exit_reason != "partial_take_profit"])))
+        if (zero_size_skip_episodes + len([t for t in trades if t.exit_reason != "partial_take_profit"])) else 0.0,
         "skip_reasons": dict(sizing_skip_reasons),
         "stop_capped": stop_capped_count,
         "micro_fallback": micro_fallback_count,
@@ -1859,12 +1865,17 @@ def run_execution(
 
     if zero_size_contract_floor_count:
         import warnings
+        # 2026-11-10 audit (P1): count SIGNALS (episodes), not bars. A signal that persists for N bars and cannot be afforded is ONE
+        # missed trade, but the old text reported the N bar-level retries as "potential entries" and divided them by trades + retries,
+        # so a run with 28 skipped signals reported "3,717 potential entries" next to a "4% of signals skipped" line.
+        _n_sig = zero_size_skip_episodes
         pct_of_signals = (
-            f" ({zero_size_contract_floor_count / max(len(trades) + zero_size_contract_floor_count, 1) * 100:.0f}% "
-            "of all potential entries)" if trades else " (every potential entry this run)"
+            f" ({_n_sig / max(len(trades) + _n_sig, 1) * 100:.0f}% "
+            f"of all signals; each was retried on every bar it persisted, {zero_size_contract_floor_count} bar-level retries in total)"
+            if trades else f" (every signal this run; {zero_size_contract_floor_count} bar-level retries in total)"
         )
         warnings.warn(
-            f"{zero_size_contract_floor_count} potential entr{'y' if zero_size_contract_floor_count == 1 else 'ies'}"
+            f"{_n_sig} potential entr{'y' if _n_sig == 1 else 'ies'}"
             f"{pct_of_signals} were skipped because position sizing rounded DOWN to 0 whole "
             f"contracts of this instrument (RiskConfig.contract_size={risk.contract_size:g}) at your "
             f"configured risk -- risk_value is too small to afford even ONE contract given this "

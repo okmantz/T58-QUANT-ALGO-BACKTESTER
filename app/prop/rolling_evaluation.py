@@ -87,7 +87,7 @@ class RollingEvaluationResult:
             f"Passed               {self.n_passed:,}",
             f"Failed               {self.n_failed:,}",
             "",
-            f"Median Days to Pass  {self.median_days_to_pass:.0f}" if self.median_days_to_pass is not None else "Median Days to Pass  --",
+            f"Median Trading Days to Pass  {self.median_days_to_pass:.0f}  (days with a trade, not calendar days)" if self.median_days_to_pass is not None else "Median Trading Days to Pass  --",
             f"Worst Starting Period  {self.worst_starting_period or '--'}",
             f"Best Starting Period   {self.best_starting_period or '--'}",
             "",

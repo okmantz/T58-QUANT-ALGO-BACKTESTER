@@ -103,6 +103,13 @@ class AttemptOutcome:
     # (None = no payout inside the replay window). Only filled when the
     # replay ran with track_payout=True.
     first_payout_days: float | None = None
+    # 2026-11-10 audit: CALENDAR days from the purchase (the replay's start bar) to the pass, when the replay stopped at the pass
+    # (stop_on_pass=True). ``days_to_pass`` above is a count of days that contained a trade: for a sparse strategy it understates
+    # calendar time several-fold and must never be read as "days".
+    calendar_days_to_pass: float | None = None
+    # False when the data ran out before this attempt's whole horizon was observed: an unresolved ("open") attempt of that kind is
+    # right-censored (we do not know how it ends), not a failure.
+    horizon_covered: bool = True
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -137,6 +144,10 @@ class AttemptReplayResult:
     n_effective: float = 0.0                                      # ~ independent windows in the sample (span / horizon)
     horizon_days: int = 0
     spacing_days: float = 0.0
+    # -- 2026-11-10 audit: calendar-time statistics and right-censoring honesty
+    n_truncated: int = 0                                          # attempts whose horizon extended past the end of the data
+    median_calendar_days_to_pass: float | None = None             # CALENDAR days from purchase (only when the replay stops at the pass)
+    pass_within_days: dict = field(default_factory=dict)          # {30: share of FULLY OBSERVED attempts that passed within 30 calendar days, ...}
 
     def to_dict(self) -> dict:
         d = dict(self.__dict__)
@@ -156,7 +167,14 @@ class AttemptReplayResult:
         if self.expected_cost_per_pass is not None:
             lines.append(f"Expected fee cost per pass  ${self.expected_cost_per_pass:,.0f}")
         if self.median_days_to_pass is not None:
-            lines.append(f"Median days to pass {self.median_days_to_pass:.0f}")
+            lines.append(f"Median TRADING days to pass {self.median_days_to_pass:.0f}  (days that contained a trade -- not calendar time)")
+        if self.median_calendar_days_to_pass is not None:
+            lines.append(f"Median CALENDAR days to pass {self.median_calendar_days_to_pass:.0f}  (from purchase)")
+        for d_, r_ in sorted(self.pass_within_days.items()):
+            lines.append(f"Passed within {d_} calendar days  {r_ * 100:.1f}%  (of attempts whose whole horizon was observed)")
+        if self.n_truncated:
+            lines.append(f"Truncated windows   {self.n_truncated} of {self.n_attempts} attempts ran past the end of the data "
+                         "(their 'unresolved' outcomes are right-censored, not failures)")
         if self.n_effective:
             hlo, hhi = self.pass_ci_honest
             lines.append(
@@ -179,9 +197,22 @@ def _slice_kw(value, start: int, stop: int, n: int):
     return value
 
 
+def _arm_after_start(sig: pd.Series) -> pd.Series:
+    """Zero the leading contiguous run of a non-zero signal. A level-based signal that was already ON when the account was bought
+    began before the purchase: entering it "mid-air" at an arbitrary later bar is not a real entry event (and its stop/target distances
+    were sized for a different entry price). The account waits for the next flat-to-signal transition."""
+    v = sig.to_numpy()
+    if len(v) == 0 or v[0] == 0:
+        return sig
+    nz = np.flatnonzero(v == 0)
+    out = sig.copy()
+    out.iloc[: (int(nz[0]) if len(nz) else len(v))] = 0
+    return out
+
+
 def _replay_one_start(s: int, df, signals, risk_p, rules, stop_loss_pips,
                       take_profit_pips, horizon_days: int, stop_on_pass: bool,
-                      exec_kwargs: dict) -> AttemptOutcome:
+                      exec_kwargs: dict, arm_signals_after_start: bool = False) -> AttemptOutcome:
     """One fresh-account attempt from start bar `s` -- the serial loop's
     per-start body, verbatim (v9.13), so the serial and parallel paths
     share one implementation and produce identical outcomes."""
@@ -196,6 +227,9 @@ def _replay_one_start(s: int, df, signals, risk_p, rules, stop_loss_pips,
     e = min(max(e, s + 10), n)
     sub = df.iloc[s:e].reset_index(drop=True)
     sig = signals.iloc[s:e].reset_index(drop=True)
+    if arm_signals_after_start:
+        sig = _arm_after_start(sig)
+    covered = bool(ts[-1] >= end_t)
     kw = {k: (v.iloc[s:e].reset_index(drop=True) if isinstance(v, pd.Series) and len(v) == n else v)
           for k, v in exec_kwargs.items()}
     with warnings.catch_warnings():
@@ -226,8 +260,18 @@ def _replay_one_start(s: int, df, signals, risk_p, rules, stop_loss_pips,
             fp_days = float((_f - _s).total_seconds() / 86400.0)
         except Exception:  # noqa: BLE001 -- a bad timestamp just means "no payout day"
             fp_days = None
+    cal_pass = None
+    if outcome == "passed" and stop_on_pass and a.get("end_time") is not None:
+        try:
+            _e = pd.Timestamp(a["end_time"])
+            _s0 = pd.Timestamp(ts[s])
+            if _e.tzinfo is not None:
+                _e = _e.tz_convert("UTC").tz_localize(None)
+            cal_pass = float((_e - _s0).total_seconds() / 86400.0)
+        except Exception:  # noqa: BLE001
+            cal_pass = None
     return AttemptOutcome(
-        first_payout_days=fp_days,
+        first_payout_days=fp_days, calendar_days_to_pass=cal_pass, horizon_covered=covered,
         start_bar=s, start_time=str(ts[s]), outcome=outcome,
         failure_reason=a.get("failure_reason") if outcome == "failed" else None,
         days_to_pass=a.get("days_to_pass"), n_trades=int(a.get("n_trades") or 0),
@@ -246,13 +290,13 @@ _REPLAY_WORKER: dict = {}
 
 
 def _replay_worker_init(df, signals, risk_p, rules, stop_loss_pips,
-                        take_profit_pips, horizon_days, stop_on_pass, exec_kwargs) -> None:
+                        take_profit_pips, horizon_days, stop_on_pass, exec_kwargs, arm_signals_after_start=False) -> None:
     global _REPLAY_WORKER
     _REPLAY_WORKER = {
         "df": df, "signals": signals, "risk_p": risk_p, "rules": rules,
         "stop_loss_pips": stop_loss_pips, "take_profit_pips": take_profit_pips,
         "horizon_days": horizon_days, "stop_on_pass": stop_on_pass,
-        "exec_kwargs": exec_kwargs,
+        "exec_kwargs": exec_kwargs, "arm": arm_signals_after_start,
     }
 
 
@@ -261,7 +305,7 @@ def _replay_worker_task(s: int) -> AttemptOutcome:
     return _replay_one_start(
         s, w["df"], w["signals"], w["risk_p"], w["rules"],
         w["stop_loss_pips"], w["take_profit_pips"], w["horizon_days"],
-        w["stop_on_pass"], w["exec_kwargs"],
+        w["stop_on_pass"], w["exec_kwargs"], w.get("arm", False),
     )
 
 
@@ -284,6 +328,9 @@ def run_attempt_replay(
     progress_cb=None,
     track_payout: bool = False,
     payout_windows: tuple = (30,),
+    min_horizon_coverage: float = 0.25,
+    arm_signals_after_start: bool = False,
+    pass_windows: tuple = (30, 60),
     **exec_kwargs,
 ) -> AttemptReplayResult:
     """Run `n_starts` evenly spread fresh-account attempts.
@@ -310,6 +357,14 @@ def run_attempt_replay(
     overlap between neighbouring start dates (pass_ci_honest,
     payout_within_ci); the Wilson pass_ci is kept for backward
     compatibility.
+
+    2026-11-10 audit -- two documented biases, both opt-in to fix so every saved result stays reproducible:
+      * ``min_horizon_coverage`` (default 0.25 = the legacy rule): the latest allowed purchase leaves only this FRACTION of the horizon
+        inside the data, so up to a quarter of the starts are cut short and any that neither pass nor bust inside the data count as
+        "open" -- a downward bias on the pass rate. 1.0 admits only fully observed windows (the right choice for any "within N days"
+        claim). ``n_truncated`` and ``pass_within_days`` always report the damage / the censoring-honest rate.
+      * ``arm_signals_after_start`` (default False): True zeroes a signal that was already on at the purchase bar (it started before the
+        account existed), so the account waits for the next real signal instead of entering mid-setup.
     """
     from dataclasses import replace
     if track_payout:
@@ -324,7 +379,7 @@ def run_attempt_replay(
     ts = pd.DatetimeIndex(df["timestamp"])
     if ts.tz is not None:
         ts = ts.tz_convert("UTC").tz_localize(None)
-    last_possible = ts[-1] - pd.Timedelta(days=max(1, horizon_days // 4))
+    last_possible = ts[-1] - pd.Timedelta(days=max(1, int(round(horizon_days * float(min_horizon_coverage)))))
     max_start = int(np.searchsorted(ts.values, np.datetime64(last_possible)))
     max_start = max(1, min(max_start, n - 2))
     if stride_bars:
@@ -337,7 +392,7 @@ def run_attempt_replay(
     def _one(s: int) -> AttemptOutcome:
         return _replay_one_start(
             s, df, signals, risk_p, rules, stop_loss_pips, take_profit_pips,
-            horizon_days, stop_on_pass, exec_kwargs,
+            horizon_days, stop_on_pass, exec_kwargs, arm_signals_after_start,
         )
 
     def _fire(done_count: int) -> None:
@@ -360,7 +415,7 @@ def run_attempt_replay(
                 mp_context=multiprocessing.get_context("spawn"),
                 initializer=_replay_worker_init,
                 initargs=(df, signals, risk_p, rules, stop_loss_pips,
-                          take_profit_pips, horizon_days, stop_on_pass, exec_kwargs),
+                          take_profit_pips, horizon_days, stop_on_pass, exec_kwargs, arm_signals_after_start),
             )
             futures = {pool.submit(_replay_worker_task, s): i for i, s in enumerate(starts)}
             pending = set(futures)
@@ -411,6 +466,17 @@ def run_attempt_replay(
     n_eff = float(min(N, span_days / horizon_days)) if horizon_days else float(N)
     pass_flags = [1.0 if o.outcome == "passed" else 0.0 for o in outcomes]
     ci_honest = _block_bootstrap_ci(pass_flags, block_len)
+    n_trunc = sum(1 for o in outcomes if not o.horizon_covered)
+    cal_days = sorted(o.calendar_days_to_pass for o in outcomes if o.outcome == "passed" and o.calendar_days_to_pass is not None)
+    full = [o for o in outcomes if o.horizon_covered]
+    pass_within: dict = {}
+    if stop_on_pass and full:
+        for w_ in pass_windows:
+            pass_within[int(w_)] = sum(1 for o in full if o.outcome == "passed" and o.calendar_days_to_pass is not None
+                                       and o.calendar_days_to_pass <= w_) / len(full)
+    if n_trunc:
+        notes.append(f"{n_trunc} of {N} attempts were cut short by the end of the data; their 'unresolved' outcomes are right-censored "
+                     "(pass min_horizon_coverage=1.0 to drop them from the denominator).")
     pw_rate: dict = {}
     pw_ci: dict = {}
     n_payout = 0
@@ -430,6 +496,8 @@ def run_attempt_replay(
         payout_tracked=bool(track_payout), n_payout=n_payout, payout_within_rate=pw_rate, payout_within_ci=pw_ci,
         median_days_to_payout=(float(pay_days[len(pay_days) // 2]) if pay_days else None),
         pass_ci_honest=ci_honest, n_effective=n_eff, horizon_days=int(horizon_days), spacing_days=spacing,
+        n_truncated=n_trunc, median_calendar_days_to_pass=(float(cal_days[len(cal_days) // 2]) if cal_days else None),
+        pass_within_days=pass_within,
         n_attempts=N, n_passed=passed, n_failed=failed, n_open=opened,
         pass_rate=pass_rate, bust_rate=(failed / N if N else 0.0), open_rate=(opened / N if N else 0.0),
         pass_ci=_wilson(passed, N),

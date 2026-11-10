@@ -92,9 +92,10 @@ def _strategy_inputs(cfg: dict) -> dict:
 def _forward_inputs() -> dict:
     out = {"trades": 0, "qualifying": 0, "first": None, "last": None, "net": 0.0, "max_dd": 0.0}
     try:
-        from app.journal import capture
         from app.web import journal_store
         try:
+            # a missing/broken capture module must not zero the whole forward record: the journal store is read regardless
+            from app.journal import capture
             capture.sync_forward_test()
         except Exception:  # noqa: BLE001
             pass
