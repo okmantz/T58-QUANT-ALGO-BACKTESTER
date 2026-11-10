@@ -46,12 +46,24 @@ def main(argv=None) -> int:
     if a.batch:
         fams += [n for n in f13.families_in_batch(a.batch) if f13.V13_META[n].status == "ready" and n not in f13.RETIRED_V13 and n not in fams]
     print(f"Surrogate study: {len(fams)} families, {a.null_runs} null runs, {a.planted_runs} planted runs per target size.")
+    from app.validation import research_integrity as ri
+    total = a.null_runs + 3 * a.planted_runs
+    done = [0]
+
+    def progress(msg):
+        print(msg)
+        if msg.startswith(("null", "planted")):
+            done[0] += 1
+            ri.write_progress(done[0], total, True)
+
+    ri.write_progress(0, total, True)
     pipe = sg.engine_pipeline(fams, null_seeds=a.null_seeds, max_candidates=a.max_candidates)
-    rep = sg.run_surrogate_study(pipe, n_null=a.null_runs, n_planted=a.planted_runs, n_markets=a.markets, days=a.days, progress=print,
+    rep = sg.run_surrogate_study(pipe, n_null=a.null_runs, n_planted=a.planted_runs, n_markets=a.markets, days=a.days, progress=progress,
                                  min_null_runs=min(a.null_runs, 20))
     if a.batch and a.batch not in rep.opened_batches:
         rep.opened_batches = sorted(set(rep.opened_batches) | {a.batch})
     path = sg.save_report(rep, a.out or None)
+    ri.write_progress(done[0], total, False)
     print()
     print(f"False-discovery rate: {rep.null_candidates}/{rep.n_null} = {rep.null_rate:.1%} (95% upper bound {rep.null_rate_upper95:.1%}); target < 5%")
     for row in rep.planted:
