@@ -218,4 +218,4 @@ def test_first_run_welcome_names_the_first_three_tabs():
     assert "2 Market Data" in msg
     assert "1 Strategy Configuration" in msg
     assert "5 Run & Report" in msg
-    assert "/user-manual" in msg
+    assert "/education/manual" in msg
