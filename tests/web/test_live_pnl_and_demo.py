@@ -49,9 +49,11 @@ def test_first_champion_award_unlocks_the_live_pnl_panel(monkeypatch):
 
 def test_deploy_page_offers_the_demo(client):
     html = client.get("/deploy-live").get_data(as_text=True)
-    assert "T58 prop-firm demo" in html and "/demo-account" in html
+    assert "T58 prop-firm demo" in html and "/forward-test?view=demo" in html
 
 
-def test_demo_page_shows_the_rules_table(client):
-    html = client.get("/demo-account").get_data(as_text=True)
+def test_demo_account_lives_on_the_deploy_page(client):
+    assert client.get("/demo-account").status_code == 301
+    html = client.get("/forward-test").get_data(as_text=True)
+    assert 'id="da-strategy"' in html and "Choose a strategy to trade it" in html     # one-click strategy selector
     assert "The rules of this account" in html and "Maximum loss (drawdown)" in html

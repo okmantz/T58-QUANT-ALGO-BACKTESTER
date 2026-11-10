@@ -54,9 +54,8 @@ def test_preflight_flags_missing_dataset_and_adaptive_off(cfg_dir):
 def test_routes_respond(cfg_dir):
     from app.web.server import app
     c = app.test_client()
-    assert c.get("/profile").status_code == 200
-    r = c.post("/profile", data={"account_size": "25000", "instruments": "NQ"})
-    assert r.status_code == 302
+    assert c.get("/profile").status_code == 404  # the Trader profile page was removed; defaults still feed other pages
+    WS._write("trader_profile.json", WS.clean_profile({"account_size": "25000", "instruments": "NQ"}))
     assert c.get("/api/profile/defaults").get_json()["defaults"]["account_size"] == 25000
     assert c.post("/api/workflow-memory/quick_optimize", json={"dataset": "x"}).get_json()["saved"] is True
     assert c.get("/api/workflow-memory/quick_optimize").get_json()["values"]["dataset"] == "x"

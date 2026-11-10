@@ -62,7 +62,10 @@ def test_sidebar_lifecycle_order_and_account_order(client):
     assert positions == sorted(positions), list(zip(labels, positions))
     # Notification settings now live inside Account settings (no separate sidebar entry)
     assert "/settings/notifications" not in body
-    assert "/settings/api-keys" in body
+    # API keys, achievements and support are tabs of Account settings, not sidebar entries
+    for gone in ('href="/settings/api-keys"', 'href="/support"', 'href="/achievements"'):
+        assert gone not in body, gone
+    assert "/settings/account" in body
     # New simplified pages are linked from the lifecycle groups
     for href in ("/optimize-simple", "/validate-simple", "/champion-simple"):
         assert href in body, href

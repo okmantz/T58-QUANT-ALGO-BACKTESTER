@@ -26,7 +26,7 @@ def test_resources_page_loads():
     beginner resources -- just confirms it renders and links to the real
     guide, not that any particular external site is reachable."""
     client = app.test_client()
-    r = client.get("/resources")
+    r = client.get("/education/resources")
     assert r.status_code == 200
     assert b"30-Day Trading Quickstart Guide" in r.data
     assert b"docs.google.com/document/d/17tdRY_tzpHOdw8_a1EpAgOmradTbu02Dlo6BOAnK0Wg" in r.data
@@ -37,7 +37,7 @@ def test_resources_page_links_mslsd_strategy_doc_instead_of_pasting_it():
     -- now it's a clean link-out to the real doc (kept in sync there
     instead of drifting from a stale copy pasted here)."""
     client = app.test_client()
-    r = client.get("/resources")
+    r = client.get("/education/resources")
     assert r.status_code == 200
     assert b"docs.google.com/document/d/14jubETVbumncdLJrTrw2ke-NxFPXkT34qzH4_Q1BguA" in r.data
     assert b"Open the MS-LSD strategy doc" in r.data
@@ -45,11 +45,14 @@ def test_resources_page_links_mslsd_strategy_doc_instead_of_pasting_it():
     assert b"A valid OB needs" not in r.data
 
 
-def test_resources_link_appears_in_sidebar():
+def test_resources_live_inside_university_not_the_sidebar():
     client = app.test_client()
     r = client.get("/dashboard")
     assert r.status_code == 200
-    assert b'href="/resources"' in r.data
+    assert b'href="/resources"' not in r.data and b'href="/user-manual"' not in r.data
+    uni = client.get("/education").get_data(as_text=True)
+    assert 'href="/education/resources"' in uni and 'href="/education/manual"' in uni
+    assert client.get("/resources").status_code == 301 and client.get("/user-manual").status_code == 301
 
 
 def test_dashboard_shows_first_run_welcome_on_fresh_install(tmp_path, monkeypatch):
@@ -98,11 +101,11 @@ def test_user_manual_page_loads_with_decision_guide():
     "if this happened, do that" branches, not just numbered steps) is
     present alongside the original step-by-step content."""
     client = app.test_client()
-    r = client.get("/user-manual")
+    r = client.get("/education/manual")
     assert r.status_code == 200
-    assert b"Decision guide" in r.data
+    assert b"If something looks wrong" in r.data
     assert b"Zero trades generated" in r.data
-    assert b"Evolution Lab winners pass on its own leaderboard" in r.data
+    assert b"Start in 5 minutes" in r.data
 
 
 def test_mobile_access_page_loads_without_tailscale(monkeypatch):

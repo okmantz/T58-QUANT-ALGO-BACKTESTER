@@ -14,44 +14,48 @@ def client():
         yield c
 
 
-def test_rulebook_page_and_calc(client, tmp_path, monkeypatch):
+def test_rulebook_is_not_a_user_facing_page(client):
+    """The Rulebook v2 gates run inside the pipeline and the Discovery Engine; there is no page or form for them."""
+    for path in ("/rulebook", "/api/rulebook/calc", "/api/rulebook/attempts"):
+        assert client.get(path).status_code == 404, path
+    for path in ("/rulebook/trial", "/rulebook/rules-sheet", "/rulebook/rules-sheet/preset"):
+        assert client.post(path, data={}).status_code in (404, 405), path
+    assert b"Prop Firm Rulebook" not in client.get("/dashboard").data
+
+
+def test_rulebook_math_still_available_to_the_engine():
+    from app.validation import rulebook as rb
+    assert abs(rb.required_observed_edge(400, 3) - 0.112) < 0.001
+    assert rb.g7_capped_attempts([1, 1]).data["decision"] == "SCALE"
+
+
+def test_register_trial_requires_g2(tmp_path, monkeypatch):
     from app.validation import rulebook as rb
     monkeypatch.setattr(rb, "_register_path", lambda: tmp_path / "register.json")
     monkeypatch.setattr(rb, "_sheet_path", lambda: tmp_path / "sheet.json")
-    r = client.get("/rulebook")
-    assert r.status_code == 200
-    body = r.get_data(as_text=True)
-    for s in ("Prop Firm Rulebook v2", "G0", "G7", "Rules sheet", "Capped paid attempts", "0.112", "trial register"):
-        assert s in body, s
-    for gone in ("Binary screen", "Alpha budget", "Edge Rulebook"):
-        assert gone not in body, gone
-    j = client.get("/api/rulebook/calc?n=400&looks=3&edge=0.15").get_json()
-    assert j["ok"] and abs(j["required_observed_edge"] - 0.112) < 0.001 and j["e_plan"] > 0.05
-    j = client.get("/api/rulebook/attempts?outcomes=1,1").get_json()
-    assert j["ok"] and j["data"]["decision"] == "SCALE"
+    bad = rb.register_trial(family="f", mechanism="", counterparty="", sign="long", instruments=["MNQ"])
+    assert not bad["ok"]
+    good = rb.register_trial(family="opening-drive", mechanism="late fade", counterparty="reversal traders", sign="long",
+                             instruments=["MNQ", "MES", "M2K"], sealed={"MNQ": "2026-03-01", "MES": "2026-03-01", "M2K": "2026-03-01"}, code_text="x")
+    assert good["ok"] and rb.load_register()["rows"][0]["id"] == "T1" and rb.load_register()["rows"][0]["code_hash"]
 
 
-def test_register_trial_route_requires_g2(client, tmp_path, monkeypatch):
+def test_rules_sheet_from_preset_marks_g0_open_until_complete(tmp_path, monkeypatch):
     from app.validation import rulebook as rb
     monkeypatch.setattr(rb, "_register_path", lambda: tmp_path / "register.json")
     monkeypatch.setattr(rb, "_sheet_path", lambda: tmp_path / "sheet.json")
-    r = client.post("/rulebook/trial", data={"family": "f", "mechanism": "", "counterparty": "", "sign": "long", "instruments": "MNQ", "mechanisms": "1", "variants": "1"})
-    assert r.status_code == 302 and "ok=0" in r.headers["Location"]
-    r = client.post("/rulebook/trial", data={"family": "opening-drive", "mechanism": "late fade", "counterparty": "reversal traders", "sign": "long",
-                                             "instruments": "MNQ, MES, M2K", "mechanisms": "1", "variants": "1", "seal_date": "2026-03-01", "code": "x"})
-    assert "ok=1" in r.headers["Location"] and rb.load_register()["rows"][0]["id"] == "T1"
-    assert rb.load_register()["rows"][0]["code_hash"] and rb.load_register()["seal_dates"]["MNQ"] == "2026-03-01"
+    sheet = rb.rules_sheet_from_preset("lucid_50k")
+    assert sheet["max_loss"]["value"] in (2000.0, "2000.0")
+    assert not rb.g0_rules_sheet({"fee": {"value": 172}}).passed          # most of the sheet is still blank
 
 
-def test_rules_sheet_route_marks_g0_open_until_complete(client, tmp_path, monkeypatch):
+def test_discovery_engine_notes_carry_rulebook_context(tmp_path, monkeypatch):
     from app.validation import rulebook as rb
+    from app.discovery_engine.engine import _rulebook_notes
     monkeypatch.setattr(rb, "_register_path", lambda: tmp_path / "register.json")
     monkeypatch.setattr(rb, "_sheet_path", lambda: tmp_path / "sheet.json")
-    r = client.post("/rulebook/rules-sheet/preset", data={"preset": "lucid_50k"})
-    assert r.status_code == 302 and "ok=1" in r.headers["Location"]
-    assert rb.load_rules_sheet()["max_loss"]["value"] in (2000.0, "2000.0")
-    r = client.post("/rulebook/rules-sheet", data={"fee": "172"})
-    assert "ok=0" in r.headers["Location"]          # most of the sheet is still blank
+    notes = _rulebook_notes()
+    assert any("Rulebook v2" in n for n in notes) and any("G0" in n for n in notes)
 
 
 def test_acknowledge_endpoint_stamps_for_30_days(client, tmp_path, monkeypatch):
