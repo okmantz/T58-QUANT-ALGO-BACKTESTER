@@ -74,6 +74,42 @@
     "end": "2026-03-01T23:59:00+00:00",
     "sha256": "61ee8d72b565e1344f65af2900246d579be510b9e88a56f332a14ac477da5577"
    }
+  },
+  "GC": {
+   "available": true,
+   "file": "GC1!/futures_GC.F_1m.parquet",
+   "base": "GC",
+   "dollars_per_point": 100.0,
+   "dev": {
+    "bars": 1717070,
+    "start": "2020-08-02T22:00:00+00:00",
+    "end": "2025-08-31T23:59:00+00:00",
+    "sha256": "9974e1613bc667e7995315f2948aabde790e5b254defde0ff99e97c37e10a78c"
+   },
+   "sealed": {
+    "bars": 322532,
+    "start": "2025-09-01T00:00:00+00:00",
+    "end": "2026-07-31T20:59:00+00:00",
+    "sha256": "1d1f72d7376476fae225df12b0821ce8116d097b1b069b1e8cc32461e7f3ba6f"
+   }
+  },
+  "MGC": {
+   "available": true,
+   "file": "GC1!/futures_GC.F_1m.parquet",
+   "base": "GC",
+   "dollars_per_point": 10.0,
+   "dev": {
+    "bars": 1717070,
+    "start": "2020-08-02T22:00:00+00:00",
+    "end": "2025-08-31T23:59:00+00:00",
+    "sha256": "9974e1613bc667e7995315f2948aabde790e5b254defde0ff99e97c37e10a78c"
+   },
+   "sealed": {
+    "bars": 322532,
+    "start": "2025-09-01T00:00:00+00:00",
+    "end": "2026-07-31T20:59:00+00:00",
+    "sha256": "1d1f72d7376476fae225df12b0821ce8116d097b1b069b1e8cc32461e7f3ba6f"
+   }
   }
  }
 }
