@@ -31,14 +31,14 @@ PAGES = [
     "/optimize", "/full-pipeline", "/walk-forward-opt", "/walk-forward-ga", "/cpcv", "/pbo", "/sensitivity",
     "/parameter-robustness", "/regime-matrix", "/payout-probability", "/forward-test", "/live-market",
     "/start-here/create", "/start-here/test", "/start-here/champion", "/start-here/deployment",
-    "/start-here/graveyard", "/support", "/user-manual", "/webhook-relay", "/settings/api-keys", "/data/api/providers",
+    "/start-here/graveyard", "/settings/account?tab=support", "/education/manual", "/education/resources", "/webhook-relay", "/settings/account?tab=api-keys", "/settings/account?tab=achievements", "/settings/account?tab=notifications", "/data/api/providers",
     # 2026-10-17 release
     "/journal", "/gamma", "/runs", "/education", "/mobile-access", "/sw.js", "/static/t58-metrics.js",
     "/static/t58-propsim.js", "/static/t58-edu-labs.js", "/api/journal", "/api/gamma/status", "/api/library/control",
     "/api/prop-sim/presets", "/api/metrics/profit_factor", "/api/running-jobs.json",
     # 2026-10-18 release
     "/research-labs", "/research-labs/volume-profile", "/research-labs/order-flow", "/research-labs/order-book", "/research-labs/lead-lag",
-    "/research-labs/stat-arb", "/research-labs/event-study", "/research-labs/hypothesis", "/pine-indicator/", "/education/knowledge-check",
+    "/research-labs/stat-arb", "/research-labs/event-study", "/research-labs/hypothesis", "/pine-indicator/", "/pine-indicator/bridge",
     "/quant-lab/", "/api/memory",
     # 2026-10-21 release: Global Events (store-only endpoints; must answer instantly even with no internet)
     "/events/", "/events/api/bootstrap", "/events/api/health", "/static/global-events/global-events.js", "/static/global-events/land.json",

@@ -18,6 +18,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+# Bundled with the app: ES, NQ and GC (1-minute, ~6 years). The rest of the universe ships as a separate "extended market pack" download:
+# unzip it into data/raw/ and re-run this script. Until then the pooled edge test honestly reports INSUFFICIENT (it needs 8 independent markets).
+BUNDLED_MARKETS = ("ES", "NQ", "GC")
 # The cross-market universe the primary edge test pools over (report section 2). Roots, in priority order.
 TARGET_MARKETS = ("ES", "NQ", "YM", "RTY", "GC", "CL", "ZN", "ZB", "6E", "EURUSD", "GBPUSD", "USDJPY")
 MIN_POOL_MARKETS = 8
@@ -65,8 +68,8 @@ def main() -> int:
     cov = coverage_report(manifest)
     problems, blocking = [], False
     if cov["pool_size"] < MIN_POOL_MARKETS:
-        problems.append(f"Only {cov['pool_size']} of the {MIN_POOL_MARKETS}+ markets needed for the POOLED edge test are present.")
-        problems.append(f"Missing: {', '.join(cov['missing_targets'])}. Pooled tests run on what exists and are labelled UNDERPOWERED.")
+        problems.append(f"{cov['pool_size']} of the {MIN_POOL_MARKETS}+ markets the POOLED edge test needs are installed (the app bundles {', '.join(BUNDLED_MARKETS)}).")
+        problems.append("Download the extended market pack and unzip it into data/raw/ to unlock the pooled test. Until then it reports INSUFFICIENT, never a pass.")
     if cov["no_spec"]:
         blocking = True
         problems.append(f"{len(cov['no_spec'])} file(s) have NO instrument spec, so costs are unmeasured (backtests would be too optimistic):")
