@@ -35,8 +35,12 @@ does NOT implement everything app.backtest.execution.run_execution does:
   - Eligible candidates only: a fixed-pip stop-loss/take-profit (or
     none), OR per-bar stop_loss_distance / take_profit_distance arrays
     in raw price units (e.g. an ATR-multiple stop -- the realistic
-    strategy class the old fixed-pips-only gate excluded). Still
-    excluded: breakeven triggers, partial exits / scale-outs.
+    strategy class the old fixed-pips-only gate excluded). Also handled
+    (2026-11): the break-even trigger and the time-invalidation stop
+    (RiskConfig.time_stop_hours), both with scalar-engine parity tests.
+    Still excluded: partial exits / scale-outs, resting-order (zone)
+    strategies, session flatten, the weekend-hold block and per-account
+    prop state machines -- those candidates take the scalar engine.
     (2026-10-17: trailing stops are now handled -- same per-bar order as
     app.backtest.execution: best-price update, resting-stop check, ratchet,
     stop/take check.) See `is_vectorizable()`.
@@ -137,6 +141,9 @@ class VectorizedCandidate:
     # 2026-10-17: per-bar TRAILING distance in raw price units (read at the decision bar, like the scalar engine's
     # trail_dist_vals). NaN / <= 0 = no trailing stop for a trade opened on that bar.
     trail_distances: np.ndarray | None = None
+    # Break-even: once best price - entry >= this many R (R = the initial stop distance) the stop moves to the entry price
+    # (only ever tightens). None = off. Same rule as app.backtest.execution.run_execution(breakeven_trigger_r=...).
+    breakeven_trigger_r: float | None = None
 
 
 @dataclass
@@ -164,12 +171,10 @@ def _is_perbar_distance(x) -> bool:
 
 def is_vectorizable(strat_result) -> bool:
     """True for the shapes this fast path can honestly handle: a
-    fixed-pips stop/target (or none at all), and -- since v5 -- per-bar
-    stop_loss_distance / take_profit_distance arrays in raw price units
-    (e.g. ATR-multiple stops, the realistic strategy class the old
-    fixed-pips-only gate excluded). Anything with a trailing stop, a
-    breakeven trigger, or a partial-exit/scale-out config must go through
-    the real engine instead -- see module docstring."""
+    fixed-pips stop/target (or none at all), per-bar stop/target arrays in
+    raw price units (e.g. ATR-multiple stops), trailing stops and the
+    break-even trigger. A partial-exit/scale-out config or a resting-order
+    strategy must go through the real engine instead -- see module docstring."""
     if getattr(strat_result, "entry_orders", None) is not None:
         return False  # resting-order / zone strategies: slow path only, never silently mis-scored
     sl = strat_result.stop_loss_distance
@@ -178,17 +183,15 @@ def is_vectorizable(strat_result) -> bool:
     return (
         dynamic_ok
         and (strat_result.trailing_stop_distance is None or _is_perbar_distance(strat_result.trailing_stop_distance))
-        and strat_result.breakeven_trigger_r is None
         and getattr(strat_result, "partial_exit", None) is None
     )
 
 
 def risk_is_vectorizable(risk) -> bool:
-    """True when the RUN CONFIG uses nothing the fast path ignores. The fast path has no time stop, session flatten,
+    """True when the RUN CONFIG uses nothing the fast path ignores. The fast path has no session flatten,
     weekend-hold block or per-account prop state machine, so a RiskConfig that turns any of those on must take the
-    scalar engine (otherwise the two would silently disagree). 2026-10-17 (audit item 8)."""
-    if getattr(risk, "time_stop_hours", None):
-        return False
+    scalar engine (otherwise the two would silently disagree). 2026-10-17 (audit item 8). The time-invalidation stop is
+    handled here since 2026-11."""
     if getattr(risk, "flatten_time_ct", None):
         return False
     if getattr(risk, "block_weekend_hold", False):
@@ -265,9 +268,8 @@ def run_vectorized_batch(
     Every candidate here must have passed `is_vectorizable()` on its own
     StrategyResult -- this function does not check that itself, so
     passing an ineligible candidate silently gives WRONG numbers (only
-    fixed-pips or per-bar-array stops/targets are honored for every
-    column; trailing stops, breakeven triggers and partial exits are
-    silently ignored).
+    fixed-pips or per-bar-array stops/targets, trailing stops, break-even
+    and the time stop are honored; partial exits are silently ignored).
 
     Fill-lag parity: market entries and signal-driven exits fill at
     `open[i + entry_fill_lag_bars]` (default 1, read via
@@ -418,7 +420,11 @@ def run_vectorized_batch(
     cpc_arr = np.full(m, float(risk.commission_per_contract or 0.0), dtype=np.float64)
     stop_price = np.full(m, np.nan)
     take_price = np.full(m, np.nan)
-    best_price = np.zeros(m, dtype=np.float64)       # favourable extreme since entry (trailing ratchet input)
+    best_price = np.zeros(m, dtype=np.float64)       # favourable extreme since entry (trailing / break-even input)
+    be_r = np.array([(candidates[c].breakeven_trigger_r if candidates[c].breakeven_trigger_r else np.nan) for c in live_cols], dtype=np.float64)
+    be_done = np.zeros(m, dtype=bool)                # break-even fires at most once per trade
+    ts_hours = float(getattr(risk, "time_stop_hours", 0.0) or 0.0)
+    ts_band = float(getattr(risk, "time_stop_atr_band", 0.0) or 0.0)
     trail_dist = np.full(m, np.nan)                  # per-position trailing distance (NaN = none)
     # C2: per-column account-blown latch (prop_daily_loss_is_breach, or
     # halt_on_breach after a floor breach) -- blocks all further entries
@@ -435,7 +441,7 @@ def run_vectorized_batch(
         nonlocal sl_pips, tp_pips, equity, in_pos, direction, last_close_bar
         nonlocal entry_price, entry_ts, equity_at_entry, size_arr
         nonlocal initial_risk, stop_price, take_price, account_blown
-        nonlocal cs_arr, cpc_arr, best_price, trail_dist
+        nonlocal cs_arr, cpc_arr, best_price, trail_dist, be_r, be_done
         keep = np.nonzero(alive)[0]
         live_cols = live_cols[keep]
         last_sig_bar = last_sig_bar[keep]
@@ -456,6 +462,8 @@ def run_vectorized_batch(
         take_price = take_price[keep]
         best_price = best_price[keep]
         trail_dist = trail_dist[keep]
+        be_r = be_r[keep]
+        be_done = be_done[keep]
         account_blown = account_blown[keep]
         m = len(live_cols)
 
@@ -512,6 +520,7 @@ def run_vectorized_batch(
         stop_price[widx] = np.nan
         take_price[widx] = np.nan
         trail_dist[widx] = np.nan
+        be_done[widx] = False
 
     for i in range(n):
         if m == 0:
@@ -580,7 +589,7 @@ def run_vectorized_batch(
                         account_blown[_bw] = True
 
             # Trailing-stop bookkeeping (scalar parity): best_price takes THIS bar's favourable extreme first.
-            _has_trail = in_pos & np.isfinite(trail_dist)
+            _has_trail = in_pos & (np.isfinite(trail_dist) | (np.isfinite(be_r) & ~be_done))
             if _has_trail.any():
                 best_price[long_m] = np.maximum(best_price[long_m], h)
                 best_price[short_m] = np.minimum(best_price[short_m], l)
@@ -598,14 +607,24 @@ def run_vectorized_batch(
 
             # Trailing ratchet (scalar: after the resting-stop check, before the final stop/take check): the stop
             # only ever moves CLOSER to price, and the ratcheted level can fill on the SAME bar.
-            _tr = active & np.isnan(exit_price) & np.isfinite(trail_dist)
+            # Break-even (scalar order: after the pre-tightening resting-stop check, before the trailing ratchet): once the
+            # favourable extreme reaches be_r x the initial stop distance, the stop moves to the entry price (only tightens).
+            _be = active & np.isnan(exit_price) & np.isfinite(be_r) & ~be_done & (initial_risk > 0)
+            _be_trig = np.zeros(m, dtype=bool)
+            if _be.any():
+                _be_trig = _be & ((best_price - entry_price) * direction >= be_r * initial_risk)
+                _be_better = np.isnan(stop_price) | ((direction == 1) & (entry_price > stop_price)) | ((direction == -1) & (entry_price < stop_price))
+                _be_mv = _be_trig & _be_better
+                stop_price[_be_mv] = entry_price[_be_mv]
+                be_done[_be_trig] = True
+            _tr = active & np.isnan(exit_price) & (np.isfinite(trail_dist) | _be_trig)
             if _tr.any():
                 _trl = _tr & long_m
                 _trs = _tr & short_m
                 _cand_l = best_price - trail_dist
                 _cand_s = best_price + trail_dist
-                _mv_l = _trl & (np.isnan(stop_price) | (_cand_l > stop_price))
-                _mv_s = _trs & (np.isnan(stop_price) | (_cand_s < stop_price))
+                _mv_l = _trl & np.isfinite(trail_dist) & (np.isnan(stop_price) | (_cand_l > stop_price))
+                _mv_s = _trs & np.isfinite(trail_dist) & (np.isnan(stop_price) | (_cand_s < stop_price))
                 stop_price[_mv_l] = _cand_l[_mv_l]
                 stop_price[_mv_s] = _cand_s[_mv_s]
                 _hit_l = _trl & ~np.isnan(stop_price) & (l <= stop_price)
@@ -641,6 +660,16 @@ def run_vectorized_batch(
             # else: tail bar -- no next open exists, so the signal exit
             # cannot fill; the position stays open and settles via the
             # end-of-data close below, exactly like the scalar engine.
+
+            # Time-invalidation stop (scalar: after the signal exit, at the bar's close): an open position older than
+            # time_stop_hours whose close is still inside time_stop_atr_band x ATR of the entry is dead capital.
+            if ts_hours > 0:
+                _tsm = active & np.isnan(exit_price)
+                if _tsm.any():
+                    _age_h = (ts[i] - entry_ts) / np.timedelta64(1, "h")
+                    _stale = _tsm & (_age_h > ts_hours) & (_atr[i] > 0) & (np.abs(c - entry_price) <= ts_band * _atr[i])
+                    exit_price[_stale] = c
+                    reason[_stale] = "time_stop"
 
             exit_mask = active & ~np.isnan(exit_price)
             if exit_mask.any():
@@ -823,6 +852,7 @@ def run_vectorized_batch(
                 )
                 initial_risk[fw] = sl_dist[valid]
                 best_price[fw] = entry_fill[valid]
+                be_done[fw] = False
                 _tr_bar = trail_full[i, live_cols[fw]]
                 _tr_bar = np.where(np.isfinite(_tr_bar) & (_tr_bar > 0), _tr_bar, np.nan)
                 # fit_stop shrinks a trailing distance with the stop (scalar: bar_trail_distance *= stop_scale)
