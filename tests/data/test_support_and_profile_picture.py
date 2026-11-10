@@ -13,7 +13,7 @@ def _client():
 
 
 def test_support_page_renders_with_discord_link():
-    r = _client().get("/support")
+    r = _client().get("/settings/account?tab=support")
     assert r.status_code == 200
     body = r.get_data(as_text=True)
     assert "discord.gg/3MbKm3S2zG" in body
