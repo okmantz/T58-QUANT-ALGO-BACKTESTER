@@ -413,8 +413,9 @@ def test_web_api_keys_page_and_save_roundtrip():
     from app.web.server import app as flask_app
     from app.accounts import api_keys as ak
     c = flask_app.test_client()
-    r = c.get("/settings/api-keys")
+    r = c.get("/settings/account?tab=api-keys")
     assert r.status_code == 200 and b"Twelve Data" in r.data
+    assert c.get("/settings/api-keys").status_code == 301  # legacy URL redirects to the tab
     c.post("/settings/api-keys/save-data", data={"tiingo_api_key": "TT", "fred_api_key": "FF"})
     c.post("/settings/api-keys/save-ai", data={"openai_api_key": "OO"})
     s = ak.load_settings()

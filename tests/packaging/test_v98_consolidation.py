@@ -72,9 +72,11 @@ def test_sidebar_lifecycle_steps_are_single_links(client):
     assert 'href="/quant-lab"' in sidebar
     # Notification settings live inside Account settings now (see tests/web/test_v96_web_nav.py): no separate sidebar entry.
     assert 'href="/settings/notifications"' not in sidebar
-    assert sidebar.index('href="/settings/account"') < sidebar.index('href="/settings/api-keys"')
-    assert 'href="/data-center"' in sidebar
-    assert 'href="/support"' in sidebar
+    # Quant Lab dropdown holds only Quant Lab + Research Lab; API keys / achievements / support are Account settings tabs
+    assert 'href="/research-labs"' in sidebar
+    for gone in ('href="/profile"', 'href="/demo-account"', 'href="/rulebook"', 'href="/settings/api-keys"', 'href="/support"', 'href="/achievements"'):
+        assert gone not in sidebar, gone
+    assert sidebar.index('href="/settings/account"') < sidebar.index('href="/data-center"')
 
 
 # ------------------------------------------------- (b) grouping helper
