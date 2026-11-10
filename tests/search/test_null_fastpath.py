@@ -46,4 +46,14 @@ def test_run_config_the_fast_path_ignores_forces_the_engine():
     assert _null_fast_eligible(df, _risk(), None, None)
     assert not _null_fast_eligible(df, _risk(block_weekend_hold=True), None, None)
     assert not _null_fast_eligible(df, _risk(flatten_time_ct="15:45"), None, None)
-    assert not _null_fast_eligible(df, _risk(time_stop_hours=6.0), None, None)
+    # time stops are modelled by the vectorised path now (parity below), so they stay on the fast path
+    assert _null_fast_eligible(df, _risk(time_stop_hours=6.0), None, None)
+
+
+def test_time_stop_null_matches_engine():
+    df = _gapless_df(n=500, seed=6)
+    kw = dict(n_entries=15, hold_bars=30, stop_loss_pips=40.0, take_profit_pips=60.0, metric="net_profit", n_seeds=10, seed=2)
+    risk = _risk(time_stop_hours=0.5)
+    fast = random_entry_distribution(df, risk, 0.0, fast=True, **kw)
+    slow = random_entry_distribution(df, risk, 0.0, fast=False, **kw)
+    assert np.allclose(fast["null"], slow["null"], rtol=1e-9, atol=1e-6)
