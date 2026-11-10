@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-11-09 (second pass) - tabs, demo deploy, trimmed navigation
+- **Account Settings** is one tabbed page: Account, Notifications (with the Discord and briefing cards), API Keys, Achievements, Support. The old `/settings/api-keys`, `/support`, `/achievements`, `/settings/notifications` URLs redirect to the matching tab.
+- **University** is three separate pages: Courses, Resources, User Manual (rewritten). `/education/knowledge-check` still redirects to the course module.
+- **Deploy** has a *T58 demo account* pane (pick a saved strategy, get the TradingView alert) beside the MT5 pane; `/demo-account` redirects there.
+- **Removed pages**: Prop Firm Rulebook page and Trader Profile (the rulebook library stays inside the pipeline and discovery engine, whose run notes now record looks and G0 status).
+- **Quant Lab menu** lists only Quant Lab and Research Lab. Investing: click a holding for details and a one-click sell (`/investing/api/close`).
+- **Global Events map** is readable in light mode; the Endless Sands scene has a walking traveller.
+- **Vectorized screen** now covers breakeven and time-stop exits (scalar-parity tested). Resting orders, partial exits, flatten rules and prop state still go to the full engine.
+- **Bundled data** is ES, NQ and GC only (`data/data_pack.json` refrozen). The pooled-edge test needs 8 markets and reports INSUFFICIENT until the extended pack is added.
+- **TradingView bridge**: a Pine *strategy* template in addition to the settings indicator, plus a Bridge page (`/pine-indicator/bridge`) that decodes and verifies a settings ID.
+- **Reports** open with a plain-English summary; validation reports explain each check in a sentence.
+
 ## 2026-11-09 - University, starter data, planner and a calmer interface
 - **First launch**: the first screen is always the license key + email page. A leftover app password from an earlier install is cleared on first activation, so a fresh install never asks for a password it does not have. Re-activating on an existing install keeps your password.
 - **Starter data**: ES, NQ and GC history ship inside the app and are copied into your data folder on first run (each file once; delete one and it stays deleted). GC is a plain dataset: it is not part of the sealed-holdout data pack.
