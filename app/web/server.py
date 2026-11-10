@@ -1138,6 +1138,8 @@ app.register_blueprint(pages_bp)
 app.register_blueprint(extra_bp)
 # Gamma Center, Trading Journal, clickable metrics, library control feed, prop simulator presets (2026-10-17).
 app.register_blueprint(v9_bp)
+from app.web.suite_routes import suite_bp  # noqa: E402
+app.register_blueprint(suite_bp)
 app.register_blueprint(accuracy_bp)
 app.register_blueprint(discover_bp)
 # Risk Sweep -- run_risk_sweep (app/optimize/risk_sweep.py) was already
@@ -11425,6 +11427,14 @@ def deploy_live_start():
             contract_size=contract_size, units_per_lot=units_per_lot,
         )
         log = []
+        # Evaluation Guardian + Automated Payout Optimization (chosen on the Deploy page itself; opt-out, never loosens a limit)
+        from app.live_deploy import guardian_setup
+        try:
+            log.extend(guardian_setup.apply(
+                form, cfg, account_size=rules.account_size, daily_loss_pct=(float(form.get("daily_loss", 5) or 5) or None),
+                max_dd_pct=float(form.get("max_dd", 10) or 10), profit_target_pct=float(form.get("profit_target", 8) or 8)))
+        except (KeyError, ValueError) as exc:
+            return jsonify({"ok": False, "error": f"Guardian settings are invalid: {exc}"}), 400
         log.append(f"[warn] {enforced_guardrails_summary(rules)}")
         log.append(f"[info] Sizing conversion for {broker.platform_name}: "
                    f"contract_size={contract_size}, units_per_lot={units_per_lot}.")
@@ -11546,6 +11556,7 @@ def deploy_live_status():
             "balance": s.balance, "equity": s.equity, "n_trades_closed": s.n_trades_closed,
             "win_rate": s.win_rate, "net_pnl": s.net_pnl, "halted_reason": s.halted_reason,
             "drift_flag": s.drift_flag, "alert": s.alert, "followers": list(getattr(s, "followers", []) or []),
+            "guardian": getattr(s, "guardian", None),
             "log": _LIVE_DEPLOY_SESSION["log"][-100:],
         })
 

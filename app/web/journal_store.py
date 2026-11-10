@@ -262,6 +262,15 @@ def upsert_trade(trade: dict) -> dict:
         "notes": str(trade.get("notes") or "")[:5000],
         "screenshot": shot,
     }
+    # Auto-captured fields (app.journal.capture). Optional: a hand-entered trade simply does not carry them.
+    for k in ("strategy", "source", "externalId", "session", "regime", "setup", "entryTime", "exitTime", "account"):
+        if trade.get(k) not in (None, ""):
+            t[k] = str(trade[k])[:120]
+    for k in ("exitPrice", "rMultiple", "backtestAvgR", "volume"):
+        if trade.get(k) not in (None, ""):
+            t[k] = _num(trade[k])
+    if isinstance(trade.get("violations"), list):
+        t["violations"] = [str(v)[:200] for v in trade["violations"]][:20]
     cl = t["checklist"]
     t["compliancePct"] = round(100.0 * sum(1 for v in cl.values() if v) / len(cl), 1) if cl else None
     with _LOCK:
