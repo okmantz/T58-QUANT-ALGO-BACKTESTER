@@ -121,6 +121,8 @@ class LiveExecutionStatus:
     alert: Optional[str] = None
     # Trade copier: one dict per follower account (see trade_copier.LegStatus). Empty without a copier.
     followers: list = field(default_factory=list)
+    # Latest Evaluation Guardian report (dict) when the guardian is enabled, else None.
+    guardian: Optional[dict] = None
 
 
 @dataclass
@@ -149,6 +151,13 @@ class LiveExecutionConfig:
     # Journal key for this session's trades. None = the broker's own account login (the long-standing behaviour).
     # The trade copier sets it to the saved-account id so several accounts under one login stay separate.
     journal_login: Optional[str] = None
+    # Evaluation Guardian (opt-in): the firm's rules as app.guardian.engine.GuardianRules plus the Conservative / Balanced /
+    # Accelerated preset. None = off, behaviour byte-identical to before.
+    guardian: Optional[object] = None
+    guardian_preset: str = "balanced"
+    # Automated Payout Optimization (opt-in): {"stage": <lifecycle stage>, "preset": conservative|balanced|accelerated, "sizes_risk": bool}.
+    # With sizes_risk the per-trade risk follows app.prop.payout_optimizer.risk_plan (always clamped to the hard limits).
+    optimizer: Optional[dict] = None
 
 
 class LiveExecutionSession:
@@ -201,6 +210,12 @@ class LiveExecutionSession:
         # v7 P0-2: trailing peak of mark-to-market equity for the live
         # max-drawdown check. Initialized at start(); None = not started.
         self._dd_peak: Optional[float] = None
+        self._guardian = None
+        self._guardian_size_mult = 1.0
+        self._guardian_can_open = True
+        if getattr(config, "guardian", None) is not None:
+            from app.guardian.engine import GuardianTracker
+            self._guardian = GuardianTracker(config.guardian, config.guardian_preset)
 
     # -- public controls ------------------------------------------------
 
@@ -503,6 +518,8 @@ class LiveExecutionSession:
         # A breach flattens everything and halts; nothing below runs.
         if self._check_max_drawdown():
             return
+        if self._run_guardian():
+            return
 
         # Followers: health, drawdown and broker-side closes, and any close still owed after the leader went flat.
         if self.copier is not None:
@@ -556,6 +573,9 @@ class LiveExecutionSession:
         price = float(df["close"].iloc[-1])
         self.status.last_signal = signal
 
+        if not self._guardian_can_open and signal != 0 and self.status.open_position_ticket is None:
+            self._check_drift()
+            return
         if self.status.open_position_ticket is None and signal != 0:
             if self._hedging_conflict(signal):
                 self._log("warn", f"Hedging not permitted for this account -- skipping {('LONG' if signal == 1 else 'SHORT')} entry "
@@ -570,6 +590,59 @@ class LiveExecutionSession:
                 self._open_new_trade(signal, result, price)
 
         self._check_drift()
+
+    def _optimizer_scale(self, equity: float) -> float:
+        """Payout-optimizer sizing: the ratio of the plan's per-trade risk to the configured one. 1.0 when the optimizer is off."""
+        opt = getattr(self.cfg, "optimizer", None)
+        if not opt or not opt.get("sizes_risk"):
+            return 1.0
+        try:
+            from app.prop import payout_optimizer as po
+            floor = (self.status.guardian or {}).get("metrics", {}).get("drawdown_floor")
+            plan = po.risk_plan(opt.get("stage", "evaluation"), opt.get("preset"), self.cfg.prop_rules, balance=equity, floor=floor,
+                                daily_pnl=self._daily_realized_pnl, max_contracts=getattr(self.cfg.prop_rules, "max_contracts", None))
+            base = self.cfg.risk.risk_amount(equity)
+            if base <= 0:
+                return 1.0
+            for c in plan.clamps:
+                self._log("info", f"Payout optimizer: {c}")
+            return plan.risk_per_trade / base
+        except Exception as exc:  # noqa: BLE001 - never let the optimizer take a session down; fall back to the configured risk
+            self._log("warn", f"Payout optimizer skipped: {exc}")
+            return 1.0
+
+    def _run_guardian(self) -> bool:
+        """Evaluation Guardian: warn / reduce / block / flatten / halt-for-the-day from the firm's own rules and the broker's own
+        balance and equity. Returns True when the session was halted and nothing further should run this poll."""
+        if self._guardian is None:
+            return False
+        try:
+            ts = pd.Timestamp.now(tz="UTC")
+            open_pos = self.broker.get_open_positions(self.cfg.symbol) if self.status.open_position_ticket is not None else []
+            n_open = float(sum(getattr(p, "volume", 1.0) or 1.0 for p in open_pos))
+            rep = self._guardian.update(self.status.balance, self.status.equity, ts, open_contracts=n_open,
+                                        traded_today=self._daily_realized_pnl != 0.0 or bool(open_pos))
+        except Exception as exc:  # noqa: BLE001 - monitoring must never take the session down
+            self._log("warn", f"Guardian check skipped: {exc}")
+            return False
+        if rep is None:
+            return False
+        self.status.guardian = rep.to_dict()
+        a = rep.action
+        self._guardian_can_open = bool(a["can_open"])
+        self._guardian_size_mult = float(a["size_multiplier"] or 0.0) if a["can_open"] else 0.0
+        if a["level"] != "ok":
+            msg = f"Guardian [{a['level']}]: {a['reasons'][0] if a['reasons'] else a['label']}"
+            if self.status.alert != msg:
+                self._log("warn", msg)
+            self.status.alert = msg
+        if a["flatten"]:
+            if self.status.open_position_ticket is not None:
+                self._close_current_trade("guardian flatten")
+            if a["halt_day"]:
+                self.status.halted_reason = "Guardian: " + (a["reasons"][0] if a["reasons"] else "limit reached") + " -- halted for the day."
+                return True
+        return False
 
     def _fetch_bars(self):
         """Bars for signal generation: the leader's own broker by default, or the configured bar source
@@ -616,6 +689,8 @@ class LiveExecutionSession:
         stop_pips = stop_distance / self.cfg.risk.pip_size if self.cfg.risk.pip_size else 0
         equity = self.status.equity or self.cfg.risk.initial_balance
         volume = self.cfg.risk.position_size(equity, stop_pips)  # generic sizing units (NOT broker quantity)
+        if self._guardian is not None:
+            volume *= self._optimizer_scale(equity) * self._guardian_size_mult
 
         # v7 P0-1: convert generic sizing units -> this broker's native
         # quantity (whole contracts on Tradovate, lots on MT5/cTrader/
