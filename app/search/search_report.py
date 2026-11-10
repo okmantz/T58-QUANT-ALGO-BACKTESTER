@@ -11,6 +11,7 @@ app/reports/generator.py convention of hand-written templates, no new
 templating dependency).
 """
 from __future__ import annotations
+from app.reports.branding import brand as _t58_brand
 
 import json
 from pathlib import Path
@@ -150,7 +151,7 @@ def generate_search_report(
 
     html_path = out / f"search_leaderboard_{summary.run_id}.html"
     json_path = out / f"search_leaderboard_{summary.run_id}.json"
-    html_path.write_text(html, encoding="utf-8")
+    html_path.write_text(_t58_brand(html), encoding="utf-8")
     json_path.write_text(json.dumps(
         {
             "run_id": summary.run_id, "mode": summary.mode, "family": summary.family,
