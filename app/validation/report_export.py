@@ -16,6 +16,7 @@ Flask-free and pandas-free on purpose, so it is unit-testable in isolation and s
 and the desktop app.
 """
 from __future__ import annotations
+from app.reports.branding import brand as _t58_brand
 
 import html
 import json
@@ -439,7 +440,7 @@ def save_report(directory: Path | str, doc: dict) -> dict:
     for ext, fn in (("html", render_html), ("txt", render_text)):
         try:
             p = d / f"{rid}.{ext}"
-            p.write_text(fn(doc), encoding="utf-8")
+            p.write_text(_t58_brand(fn(doc)), encoding="utf-8")
             paths[ext] = p
         except Exception:  # noqa: BLE001
             pass
