@@ -33,6 +33,19 @@ COMMON_DATA = [
     ("app/search/seed_data", "app/search/seed_data"),  # starter Strategy Graveyard seed (merged on first use)
     ("research", "research"),                # bundled research papers (PDFs + reading lists) seeded into the Library on first use
 ]
+# Starter market data bundled INTO the app so the very first run needs no import: ES, NQ and GC 1-minute history
+# (dev window + sealed holdout) plus the manifests that pin the sealed slice. app.data.storage seeds these into the
+# writable data folder on first launch. Folders and files are both REQUIRED, like COMMON_DATA.
+STARTER_DATA_DIRS = [
+    ("data/raw/ES1!", "data/raw/ES1!"),
+    ("data/raw/NQ1!", "data/raw/NQ1!"),
+    ("data/raw/GC1!", "data/raw/GC1!"),
+]
+STARTER_DATA_FILES = [
+    ("data/data_pack.json", "data"),
+    ("data/data_manifest.json", "data"),
+]
+STARTER_SYMBOLS = ("ES", "NQ", "GC")
 WEB_DATA = [
     ("app/web/templates", "app/web/templates"),
     ("app/web/static", "app/web/static"),
@@ -90,7 +103,7 @@ def repo_root(spec_dir: str | Path) -> Path:
 def data_entries(root: Path, *, web: bool) -> list[tuple[str, str]]:
     """PyInstaller ``datas`` tuples. Raises FileNotFoundError if a required
     folder is missing so a broken checkout cannot produce a broken build."""
-    wanted = list(COMMON_DATA) + (list(WEB_DATA) if web else [])
+    wanted = list(COMMON_DATA) + list(STARTER_DATA_DIRS) + (list(WEB_DATA) if web else [])
     entries: list[tuple[str, str]] = []
     for src, dest in wanted:
         path = root / src
@@ -100,4 +113,26 @@ def data_entries(root: Path, *, web: bool) -> list[tuple[str, str]]:
                 f"-- refusing to build an app that is missing it."
             )
         entries.append((str(path), dest))
+    for src, dest in STARTER_DATA_FILES:
+        path = root / src
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"build_tools/spec_common.py: required file '{src}' not found under {root} "
+                f"-- refusing to build an app that is missing it."
+            )
+        entries.append((str(path), dest))
+    for _src, dest in STARTER_DATA_DIRS:
+        _check_not_lfs_stub(root / _src)
     return entries
+
+
+def _check_not_lfs_stub(folder: Path) -> None:
+    """A Git LFS pointer is a ~130-byte text file. Bundling one would ship a 'dataset' that cannot be read."""
+    for path in folder.rglob("*"):
+        if path.is_file() and path.stat().st_size < 1024:
+            with open(path, "rb") as fh:
+                if fh.read(40).startswith(b"version https://git-lfs"):
+                    raise FileNotFoundError(
+                        f"build_tools/spec_common.py: starter data file {path} is a Git LFS pointer, not real data "
+                        f"-- check out with LFS files fetched before building."
+                    )
