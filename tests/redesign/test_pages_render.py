@@ -9,7 +9,7 @@ def _client():
 
 
 @pytest.mark.parametrize("path,needle", [
-    ("/achievements", "Certificates &amp; medals"),
+    ("/settings/account?tab=achievements", "Certificates &amp; medals"),
     ("/discovery-engine", "Ideas from your research"),
     ("/achievements/certificate.svg", "<svg"),
 ])
@@ -24,8 +24,8 @@ def test_medal_route_unknown_404():
 
 
 @pytest.mark.parametrize("path,needle", [
-    ("/support", "Report an issue"),
-    ("/resources", "Start here"),
+    ("/settings/account?tab=support", "Report an issue"),
+    ("/education/resources", "Start here"),
     ("/hedge-fund", "Portfolio Builder"),
     ("/quant-lab", "Search"),
     ("/research-labs", "Reproducible"),
