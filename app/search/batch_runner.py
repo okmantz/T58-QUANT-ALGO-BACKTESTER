@@ -896,6 +896,7 @@ def _stage1_task_batch(items: list[tuple[str, dict]], filters: dict, screen: dic
                 stop_distances=np.asarray(sl_dist, dtype=float) if sl_dist is not None else None,
                 take_distances=np.asarray(tp_dist, dtype=float) if tp_dist is not None else None,
                 trail_distances=np.asarray(tr_dist, dtype=float) if tr_dist is not None else None,
+                breakeven_trigger_r=strat_result.breakeven_trigger_r,
             ))
             vec_bases[candidate_id] = base
             if screen:

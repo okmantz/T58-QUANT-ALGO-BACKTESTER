@@ -236,6 +236,9 @@ def _day_index(df: pd.DataFrame) -> tuple[np.ndarray, int]:
 def screen_supported(risk, strat_result) -> bool:
     """True when this candidate/risk combination is inside the screener's modelled subset."""
     from app.backtest.vectorized_fastpath import is_vectorizable, risk_is_vectorizable
+    # The screener models neither the break-even trigger nor the time stop (the batch engine does), so those never get screened.
+    if strat_result.breakeven_trigger_r is not None or getattr(risk, "time_stop_hours", None):
+        return False
     if not (is_vectorizable(strat_result) and risk_is_vectorizable(risk)):
         return False
     return getattr(strat_result, "trailing_stop_distance", None) is None
@@ -334,7 +337,7 @@ def screen_candidates(df: pd.DataFrame, candidates: list, risk, th: ScreenThresh
         return None
     try:
         from app.backtest.vectorized_fastpath import risk_is_vectorizable
-        if not risk_is_vectorizable(risk) or not math.isfinite(float(risk.risk_amount(risk.initial_balance))):
+        if getattr(risk, "time_stop_hours", None) or not risk_is_vectorizable(risk) or not math.isfinite(float(risk.risk_amount(risk.initial_balance))):
             return None
         if float(risk.risk_amount(risk.initial_balance)) <= 0:
             return None
