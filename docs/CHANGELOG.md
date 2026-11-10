@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-10 - 30-day prop evaluation research initiative
+- **New evaluator** `app/prop/thirty_day.py`: P(pass within 30/60 calendar days of purchase), purchased every weekday, floating drawdown/daily loss, cost stress, regimes, losing streaks and a dependence-aware 95% interval. It never reports eventual/chain MC pass as a 30-day number.
+- **Audit fixes**: `sizing_summary.skip_rate` is now per signal (was episodes/bars); `run_attempt_replay` gains opt-in calendar-day, truncation and mid-signal controls (defaults unchanged); rolling-evaluation labels say *trading* days.
+- **Research stack**: feasibility screen, opportunity scanner (NQ/ES/GC), frozen-entry exit lab, shared-risk portfolio builder, validation gate with independence audit and forward registry, plus `scripts/run_prop30_research.py` and `scripts/audit_gad_engine.py`. See `docs/PROP30_AUDIT.md`.
+- **Result**: the bundled data does not establish a strategy meeting the 65% (95% lower bound) 30-day target; the existing NQ Gap-Aligned Drive passes 0.0% within 30 days.
+- **Tests**: `tests/journal` suite skips cleanly when `app/journal` modules are absent.
+
 ## 2026-11-09 (second pass) - tabs, demo deploy, trimmed navigation
 - **Account Settings** is one tabbed page: Account, Notifications (with the Discord and briefing cards), API Keys, Achievements, Support. The old `/settings/api-keys`, `/support`, `/achievements`, `/settings/notifications` URLs redirect to the matching tab.
 - **University** is three separate pages: Courses, Resources, User Manual (rewritten). `/education/knowledge-check` still redirects to the course module.
