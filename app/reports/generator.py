@@ -498,6 +498,7 @@ _HTML_TEMPLATE = '''<!DOCTYPE html>
 </div>
 {sizing_halt_banner}
 {verdict_section}
+{plain_english_section}
 
 <section class="sec" id="headline">
 <h2>Headline numbers (per account attempt)</h2>
@@ -998,18 +999,24 @@ def _breakdown_html(backtest_result) -> str:
         return '<p class="muted">Breakdowns are unavailable for this run.</p>'
 
 
+def _plain_english(report: dict) -> str:
+    from app.reports.plain_english import summary_html
+    return summary_html(report)
+
+
 def _tradingview_section(report: dict) -> str:
-    """Backtest -> live chart in one copy-paste: the settings ID plus the (one-time) Pine indicator it feeds."""
+    """Backtest -> live chart in one copy-paste: the settings ID plus the (one-time) Pine scripts it feeds."""
     from html import escape
     from app.reports import tv_bridge
     sid = report.get("tradingview_settings_id") or tv_bridge.settings_id_for_report(report)
     return (
-        '<p>Copy this ID, add the <b>T58 Settings</b> indicator to a TradingView chart once, and paste the ID into its single '
+        '<p>Copy this ID, add a <b>T58 Settings</b> script to a TradingView chart once, and paste the ID into its single '
         'input. The chart then shows the exact configuration this report was run with.</p>'
         f'<p><input id="t58-sid" readonly value="{escape(sid)}" style="width:100%;font-family:monospace;padding:8px;" '
         'onclick="this.select()"> <button type="button" onclick="navigator.clipboard.writeText('
         "document.getElementById('t58-sid').value)\">Copy ID</button></p>"
-        f'<details><summary>Pine indicator (add it once)</summary><pre style="white-space:pre-wrap;">{escape(tv_bridge.pine_indicator())}</pre></details>'
+        f'<details><summary>Pine indicator: shows the settings on the chart (add it once)</summary><pre style="white-space:pre-wrap;">{escape(tv_bridge.pine_indicator())}</pre></details>'
+        f'<details><summary>Pine strategy: also enforces the risk limits (replace the marked entry logic)</summary><pre style="white-space:pre-wrap;">{escape(tv_bridge.pine_strategy())}</pre></details>'
     )
 
 
@@ -1402,6 +1409,7 @@ def export_html(
         period_end=report["strategy"]["backtest_period_end"],
         generated_at=report["generated_at"],
         warnings_section=_warnings_section(report.get("execution_warnings")),
+        plain_english_section=_plain_english(report),
         verdict_section=_verdict_section(report.get("verdict"), report.get("verdict_reasons"), report.get("ev_verdict"), report.get("ladder")),
         headline_warnings_section=_reliability_header(report) + _headline_warnings_banner(report.get("headline_warnings") or []),
         sizing_halt_banner=_sizing_halt_banner(

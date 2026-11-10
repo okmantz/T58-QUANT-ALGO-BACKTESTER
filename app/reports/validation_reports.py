@@ -49,11 +49,48 @@ def _write_json(data, path: Path) -> Path:
     return path
 
 
+# Plain-English framing shown at the top of every validation report: the question the test asks, how to read the result, and
+# what a healthy result looks like. Static on purpose: the numbers below are the evidence, this card only orients the reader.
+_EXPLAIN = {
+    "Walk-Forward Optimization Report": ("Does the strategy keep working on data it was not tuned on?",
+        "The data is cut into consecutive windows. Each window is tuned on its first part and then traded on the part right after, which the tuning never saw.",
+        "Healthy: the out-of-sample results (the second part of each window) are positive and not far below the in-sample ones. A big gap means the tuning memorised noise."),
+    "CPCV Report": ("How stable is the result across many different train/test splits?",
+        "Combinatorial purged cross-validation re-cuts the history many ways, with gaps so no information leaks between train and test.",
+        "Healthy: most test paths are profitable and the spread between paths is narrow. A wide spread means the result depends on which period you happened to test."),
+    "Probability of Backtest Overfitting (PBO) Report": ("If I pick the best-looking variant, how likely is it to be a fluke?",
+        "It repeats the 'pick the best on half the data, check it on the other half' exercise many times and counts how often the pick lands below the median.",
+        "Healthy: PBO well below 50%. Above 50% means picking the winner was no better than picking at random."),
+    "Parameter Sensitivity Report": ("Does a small change to a setting break the strategy?",
+        "Each parameter is nudged up and down around its chosen value and the result is re-measured.",
+        "Healthy: a broad, flat plateau of good results around the chosen value. A lone sharp peak is a warning sign: it works only at that exact setting."),
+    "Multi-Asset Portfolio Report": ("How do the strategies behave together as one portfolio?",
+        "The strategies are combined with the weights shown and run as a single account.",
+        "Healthy: the combined drawdown is smaller than the individual ones. If everything falls at the same time, the diversification was an illusion."),
+    "Multi-Objective Optimization Report": ("What is the best trade-off between return and risk?",
+        "Instead of one 'best' answer it lists the settings that cannot be improved on one measure without getting worse on another (the Pareto front).",
+        "Healthy: pick a point from the middle of the front rather than an extreme: the extremes are usually the most overfit."),
+    "Walk-Forward-Aware GA Report": ("Did the genetic search find something that generalises?",
+        "The search was scored on out-of-sample windows only, so a candidate cannot win just by fitting the past.",
+        "Healthy: the winning candidate's out-of-sample score is positive and close to its in-sample score."),
+}
+
+
+def _explain_card(title: str) -> str:
+    import html as _h
+    e = _EXPLAIN.get(title)
+    if not e:
+        return ""
+    q, what, healthy = (_h.escape(x) for x in e)
+    return (f'<div class="card" style="border-left:4px solid var(--accent,#2f6fed)"><h2>{q}</h2>'
+            f'<p style="font-size:14px;color:var(--ink,inherit)">{what}</p><p style="font-size:14px"><b>{healthy}</b></p></div>')
+
+
 def _page(title: str, body: str) -> str:
     from app.reports import theme
     from app.reports._assets import T58_LOGO_BASE64
     return theme.page(
-        title, body,
+        title, _explain_card(title) + body,
         subtitle=f"Validation report · generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
         logo_b64=T58_LOGO_BASE64, extra_head=f"<style>{_EXTRA_CSS}</style>",
     )

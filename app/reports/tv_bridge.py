@@ -151,3 +151,91 @@ def pine_indicator() -> str:
     keys = ", ".join(f'"{k}"' for k in _FIELDS)
     labels = ", ".join(f'"{label}"' for label, _n in _FIELDS.values())
     return _PINE.replace("__KEYS__", keys).replace("__LABELS__", labels).replace("__VERSION__", VERSION)
+
+
+_PINE_STRATEGY = """//@version=5
+// T58 Settings Strategy - the same settings ID, but it also ENFORCES the account protections from your backtest.
+// Paste the ID below. Risk per trade, max trades per day, daily loss limit and max drawdown come from the ID.
+// The entry signal (EMA cross) and the ATR stop are placeholders: replace the two lines marked YOUR ENTRY LOGIC with your own.
+strategy("T58 Settings Strategy", overlay=true, initial_capital=50000, default_qty_type=strategy.fixed, pyramiding=0)
+
+settingsId = input.string("", "T58 settings ID")
+atrMult    = input.float(1.5, "Stop = ATR x", minval=0.1, step=0.1)
+rewardR    = input.float(2.0, "Target (R multiple)", minval=0.1, step=0.1)
+
+parts = str.split(settingsId, "|")
+nParts = array.size(parts)
+lastPart = nParts > 0 ? array.get(parts, nParts - 1) : ""
+idOk = nParts > 2 and array.get(parts, 0) == "__VERSION__" and str.length(lastPart) == 6 and str.startswith(lastPart, "c=")
+
+f_get(key) =>
+    out = ""
+    for i = 1 to nParts - 2
+        kv = str.split(array.get(parts, i), "=")
+        if array.size(kv) == 2 and array.get(kv, 0) == key
+            out := array.get(kv, 1)
+    out
+
+f_num(key, fallback) =>
+    txt = f_get(key)
+    txt == "" ? fallback : nz(str.tonumber(txt), fallback)
+
+riskMode     = f_get("rm")
+riskValue    = f_num("rv", 0.5)
+maxTrades    = f_num("mt", 10)
+dailyLossPct = f_num("dl", 0)
+maxDdPct     = f_num("dd", 0)
+account      = f_num("ab", 50000)
+
+var float dayStartEquity = na
+var float peakEquity = na
+var int tradesToday = 0
+newDay = ta.change(time("D")) != 0
+if na(dayStartEquity) or newDay
+    dayStartEquity := strategy.equity
+    tradesToday := 0
+peakEquity := na(peakEquity) ? strategy.equity : math.max(peakEquity, strategy.equity)
+
+dayLossHit = dailyLossPct > 0 and strategy.equity < dayStartEquity - account * dailyLossPct / 100
+drawdownHit = maxDdPct > 0 and strategy.equity < peakEquity - account * maxDdPct / 100
+canTrade = idOk and not dayLossHit and not drawdownHit and tradesToday < maxTrades
+
+stopDist = ta.atr(14) * atrMult                                   // YOUR ENTRY LOGIC: replace the stop rule
+longSignal = ta.crossover(ta.ema(close, 9), ta.ema(close, 21))    // YOUR ENTRY LOGIC: replace the entry condition
+shortSignal = ta.crossunder(ta.ema(close, 9), ta.ema(close, 21))
+
+riskUsd = riskMode == "fixed" ? riskValue : strategy.equity * riskValue / 100
+qty = stopDist > 0 and syminfo.pointvalue > 0 ? riskUsd / (stopDist * syminfo.pointvalue) : 0.0
+
+if canTrade and qty > 0 and strategy.position_size == 0
+    if longSignal
+        strategy.entry("Long", strategy.long, qty=qty)
+        tradesToday += 1
+    if shortSignal
+        strategy.entry("Short", strategy.short, qty=qty)
+        tradesToday += 1
+strategy.exit("Long exit", "Long", stop=strategy.position_avg_price - stopDist, limit=strategy.position_avg_price + stopDist * rewardR)
+strategy.exit("Short exit", "Short", stop=strategy.position_avg_price + stopDist, limit=strategy.position_avg_price - stopDist * rewardR)
+
+var table t = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 15), border_width=1)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 7)
+    if not idOk
+        table.cell(t, 0, 0, "T58: paste the complete settings ID in this strategy's settings", text_color=color.orange, text_size=size.small)
+    else
+        table.cell(t, 0, 0, "T58 " + f_get("n") + " on " + f_get("s") + " " + f_get("tf"), text_color=color.white, text_size=size.normal)
+        table.cell(t, 0, 1, "Risk per trade", text_color=color.gray, text_size=size.small)
+        table.cell(t, 1, 1, (riskMode == "fixed" ? "$" : "") + str.tostring(riskValue) + (riskMode == "fixed" ? "" : "%"), text_color=color.white, text_size=size.small)
+        table.cell(t, 0, 2, "Trades today", text_color=color.gray, text_size=size.small)
+        table.cell(t, 1, 2, str.tostring(tradesToday) + " / " + str.tostring(maxTrades), text_color=color.white, text_size=size.small)
+        table.cell(t, 0, 3, "Daily loss limit", text_color=color.gray, text_size=size.small)
+        table.cell(t, 1, 3, dayLossHit ? "HIT: standing down" : (dailyLossPct > 0 ? str.tostring(dailyLossPct) + "%" : "off"), text_color=dayLossHit ? color.red : color.white, text_size=size.small)
+        table.cell(t, 0, 4, "Max drawdown", text_color=color.gray, text_size=size.small)
+        table.cell(t, 1, 4, drawdownHit ? "HIT: standing down" : (maxDdPct > 0 ? str.tostring(maxDdPct) + "%" : "off"), text_color=drawdownHit ? color.red : color.white, text_size=size.small)
+"""
+
+
+def pine_strategy() -> str:
+    """A Pine v5 *strategy* template driven by the same settings ID: it sizes by the backtest's risk setting and stops trading when the
+    ID's max trades / daily loss / drawdown limits are hit. The entry logic is a clearly marked placeholder the person replaces."""
+    return _PINE_STRATEGY.replace("__VERSION__", VERSION)

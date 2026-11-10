@@ -356,6 +356,12 @@ def section(title: str, intro: str = "", inner: str = "", anchor: str = "") -> s
 # Stylesheet + page shell
 # --------------------------------------------------------------------------------------------------
 BASE_CSS = """
+.plain { background:var(--card, #fff); border:1px solid var(--line, #e3e8ef); border-left:4px solid var(--accent, #2f6fed); border-radius:12px; padding:18px 22px; }
+.plain h2 { margin:0 0 6px; } .plain-lead { font-size:17px; font-weight:650; margin:0 0 10px; }
+.plain ul { margin:0 0 10px 18px; padding:0; line-height:1.65; } .plain li { margin:2px 0; }
+.plain h3 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted, #667085); margin:14px 0 4px; }
+.plain-concerns li { color:var(--warn, #b45309); } .plain-next { margin:12px 0 0; padding-top:10px; border-top:1px solid var(--line, #e3e8ef); font-weight:600; }
+
 :root{--ink:#111827;--ink2:#374151;--muted:#6b7280;--line:#e5e7eb;--line2:#f1f2f4;--panel:#fff;--bg:#f5f6f8;
 --brand:#1f4fd8;--brand-soft:#eaf0ff;--good:#12a05c;--good-bg:#ecfdf3;--warn:#c98200;--warn-bg:#fff7e6;--bad:#d92d20;--bad-bg:#fef3f2;
 --info:#1f4fd8;--info-bg:#eff4ff;--radius:12px;--shadow:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.06)}
