@@ -129,6 +129,13 @@ class ForwardTestJournal:
             (time.time(), exit_price, pnl, trade_id),
         )
         self._conn.commit()
+        # Auto-populate the trading journal (only for the app's own database, never a scratch/test db path).
+        try:
+            if self.path == _db_path():
+                from app.journal.capture import capture_forward_trade
+                capture_forward_trade(self.path, trade_id)
+        except Exception:  # noqa: BLE001 - journaling must never break trade bookkeeping
+            pass
 
     def open_trades(self, session_id: int) -> list[TradeRecord]:
         return self._query("SELECT * FROM trades WHERE session_id=? AND status='open'", (session_id,))
