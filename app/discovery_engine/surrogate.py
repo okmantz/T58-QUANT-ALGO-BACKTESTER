@@ -278,6 +278,11 @@ def save_report(rep: SurrogateReport, path: Path | None = None) -> Path:
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(rep.to_dict(), indent=1, default=str), encoding="utf-8")
     tmp.replace(p)
+    try:      # history of studies and whether the gate was open afterwards (Research Integrity: "last successful validation")
+        from app.validation.research_integrity import append_history
+        append_history(rep.to_dict(), gate_status(p)["open"])
+    except Exception:  # noqa: BLE001
+        pass
     return p
 
 
