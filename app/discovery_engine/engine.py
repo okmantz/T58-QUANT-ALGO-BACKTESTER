@@ -107,6 +107,20 @@ class EngineResult:
                 "elapsed_seconds": self.elapsed_seconds, "n_forward_test_candidates": len(self.passed)}
 
 
+def _rulebook_notes() -> list:
+    """Internal Rulebook v2 context for a run (never a user-facing page): the lifetime look count that sets N for the G3
+    deflation, and whether the G0 rules sheet is complete. Best-effort: a missing register or sheet never blocks a run."""
+    try:
+        from app.validation import rulebook as rb
+        st = rb.looks_status()
+        out = [f"Rulebook v2: {st['n_looks']} lifetime look(s) booked, so the G3 bar assumes an expected-max z of {st['e_max_now']:.2f} before any candidate is credited."]
+        if not rb.g0_rules_sheet().passed:
+            out.append("Rulebook G0 (rules sheet) is still open, so a champion here is a LEAD, not a forward-test candidate, until the prop-firm rules are confirmed.")
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
 # ---------------------------------------------------------------------------------------------------------- family guard
 def resolve_families(requested, preset: Preset, *, store=None) -> tuple[list, dict]:
     """(families to run, {family: reason it was gated out}).
@@ -202,6 +216,8 @@ class DiscoveryEngine:
         data_fp = prov.data_fingerprint(dev_gate)
         names = list(families)
         ti = trial_inputs(max(1, out.evaluations), names=names, data_fp=data_fp, streams=out.streams)
+        if req.objective_mode != "net_profit":
+            notes.extend(_rulebook_notes())
 
         # champions: entry floor + provenance (the facade measures edge on the same dev slice the sequence reproduces on)
         champs = self._prepare_champions(out.champions, dev_gate, req, preset)
