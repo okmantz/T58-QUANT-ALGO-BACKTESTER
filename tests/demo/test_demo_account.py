@@ -96,8 +96,8 @@ def test_relay_alerts_feed_the_demo_book_like_a_real_account(client):
 
 
 def test_demo_page_renders_and_deploy_route(client):
-    r = client.get("/demo-account")
-    assert r.status_code == 200 and "T58 Prop Firm demo account" in r.get_data(as_text=True)
+    r = client.get("/forward-test?view=demo")
+    assert r.status_code == 200 and "T58 Prop Firm demo" in r.get_data(as_text=True)
     j = client.post("/demo-account/deploy", json={"strategy": "S1", "size": 25000}).get_json()
     assert j["ok"] and j["size"] == 25_000 and j["path"].startswith("/webhook/tradingview/")
     assert client.post("/demo-account/sim-trade", json={"pnl": 120}).get_json()["trade"]["result"] == "win"
@@ -112,4 +112,4 @@ def test_real_account_connect_blocked_in_demo_and_warning_shown(client):
         assert r.get_json()["demo_mode"]
     page = client.get("/deploy-live").get_data(as_text=True)
     assert "Demo mode" in page and "Live" in page
-    assert 'id="t58-pnl-chip"' in client.get("/rulebook").get_data(as_text=True)
+    assert 'id="t58-pnl-chip"' in client.get("/settings/account").get_data(as_text=True)
