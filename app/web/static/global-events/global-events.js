@@ -206,24 +206,32 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     return dpr;
   }
+  // The map is canvas-drawn, so it has to pick its own colours for the light theme (pale teal on a pale panel is invisible).
+  function light() { return document.documentElement.getAttribute('data-theme') === 'light'; }
+  var PAL = {
+    dark:  { grid: 'rgba(130,235,220,.06)', fill: 'rgba(120,225,210,.075)', edge: 'rgba(130,235,220,.30)', ring: 'rgba(255,255,255,.45)', ok: '53,224,176', warn: '240,180,41', bad: '255,111,111', halo: '55' },
+    light: { grid: 'rgba(25,60,75,.05)',   fill: 'rgba(28,100,112,.16)',  edge: 'rgba(22,84,98,.62)',    ring: 'rgba(20,40,50,.55)',    ok: '8,138,104',  warn: '176,112,0',  bad: '200,40,56',  halo: '40' }
+  };
+  function pal() { return light() ? PAL.light : PAL.dark; }
   function buildLand(g, dpr) {
-    var key = g.w + 'x' + g.h + '@' + dpr;
+    var key = g.w + 'x' + g.h + '@' + dpr + (light() ? 'L' : 'D');
     if (landKey === key && landCanvas) return;
     landCanvas = document.createElement('canvas'); landCanvas.width = Math.round(g.w * dpr); landCanvas.height = Math.round(g.h * dpr);
     var c = landCanvas.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0);
-    c.strokeStyle = 'rgba(130,235,220,.06)'; c.lineWidth = 1; c.beginPath();
+    var P = pal(); c.strokeStyle = P.grid; c.lineWidth = 1; c.beginPath();
     for (var lon = -180; lon <= 180; lon += 30) { c.moveTo(g.x(lon), g.y(LAT_TOP)); c.lineTo(g.x(lon), g.y(LAT_BOT)); }
     for (var lat = -30; lat <= 60; lat += 30) { c.moveTo(g.x(-180), g.y(lat)); c.lineTo(g.x(180), g.y(lat)); }
     c.stroke();
     if (LAND) {
       c.beginPath();
       LAND.forEach(function (ring) { for (var i = 0; i < ring.length; i += 2) { var px = g.x(ring[i]), py = g.y(ring[i + 1]); if (i === 0) c.moveTo(px, py); else c.lineTo(px, py); } c.closePath(); });
-      c.fillStyle = 'rgba(120,225,210,.075)'; c.fill();
-      c.strokeStyle = 'rgba(130,235,220,.30)'; c.lineWidth = .7; c.stroke();
+      c.fillStyle = P.fill; c.fill();
+      c.strokeStyle = P.edge; c.lineWidth = light() ? 1 : .7; c.stroke();
     }
     landKey = key;
   }
   var KIND_COLOR = { quake: '#35e0b0', storm: '#8b7cff', fire: '#f0b429', flood: '#4cc9f0', volcano: '#ff6f6f', other: '#c792ea' };
+  var KIND_COLOR_LIGHT = { quake: '#0a9a74', storm: '#6552e0', fire: '#c88400', flood: '#1182b0', volcano: '#d63a4a', other: '#9b4fc7' };
   function drawMap() { if (!raf) raf = requestAnimationFrame(function () { raf = 0; paintMap(); }); }
   function paintMap() {
     if (!S.data) return;
@@ -235,9 +243,9 @@
       S.data.theaters.forEach(function (t) {
         if (!t.bbox) return;
         var x0 = g.x(t.bbox[0]), y0 = g.y(t.bbox[3]), w = g.x(t.bbox[2]) - x0, h = g.y(t.bbox[1]) - y0, sc = t.score == null ? 0 : t.score / 100;
-        var sel = S.theater === t.id, col = sc >= .7 ? '255,111,111' : sc >= .52 ? '240,180,41' : '53,224,176';
+        var P = pal(), sel = S.theater === t.id, col = sc >= .7 ? P.bad : sc >= .52 ? P.warn : P.ok;
         ctx.beginPath(); ctx.roundRect(x0, y0, w, h, 8);
-        ctx.fillStyle = 'rgba(' + col + ',' + (0.03 + sc * 0.14).toFixed(3) + ')'; ctx.fill();
+        ctx.fillStyle = 'rgba(' + col + ',' + ((light() ? 0.06 : 0.03) + sc * 0.14).toFixed(3) + ')'; ctx.fill();
         ctx.strokeStyle = 'rgba(' + col + ',' + (sel ? .9 : .28 + sc * .3).toFixed(2) + ')'; ctx.lineWidth = sel ? 1.6 : 1; ctx.setLineDash(sel ? [] : [4, 4]); ctx.stroke(); ctx.setLineDash([]);
         var lx = g.x(t.label_at ? t.label_at[0] : t.bbox[0]), ly = g.y(t.label_at ? t.label_at[1] : t.bbox[3]);
         ctx.font = '600 10.5px Inter, system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(' + col + ',.95)';
@@ -250,16 +258,18 @@
       if (e.lat == null || e.lon == null) return;
       var isQuake = e.kind === 'quake';
       if (isQuake ? !S.layers.quake : !S.layers.hazard) return;
-      var x = g.x(e.lon), y = g.y(e.lat), r = isQuake ? 2 + Math.max(0, (e.mag || 4.5) - 4) * 1.9 : 3.4 + e.sev * .8, col = KIND_COLOR[e.kind] || KIND_COLOR.other;
-      ctx.beginPath(); ctx.arc(x, y, r, 0, 6.2832); ctx.fillStyle = col + '55'; ctx.fill();
+      var x = g.x(e.lon), y = g.y(e.lat), r = isQuake ? 2 + Math.max(0, (e.mag || 4.5) - 4) * 1.9 : 3.4 + e.sev * .8, col = (light() ? KIND_COLOR_LIGHT : KIND_COLOR)[e.kind] || KIND_COLOR.other;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, 6.2832); ctx.fillStyle = col + pal().halo; ctx.fill();
       ctx.lineWidth = 1.1; ctx.strokeStyle = col; ctx.stroke();
-      if (e.mkt) { ctx.beginPath(); ctx.arc(x, y, r + 3.5, 0, 6.2832); ctx.strokeStyle = 'rgba(255,255,255,.45)'; ctx.lineWidth = .8; ctx.stroke(); }
+      if (e.mkt) { ctx.beginPath(); ctx.arc(x, y, r + 3.5, 0, 6.2832); ctx.strokeStyle = pal().ring; ctx.lineWidth = .8; ctx.stroke(); }
       hits.push({ x: x, y: y, r: r + 4, kind: 'geo', e: e }); n++;
     });
     $('gx-map-empty').hidden = n > 0 || !!(S.data.theaters.some(function (t) { return t.score != null; }));
     if (hover && hover.box) { /* theater hover handled via tooltip only */ }
   }
   new ResizeObserver(function () { drawMap(); }).observe($('gx-map-wrap'));
+  // repaint when the theme is switched without a reload
+  new MutationObserver(function () { landKey = ''; drawMap(); }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
   var tip = $('gx-tip');
   canvas.addEventListener('mousemove', function (ev) {
