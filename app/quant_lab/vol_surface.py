@@ -25,6 +25,7 @@ Plotly.js loaded from its public CDN -- no new Python plotting dependency
 ever writes a JSON data payload into a small HTML/JS template.
 """
 from __future__ import annotations
+from app.reports.branding import brand as _t58_brand
 
 import json
 import re
@@ -258,5 +259,5 @@ def export_surface_html(surface_df: pd.DataFrame, path: str | Path, title: str =
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     html = render_surface_html(surface_df, title)
-    path.write_text(html, encoding="utf-8")
+    path.write_text(_t58_brand(html), encoding="utf-8")
     return path
