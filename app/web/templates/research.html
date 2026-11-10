@@ -40,7 +40,8 @@
 {% include '_sidebar.html' %}
 <div class="t58-main">
 <div class="t58-page-header">
-  <h1>Research Director</h1>
+  <h1>AI Research</h1>
+  {% set research_mode = 'analyze' %}{% include '_research_tabs.html' %}
   <p>Turns a strategy (winner or failure) into information: which rule creates the edge, which destroys it, whether it beats a dumb baseline, how fragile it is, and what T58 has learned across every strategy tested so far.</p>
 </div>
 
@@ -146,6 +147,11 @@
 {% if results.ablation %}
 <h3>Ablation Testing</h3>
 <div class="verdict">{{ results.ablation.verdict }}{% if results.ablation.simplification_suggestion %}<br>{{ results.ablation.simplification_suggestion }}{% endif %}</div>
+{% if results.ablation.rule_effects %}
+<ul class="ablation-list" style="list-style:none;padding:0;">
+  {% for e in results.ablation.rule_effects %}<li style="margin:6px 0;"><b>{{ e.rule }}</b><br><span style="color:{{ '#3ed685' if e.kind == 'helps' else '#f0596a' if e.kind == 'hurts' else 'inherit' }}">{{ e.sentence }}</span></li>{% endfor %}
+</ul>
+{% endif %}
 <table>
   <tr><th>Variant</th><th>Trades</th><th>Pass Rate %</th><th>Expectancy (R)</th></tr>
   {% for r in results.ablation.rows %}

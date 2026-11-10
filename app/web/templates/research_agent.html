@@ -42,10 +42,12 @@
 <body>
 {% set active_page = active_page|default('research_agent') %}
 <div class="t58-shell">
+{% set active_page = 'research' %}
 {% include '_sidebar.html' %}
 <div class="t58-main">
 <div class="t58-page-header">
-  <h1>Research agent</h1>
+  <h1>AI Research</h1>
+  {% set research_mode = 'ask' %}{% include '_research_tabs.html' %}
   <p>A ReAct-style agent whose tools are 100% read-only calls into the real backtest/prop-sim/Monte Carlo/walk-forward/regime/sensitivity/cost-stress engine -- it can only recommend, never apply. Ask it a question about the strategy below; it decides which real engine tools to run to answer it, and shows its work. Needs a local Ollama reachable from wherever this server is running.</p>
 </div>
 

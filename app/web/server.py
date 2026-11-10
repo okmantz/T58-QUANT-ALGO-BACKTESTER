@@ -44,6 +44,7 @@ from werkzeug.datastructures import MultiDict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from urllib.parse import quote_plus
 from flask import (
     Flask, Response, jsonify, redirect, render_template, request, send_from_directory, session, url_for,
 )
@@ -72,6 +73,8 @@ from app.web.hedge_fund_routes import hedge_fund_bp
 from app.web.investing_routes import investing_bp
 from app.web.pages_routes import pages_bp
 from app.web.risk_sweep_routes import risk_sweep_bp
+from app.web.data_health_routes import data_health_bp
+from app.web.payout_planner_routes import payout_planner_bp
 from app.web.project_routes import project_bp
 from app.web.telemetry_routes import telemetry_bp, set_evolution_source
 from app.web.evolution_lab_routes import evolution_lab_bp, set_runner_source as set_lab_runner_source
@@ -121,7 +124,7 @@ from app.optimize.risk_sweep import run_risk_sweep
 from app.optimize.multi_objective import (    DEFAULT_OBJECTIVES, MultiObjectiveConfig, OBJECTIVE_DIRECTIONS, run_multi_objective_refinement,
     run_multi_objective_sweep,
 )
-from app.backtest.adaptive_risk import build_limit_aware_preset
+from app.backtest.adaptive_risk import adaptive_from_settings, build_limit_aware_preset, normalize_adaptive_mode
 from app.optimize.distribution_summary import compute_distribution_summary
 from app.optimize.refinement import DEFAULT_FITNESS, FITNESS_METRICS, OPTIMIZER_MODES, SPEED_RUN_FITNESS, RefinementConfig, RefinementError, fitness_for_objective_mode, run_iterative_refinement
 from app.optimize.multi_market import AGGREGATION_METHODS, run_multi_market_search
@@ -1010,7 +1013,7 @@ def activate_submit():
 # password is set the gate is a no-op anyway, so a first-time "set a
 # password" is still open -- nothing is locked yet.)
 _LOCK_GATE_EXEMPT_PREFIXES = (
-    "/lock", "/static/", "/manifest.json", "/sw.js", "/favicon.ico",
+    "/lock", "/activate", "/static/", "/manifest.json", "/sw.js", "/favicon.ico",
     "/settings/account", "/webhook/tradingview/",
 )
 
@@ -1038,6 +1041,10 @@ def _account_lock_gate():
     once a password exists they need an unlocked session like any other page.
     """
     path = request.path
+    if not _license_ok_cached:
+        # Nothing to protect before the app is licensed, and a leftover password from a previous install must never be the
+        # first thing a new user sees: activation (license key + email) always comes first.
+        return None
     normalized = path.rstrip("/") or "/"
     always_gated = normalized in _LOCK_GATE_ALWAYS_GATED_PATHS
     if not always_gated and any(path == p or path.startswith(p) for p in _LOCK_GATE_EXEMPT_PREFIXES):
@@ -1070,8 +1077,18 @@ def _safe_lock_next(raw_next: str | None) -> str:
 
 @app.route("/lock", methods=["GET"])
 def account_lock_form():
+    global _license_ok_cached
     from app.accounts.settings import load_account_settings
     next_path = _safe_lock_next(request.args.get("next"))
+    if not _license_ok_cached:
+        from app.licensing import client as license_client
+        try:
+            licensed, _msg = license_client.validate_fast_start()
+        except Exception:  # noqa: BLE001
+            licensed = False
+        if not licensed:
+            return redirect(url_for("activate_form"))
+        _license_ok_cached = True
     if not load_account_settings().has_password or session.get("t58_unlocked"):
         return redirect(next_path)
     return render_template("lock.html", next=next_path, error=None)
@@ -1127,6 +1144,8 @@ app.register_blueprint(discover_bp)
 # fully implemented and tested but had no route calling it; see
 # app/web/risk_sweep_routes.py's module docstring.
 app.register_blueprint(risk_sweep_bp)
+app.register_blueprint(payout_planner_bp)
+app.register_blueprint(data_health_bp)
 app.register_blueprint(project_bp)
 app.register_blueprint(telemetry_bp)
 app.register_blueprint(evolution_lab_bp)
@@ -2266,8 +2285,14 @@ def dashboard():
             f"lib|{_c.get('row_type')}|{_c.get('row_file')}",
             f"run|{_c.get('name')}|{_c.get('instrument') or ''}|{_c.get('timeframe') or ''}",
         )
+    try:
+        from app import achievements as _ach
+        _live_pnl_unlocked = bool(_ach.unlock_state()["features"]["live_pnl_panel"]["unlocked"])
+    except Exception:  # noqa: BLE001
+        _live_pnl_unlocked = False
     return render_template(
         "dashboard.html",
+        live_pnl_unlocked=_live_pnl_unlocked,
         focus_options=focus_options,
         focus_value=focus_value,
         strategy_cards=strategy_cards,
@@ -4863,7 +4888,7 @@ def run_pipeline():
         # Optimize/Full Pipeline run made against the same strategy with
         # this enabled (see the 2026-09-16 Quick-Optimize-vs-Full-Pipeline
         # diagnosis this closes).
-        adaptive_risk = build_limit_aware_preset(rules) if form.get("adaptive_risk_enabled") == "on" else None
+        adaptive_risk = adaptive_from_settings(rules, form.get("adaptive_risk_mode")) if form.get("adaptive_risk_enabled") == "on" else None
 
         # T58 BACKTEST INTEGRITY CHECK -- pre-flight gate, BEFORE the backtest
         # itself runs (see app.validation.integrity_check's own docstring for
@@ -5096,6 +5121,11 @@ def _account_settings_page_context(**extra):
         active_page="account_settings",
         notif=load_notification_settings(),
     )
+    try:
+        from app import achievements as _ach
+        ctx["live_pnl_unlocked"] = bool(_ach.unlock_state()["features"]["live_pnl_panel"]["unlocked"])
+    except Exception:  # noqa: BLE001
+        ctx["live_pnl_unlocked"] = False
     ctx.update(extra)
     return ctx
 
@@ -6259,7 +6289,7 @@ def refine_start():
         # Optimize or Full Pipeline run made against the same strategy with
         # this enabled (see the 2026-09-16 Quick-Optimize-vs-Full-Pipeline
         # diagnosis this closes).
-        adaptive_risk = build_limit_aware_preset(rules) if form.get("adaptive_risk_enabled") == "on" else None
+        adaptive_risk = adaptive_from_settings(rules, form.get("adaptive_risk_mode")) if form.get("adaptive_risk_enabled") == "on" else None
 
         cfg = RefinementConfig(
             enabled=True,
@@ -6900,6 +6930,7 @@ def full_pipeline_start_batch():
             ga_search_mc_sims=int(form.get("ga_search_mc_sims", 200) or 200),
             optimizer_mode=form.get("optimizer_mode", "auto") or "auto",
             adaptive_risk_enabled=form.get("adaptive_risk_enabled") == "on",
+            adaptive_risk_mode=normalize_adaptive_mode(form.get("adaptive_risk_mode")),
             fitness_metric=form.get("fitness_metric", DEFAULT_FITNESS),
             final_mc_sims=int(form.get("final_mc_sims", 10000) or 10000),
             baseline_mc_sims=int(form.get("baseline_mc_sims", 2000) or 2000),
@@ -7109,6 +7140,7 @@ def full_pipeline_schedule_batch():
             ga_search_mc_sims=int(form.get("ga_search_mc_sims", 200) or 200),
             optimizer_mode=form.get("optimizer_mode", "auto") or "auto",
             adaptive_risk_enabled=form.get("adaptive_risk_enabled") == "on",
+            adaptive_risk_mode=normalize_adaptive_mode(form.get("adaptive_risk_mode")),
             fitness_metric=form.get("fitness_metric", DEFAULT_FITNESS),
             final_mc_sims=int(form.get("final_mc_sims", 10000) or 10000),
             baseline_mc_sims=int(form.get("baseline_mc_sims", 2000) or 2000),
@@ -7353,6 +7385,7 @@ def full_pipeline_start():
             ga_search_mc_sims=int(form.get("ga_search_mc_sims", 200) or 200),
             optimizer_mode=form.get("optimizer_mode", "auto") or "auto",
             adaptive_risk_enabled=form.get("adaptive_risk_enabled") == "on",
+            adaptive_risk_mode=normalize_adaptive_mode(form.get("adaptive_risk_mode")),
             fitness_metric=form.get("fitness_metric", DEFAULT_FITNESS),
             final_mc_sims=int(form.get("final_mc_sims", 10000) or 10000),
             baseline_mc_sims=int(form.get("baseline_mc_sims", 2000) or 2000),
@@ -9648,6 +9681,7 @@ def quickopt_start():
             n_folds=int(form.get("n_folds", 4) or 4),
             save_to_library=form.get("save_to_library", "on") == "on",
             adaptive_risk_enabled=form.get("adaptive_risk_enabled") == "on",
+            adaptive_risk_mode=normalize_adaptive_mode(form.get("adaptive_risk_mode")),
             reset_on_breach=form.get("reset_on_breach", "on") == "on",
             # Point (5) of the 2026-09-17 fix: opt-in holdout carve-out --
             # unchecked by default, so an existing bookmark/saved form that
@@ -10030,23 +10064,7 @@ HEAVY_JOB_GUARD.register_health_check(
 
 @app.route("/evolution")
 def evolution_form():
-    # v9.16: recovery-panel deep links pass ?from_recovery=1 plus settings
-    # as query args (see _recovery_panel.html's evoPrefillUrl). Forward
-    # them so the template's JS can pre-fill the form. Previously every
-    # query arg was silently ignored.
-    _evo_prefill_keys = (
-        "existing_dataset", "population_size", "max_generations", "seed",
-        "account_size", "profit_target", "daily_loss", "max_dd",
-    )
-    _evo_prefill = {k: request.args.get(k) for k in _evo_prefill_keys
-                    if request.args.get(k) not in (None, "")}
-    return render_template(
-        "evolution.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-        families=[{"name": n, "description": family_description(n)} for n in list_families()],
-        running=(_EVOLUTION_RUNNER is not None and _EVOLUTION_RUNNER.is_running),
-        optimizer_modes=OPTIMIZER_MODES,
-        prop_presets_json=_prop_presets_json(), **_alpaca_template_context(),
-        evo_prefill_json=json.dumps(_evo_prefill) if _evo_prefill else None)
+    return _retired_lab_page()
 
 
 @app.route("/evolution/start", methods=["POST"])
@@ -10499,29 +10517,7 @@ def _track_multi_evolution(group_id: str, group, label: str) -> None:
 
 @app.route("/evolution/multi-instrument")
 def evolution_multi_instrument_form():
-    # v8 audit: evict long-finished groups -- _MULTI_EVOLUTION_GROUPS
-    # otherwise grew without bound, pinning every finished run's
-    # EvolutionRunners (and their market-data dataframes) in the server
-    # process forever. A still-running group is never evicted, however
-    # old; a finished one stays linkable for 6h (same horizon as
-    # JOB_MANAGER.prune) so its job page / promote links keep working
-    # for a while after the run ends.
-    with _MULTI_EVOLUTION_LOCK:
-        now = time.time()
-        stale = [
-            gid for gid, g in _MULTI_EVOLUTION_GROUPS.items()
-            if not g.is_running and (now - g.created_at) > 6 * 3600
-        ]
-        for gid in stale:
-            del _MULTI_EVOLUTION_GROUPS[gid]
-        groups = list(_MULTI_EVOLUTION_GROUPS.items())
-    return render_template(
-        "evolution_multi_instrument.html",
-        stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-        families=[{"name": n, "description": family_description(n)} for n in list_families()],
-        active_groups=[{"group_id": gid, "running": g.is_running, "labels": [j.label for j in g.jobs]} for gid, g in groups],
-        optimizer_modes=OPTIMIZER_MODES,
-    )
+    return _retired_lab_page()
 
 
 @app.route("/evolution/multi-instrument/start", methods=["POST"])
@@ -10775,6 +10771,10 @@ def _run_agent_job(job_id: str, question: str, ctx: ResearchAgentContext, settin
 
 @app.route("/research-agent")
 def research_agent_form():
+    return redirect("/research?mode=ask")
+
+
+def _research_ask_page():
     saved_ai = load_ollama_settings()
     return render_template(
         "research_agent.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), saved_strategies_json=_saved_strategies_json(),
@@ -11844,36 +11844,7 @@ def api_suggest_loop_config():
 
 @app.route("/search")
 def search_form():
-    # v9: recovery-panel deep links pass ?from_recovery=1 plus any of the
-    # prescribed settings as query args (see _recovery_panel.html's
-    # searchPrefillUrl). Forward them to the template as JSON so its own
-    # JS can pre-fill the form fields.
-    # v9.16: the finished run's real prop-firm / risk / timeframe settings
-    # now ride along (flattened by searchPrefillUrl from the run's own
-    # risk/rules dicts).
-    _prefill_keys = (
-        "family", "max_candidates", "seed", "candidate_source",
-        "grammar_candidates_per_survivor", "ga_population", "ga_generations",
-        "stage1_top_n", "cost_stress_multiplier", "stop_mult_scale",
-        "max_hold_bars", "session_filter", "existing_dataset",
-        "expand_timeframes",
-        "account_size", "profit_target", "daily_loss", "max_dd",
-        "dd_type", "dd_check_mode", "consistency", "min_days",
-        "risk_mode", "risk_value", "commission",
-    )
-    _prefill = {k: request.args.get(k) for k in _prefill_keys if request.args.get(k) not in (None, "")}
-    return render_template(
-        "search.html",
-        stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-        families=[{"name": n, "description": family_description(n)} for n in list_families()],
-        saved_strategies_json=_saved_strategies_json(),
-        strategy_notice=request.args.get("strategy_notice"),
-        strategy_statuses=STRATEGY_STATUSES,
-        alpaca_notice=request.args.get("alpaca_notice"),
-        alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"),
-        optimizer_modes=OPTIMIZER_MODES,
-        prop_presets_json=_prop_presets_json(), **_alpaca_template_context(),
-        recovery_prefill_json=json.dumps(_prefill) if _prefill else None)
+    return _retired_lab_page()
 
 
 @app.route("/search/start", methods=["POST"])
@@ -12610,6 +12581,8 @@ def _run_forge_loop_job(
 
 @app.route("/research")
 def research_form():
+    if request.args.get("mode") == "ask":
+        return _research_ask_page()
     return render_template(
         "research.html",
         alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
@@ -12754,14 +12727,16 @@ def _research_run_legacy_sync():
     """
     raise NotImplementedError("Legacy sync path retired in S3 (2026-10-19); see _run_research_job.")
 
+def _retired_lab_page():
+    """Search Lab / Evolution Lab / Forge / Speed Run (and their multi-instrument twins) are retired as pages: their searches
+    live on inside the Strategy Discovery Engine as presets, and the run/job/API routes below stay for jobs already started."""
+    return redirect("/discovery-engine?notice=" + quote_plus(
+        "That lab now lives inside Strategy Discovery - pick your strategy, market data and timeframe, and it runs the same searches."))
+
 
 @app.route("/forge")
 def forge_form():
-    return render_template(
-        "forge.html",
-        alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-        families=[{"name": n, "hypothesis": hypothesis_question(n)} for n in list_families()],
-        active_page="forge", **_alpaca_template_context())
+    return _retired_lab_page()
 
 
 @app.route("/forge/start", methods=["POST"])
@@ -13522,12 +13497,7 @@ def serve_search_report_multi_loop(job_id, filename):
 
 @app.route("/search/multi-instrument")
 def search_multi_instrument_form():
-    return render_template(
-        "search_multi_instrument.html",
-        stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-        families=[{"name": n, "description": family_description(n)} for n in list_families()],
-        optimizer_modes=OPTIMIZER_MODES,
-    )
+    return _retired_lab_page()
 
 
 @app.route("/search/multi-instrument/start", methods=["POST"])
@@ -13873,8 +13843,7 @@ def _run_speedrun_loop_job(
 
 @app.route("/speed-run")
 def speed_run_form():
-    return render_template(
-        "speed_run.html", alpaca_notice=request.args.get("alpaca_notice"), alpaca_notice_kind=request.args.get("alpaca_notice_kind", "info"), stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(), fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES, **_alpaca_template_context())
+    return _retired_lab_page()
 
 
 @app.route("/speed-run/start", methods=["POST"])
@@ -14337,10 +14306,7 @@ def _run_multi_speedrun_job(
 
 @app.route("/speed-run/multi-instrument")
 def speed_run_multi_instrument_form():
-    return render_template(
-        "speed_run_multi_instrument.html", stored_datasets=list_stored_datasets(), dataset_groups=list_datasets_by_instrument(),
-        fitness_metrics=FITNESS_METRICS, optimizer_modes=OPTIMIZER_MODES,
-    )
+    return _retired_lab_page()
 
 
 @app.route("/speed-run/multi-instrument/start", methods=["POST"])

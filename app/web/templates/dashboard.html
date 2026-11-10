@@ -238,6 +238,55 @@
   </div>
 </div>
 
+
+{% if live_pnl_unlocked %}
+<!-- ---- Live P&L panel (earned by promoting a first champion; switched on in Account > Personalize) ---- -->
+<details class="db-card" id="lp-panel" hidden style="margin-bottom:14px;">
+  <summary style="cursor:pointer;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+    <b>Live P&amp;L</b>
+    <span id="lp-sum" class="muted">loading&hellip;</span>
+    <button type="button" id="lp-pin" class="t58-btn ghost sm" style="margin-left:auto;" title="Keep this panel open on every visit">&#128204; Pin open</button>
+  </summary>
+  <div id="lp-body" style="margin-top:12px;">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;" id="lp-grid"></div>
+    <svg id="lp-eq" viewBox="0 0 400 70" preserveAspectRatio="none" style="width:100%;height:70px;margin-top:12px;"></svg>
+    <div style="margin-top:8px;font-size:12px;" class="muted">Progress to the profit target</div>
+    <div style="height:8px;border-radius:4px;background:var(--border);overflow:hidden;"><i id="lp-prog" style="display:block;height:100%;width:0;background:var(--teal);"></i></div>
+    <p class="muted" style="font-size:12px;margin-top:8px;">From the <a href="/demo-account">T58 demo account</a>. The pass estimate replays this account&rsquo;s own closed trades and needs 15 or more; it is a guide, not a promise.</p>
+  </div>
+</details>
+<script>
+(function(){
+  var panel=document.getElementById('lp-panel'); if(!panel) return;
+  var ls; try{ ls=window.localStorage; }catch(e){ return; }
+  if(ls.getItem('t58-live-pnl')!=='1') return;          // switched on in Account > Personalize
+  panel.hidden=false;
+  var pinned=ls.getItem('t58-live-pnl-pin')==='1';
+  panel.open=pinned;                                    // collapsed by default
+  var pin=document.getElementById('lp-pin');
+  function paintPin(){ pin.textContent=pinned?'\u{1F4CC} Pinned open':'\u{1F4CC} Pin open'; }
+  paintPin();
+  pin.addEventListener('click',function(e){ e.preventDefault(); pinned=!pinned; ls.setItem('t58-live-pnl-pin',pinned?'1':'0'); panel.open=pinned; paintPin(); });
+  function money(v){ return v==null?'--':(v<0?'-':'')+'$'+Math.abs(v).toLocaleString(undefined,{maximumFractionDigits:0}); }
+  function tile(l,v,c){ return '<div><div class="muted" style="font-size:11px;text-transform:uppercase;">'+l+'</div><b class="'+(c||'')+'" style="font-size:18px;">'+v+'</b></div>'; }
+  fetch('/api/demo-account').then(function(r){return r.json();}).then(function(d){
+    var a=d.account, pr=a.projection;
+    document.getElementById('lp-sum').textContent=money(a.net_pnl)+' net \u00b7 today '+money(a.day_pnl)+' \u00b7 '+a.stage;
+    document.getElementById('lp-grid').innerHTML=[
+      tile('Live P&L',money(a.net_pnl),a.net_pnl>=0?'up':'down'), tile('Today',money(a.day_pnl),a.day_pnl>=0?'up':'down'),
+      tile('Stage',a.stage), tile('To profit target',money(Math.max(a.profit_target-a.net_pnl,0))),
+      tile('Room to max loss',money(a.cushion)), tile('Room to daily limit',money(a.daily_room)),
+      tile('Est. pass chance',pr?pr.pass_pct+'%':'needs 15+ trades'), tile('Est. days to pass',pr&&pr.days_to_pass!=null?pr.days_to_pass:'--'),
+      tile('Win rate',a.win_rate==null?'--':a.win_rate+'%'), tile('Trades',a.n_trades)].join('');
+    document.getElementById('lp-prog').style.width=Math.min(a.target_pct,100)+'%';
+    var e=a.equity||[]; if(e.length>1){ var lo=Math.min.apply(null,e), hi=Math.max.apply(null,e), sp=(hi-lo)||1;
+      document.getElementById('lp-eq').innerHTML='<polyline fill="none" stroke="currentColor" stroke-width="1.5" vector-effect="non-scaling-stroke" points="'+
+        e.map(function(v,i){return (i/(e.length-1)*400).toFixed(1)+','+(66-(v-lo)/sp*62).toFixed(1);}).join(' ')+'"/>'; }
+  }).catch(function(){ document.getElementById('lp-sum').textContent='unavailable'; });
+})();
+</script>
+{% endif %}
+
 {% if show_welcome %}
 <!-- ---- First run: condensed welcome ---- -->
 <div class="db-card db-welcome">
@@ -251,10 +300,10 @@
       <li>Build or pick a strategy on <b>1 Strategy Configuration</b>.</li>
       <li>Click <b>RUN</b> on <b>5 Run &amp; Report</b>.</li>
     </ul>
-    <p class="hint">No idea for a strategy yet? <a href="/search">Search Lab</a> loads its own data and hands you a leaderboard to start from.</p>
+    <p class="hint">No idea for a strategy yet? <a href="/discovery-engine">Strategy Discovery</a> finds, tests and ranks candidates for you.</p>
   </div>
   <div class="wl-acts">
-    <a class="t58-btn primary sm" href="/search">Go to Search Lab</a>
+    <a class="t58-btn primary sm" href="/discovery-engine">Go to Strategy Discovery</a>
     <a class="t58-btn ghost sm" href="/user-manual">Full walkthrough</a>
   </div>
 </div>
@@ -445,7 +494,7 @@
     {% endfor %}
   </div>
   {% else %}
-  <div class="db-empty">No strategies yet &mdash; <a href="/start-here/create">create one</a> or run <a href="/search">Discovery</a> to find some.</div>
+  <div class="db-empty">No strategies yet &mdash; <a href="/start-here/create">create one</a> or run <a href="/discovery-engine">Discovery</a> to find some.</div>
   {% endif %}
 </div>
 

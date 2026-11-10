@@ -58,6 +58,7 @@
 <div class="t58-page-header" style="padding-left:0;">
   <p style="margin:0 0 4px;font-size:12px;"><a href="/start-here/create" style="color:var(--teal);text-decoration:none;">&larr; Create</a></p>
   <h1>Strategy Discovery Engine</h1>
+  {% if notice %}<div class="t58-card" style="margin:8px 0;">{{ notice }}</div>{% endif %}
   <p>Don&rsquo;t have a strategy yet? Pick a market and a prop firm, press Start, and watch the engine try thousands of ideas &mdash; trend, breakout, reversion, momentum and session strategies &mdash; with every candidate&rsquo;s equity curve drawn live. Only ideas that survive fresh data, a robustness check and a sealed test make the winners list.</p>
 </div>
 
@@ -185,7 +186,7 @@
 <details class="de-card de-more">
   <summary>Deep statistical gauntlet &amp; classic tools</summary>
   <p class="de-note" style="margin-top:10px;">One engine, one objective (<b>{{ st.objective }}</b>), one entry floor ({{ st.floor.min_trades }}+ trades, mean-R t &ge; {{ st.floor.min_t_stat }}, cost &lt; {{ st.floor.max_cost_in_r }} R) and one lifetime trial ledger.
-  The old Search Lab, Evolution Lab, Forge and Speed Run are methods of this engine now (choose &ldquo;Deep statistical gauntlet&rdquo; under Search method in Advanced options; it is slow and very strict). Their original pages still work:</p>
+  The old Search Lab, Evolution Lab, Forge and Speed Run are methods of this engine now (choose &ldquo;Deep statistical gauntlet&rdquo; under Search method in Advanced options; it is slow and very strict). Their old pages are retired; everything they did is a preset here.</p>
   <p class="de-links" style="margin-top:8px;">
     {% for p in st.presets if p.page %}<a href="{{ p.page }}">{{ p.label }}</a>{% endfor %}
   </p>

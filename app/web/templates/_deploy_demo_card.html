@@ -1,0 +1,20 @@
+{# Practice on the T58 prop-firm demo (simulated capital, real prop-firm rules). Shown on the Deploy page, locked or not. #}
+<div class="card" id="dd-card" style="padding:14px;margin:14px 0;">
+  <h2>Practice first: the T58 prop-firm demo</h2>
+  <p class="help">A simulated prop-firm account with simulated money and the same kind of rules a real firm uses. Nothing here touches a broker. Your deployed strategy trades it from TradingView alerts, and it passes or fails exactly like a real evaluation.</p>
+  <ol class="help" style="margin:0 0 10px 18px;">
+    <li>Pick an account size (25k, 50k or 100k) on the demo page.</li>
+    <li>Press <b>Deploy</b> there to get the TradingView webhook URL and alert message, and paste them into a TradingView alert.</li>
+    <li>Watch every trade, the loss floor and your progress to the target update live. Pass, then try the real thing.</li>
+  </ol>
+  <table class="da" style="width:100%;font-size:13px;border-collapse:collapse;"><tbody id="dd-rules"><tr><td class="muted">Loading the rules&hellip;</td></tr></tbody></table>
+  <p style="margin-top:10px;"><a class="t58-btn primary sm" href="/demo-account">Open the demo account</a></p>
+</div>
+<script>
+fetch('/api/demo-account').then(function(r){return r.json();}).then(function(d){
+  var a=d.account, el=document.getElementById('dd-rules');
+  el.innerHTML='<tr><td colspan="3"><b>$'+Math.round(a.size).toLocaleString()+' account - '+a.stage+'</b></td></tr>'+a.rules_sheet.map(function(r){
+    return '<tr><td style="padding:6px 8px;"><b>'+r.name+'</b></td><td style="padding:6px 8px;">'+r.value+'</td><td style="padding:6px 8px;" class="muted">'+r.plain+(r.now?' <i>Now: '+r.now+'</i>':'')+'</td></tr>';
+  }).join('');
+}).catch(function(){});
+</script>

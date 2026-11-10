@@ -141,7 +141,16 @@ _add("Habits", "active_days", "/dashboard", [
 ])
 _add("Markets", "instruments", "/full-pipeline", [("elite", "Global Explorer", 50, "Analyse 50 different instruments.", "inst-50")])
 
+_add("Pipeline", "champions", "/dashboard", [
+    ("medium", "First Champion", 1, "Promote your first strategy to champion. Unlocks the live P&L panel on the Dashboard.", "champ-1"),
+])
+
 CATALOGUE = {a[0]: a for a in _CATALOGUE}
+
+# Features earned by an award (shown in Personalize once unlocked).
+FEATURE_UNLOCKS: dict[str, dict[str, Any]] = {
+    "live_pnl_panel": {"label": "Live P&L panel", "ach": ["champ-1"]},
+}
 
 
 # ---- counters ----------------------------------------------------------------------------------------------------------
@@ -164,7 +173,7 @@ def compute_counters() -> dict[str, int]:
     base = get_app_base_dir()
     c: dict[str, int] = {k: 0 for k in ("runs", "strategies", "instruments", "timeframes", "pipelines", "passes", "validations",
                                         "validation_tools", "library", "graveyard", "journal", "datasets", "active_days",
-                                        "discoveries")}
+                                        "discoveries", "champions")}
 
     def runs():
         from app.reports.run_history import load_runs
@@ -235,6 +244,9 @@ def compute_counters() -> dict[str, int]:
             n = sum(1 for p in d.glob("run_*.json"))
         c["discoveries"] = max(n, int(_load().get("counters", {}).get("discoveries", 0)))
     _safe(disc, None)
+
+    # Champion promotions leave no file of their own, so promote_strategy() bumps this counter.
+    c["champions"] = int(_load().get("counters", {}).get("champions", 0))
     return c
 
 
@@ -439,11 +451,12 @@ def unlock_state(fresh: bool = False) -> dict[str, Any]:
     bgs = {k: {"label": v["label"], **_requirement(v, unlocked, level)} for k, v in BACKGROUND_UNLOCKS.items()}
     themes = {k: {"label": v["label"], **_requirement(v, unlocked, level)} for k, v in THEME_UNLOCKS.items()}
     workspaces = {k: {"label": v["label"], **_requirement(v, unlocked, level)} for k, v in WORKSPACE_UNLOCKS.items()}
+    features = {k: {"label": v["label"], **_requirement(v, unlocked, level)} for k, v in FEATURE_UNLOCKS.items()}
     titles = {}
     for tid, name, aid in TITLES:
         row = CATALOGUE.get(aid)
         titles[tid] = {"title": name, "unlocked": aid in unlocked, "needs": (row[3] + " (" + row[4].rstrip(".") + ")") if row else aid}
-    return {"backgrounds": bgs, "themes": themes, "workspaces": workspaces, "titles": titles, "level": level,
+    return {"features": features, "backgrounds": bgs, "themes": themes, "workspaces": workspaces, "titles": titles, "level": level,
             "locked_workspaces": [k for k, v in workspaces.items() if not v["unlocked"]],
             "locked_backgrounds": [k for k, v in bgs.items() if not v["unlocked"]],
             "locked_themes": [k for k, v in themes.items() if not v["unlocked"]]}

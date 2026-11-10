@@ -89,7 +89,7 @@ from tempfile import mkdtemp
 
 import pandas as pd
 
-from app.backtest.adaptive_risk import build_limit_aware_preset
+from app.backtest.adaptive_risk import adaptive_from_settings, build_limit_aware_preset
 from app.backtest.engine import run_backtest
 from app.backtest.statistics import reset_chain_note
 from app.backtest.risk import (
@@ -248,6 +248,7 @@ class QuickOptimizeConfig:
     # the final re-validated run alike.
     adaptive_risk_enabled: bool = True
     adaptive_risk_daily_profit_lock_pct: float | None = 80.0
+    adaptive_risk_mode: str = "balanced"   # conservative | balanced | accelerated -- see app.backtest.adaptive_risk
     # Must be one of app.strategy.library's STATUS_LABELS_ORDERED. "draft" is
     # deliberately conservative -- Quick Optimize only re-runs the GA + one
     # backtest, not Full Pipeline's OOS holdout check or significance gate,
@@ -713,7 +714,7 @@ def run_quick_optimize(
     # baseline/GA-search/final/holdout backtests actually run against.
     risk = replace(risk, reset_on_breach=cfg.reset_on_breach)
 
-    adaptive_risk = build_limit_aware_preset(prop_rules, daily_profit_lock_pct=cfg.adaptive_risk_daily_profit_lock_pct) \
+    adaptive_risk = adaptive_from_settings(prop_rules, cfg.adaptive_risk_mode, cfg.adaptive_risk_daily_profit_lock_pct) \
         if cfg.adaptive_risk_enabled else None
     if adaptive_risk is not None:
         log(f"Adaptive risk enabled: {len(adaptive_risk.rules)} limit-aware throttle rule(s) applied.")

@@ -146,6 +146,146 @@ def _frame_fingerprint(frame: pd.DataFrame) -> tuple:
         return (id(frame), len(frame) if frame is not None else 0, None, None, None)
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+# Disk tier (2026-11): shared by every worker process, keyed by (data fingerprint, indicator, params).
+#
+# The in-memory tier above only helps the process that computed a series. Stage-1 screening fans out over many workers that
+# all load the SAME dataset and compute the SAME EMA(20)/ATR(14)/...; the first to finish writes the series to disk and
+# every other worker (and every later run on the same data) reads it back through a memory map instead of recomputing.
+#
+# The key is a CONTENT hash of the frame, not id()/length, so it is safe across processes and runs, and a prefix slice
+# (the look-ahead detector's df.iloc[:cut]) hashes differently from its parent and can never be handed the parent's values.
+# Files are written atomically (tmp + os.replace), so a reader never sees a half-written series; any read/write problem is
+# simply a miss. Small frames are skipped (recomputing is cheaper than touching disk), and the folder is size-capped,
+# evicting least-recently-used files first. T58_INDICATOR_DISK_CACHE=0 turns the tier off; T58_INDICATOR_CACHE_DIR moves it.
+# ---------------------------------------------------------------------------------------------------------------------
+_DISK_MIN_ROWS = 20_000
+_DISK_MAX_BYTES = 2 * 1024 * 1024 * 1024
+_CONTENT_HASHES: dict[tuple, tuple] = {}     # in-memory fingerprint -> (weakref(frame), content hash)
+_CODE_STAMP: str | None = None
+_DISK_HITS = 0
+_DISK_WRITES = 0
+
+
+def disk_enabled() -> bool:
+    return os.environ.get("T58_INDICATOR_DISK_CACHE", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def disk_dir():
+    from pathlib import Path
+    override = os.environ.get("T58_INDICATOR_CACHE_DIR")
+    if override:
+        return Path(override)
+    from app.data.storage import user_data_dir
+    return Path(user_data_dir()) / "cache" / "indicators"
+
+
+def _code_stamp() -> str:
+    """Changes whenever an indicator module is edited, so a fixed indicator never serves its old values."""
+    global _CODE_STAMP
+    if _CODE_STAMP is None:
+        import hashlib
+        from pathlib import Path
+        h = hashlib.sha1()
+        for f in sorted(Path(__file__).parent.glob("indicators*.py")):
+            try:
+                st = f.stat()
+                h.update(f"{f.name}:{st.st_size}:{st.st_mtime_ns}".encode())
+            except OSError:
+                pass
+        _CODE_STAMP = h.hexdigest()[:10]
+    return _CODE_STAMP
+
+
+def content_hash(frame: pd.DataFrame) -> str:
+    """Hash of every column's values (plus the column names), memoised per live frame object."""
+    fp = _frame_fingerprint(frame)
+    with _LOCK:
+        hit = _CONTENT_HASHES.get(fp)
+    if hit is not None and hit[0]() is frame:
+        return hit[1]
+    import hashlib
+    h = hashlib.sha1()
+    for col in frame.columns:
+        h.update(str(col).encode())
+        h.update(pd.util.hash_pandas_object(frame[col], index=False).to_numpy().tobytes())
+    digest = h.hexdigest()[:20]
+    try:
+        ref = weakref.ref(frame)
+    except TypeError:
+        return digest
+    with _LOCK:
+        if len(_CONTENT_HASHES) > 64:
+            _CONTENT_HASHES.clear()
+        _CONTENT_HASHES[fp] = (ref, digest)
+    return digest
+
+
+def _disk_path(frame, kind, period, column, lookback):
+    import hashlib
+    params = hashlib.sha1(f"{kind}|{int(period)}|{column}|{lookback}".encode()).hexdigest()[:12]
+    return disk_dir() / content_hash(frame) / f"{_code_stamp()}_{kind}_{params}"
+
+
+def _disk_read(frame, kind, period, column, lookback):
+    global _DISK_HITS
+    import json
+    import numpy as np
+    try:
+        base = _disk_path(frame, kind, period, column, lookback)
+        values = np.load(str(base) + ".npy", mmap_mode="r", allow_pickle=False)
+        if len(values) != len(frame):
+            return None
+        name = json.loads(open(str(base) + ".json", encoding="utf-8").read()).get("name")
+        os.utime(str(base) + ".npy", None)                     # recently used -> evicted last
+        _DISK_HITS += 1
+        return pd.Series(np.array(values), index=frame.index, name=name)
+    except Exception:  # noqa: BLE001 -- any trouble is a miss
+        return None
+
+
+def _disk_write(frame, kind, period, column, lookback, result) -> None:
+    global _DISK_WRITES
+    import json
+    import numpy as np
+    try:
+        if len(frame) < _DISK_MIN_ROWS or len(result) != len(frame) or result.dtype.kind not in "fiub":
+            return
+        if not result.index.equals(frame.index):
+            return
+        base = _disk_path(frame, kind, period, column, lookback)
+        base.parent.mkdir(parents=True, exist_ok=True)
+        tag = f".{os.getpid()}.{threading.get_ident()}.tmp"
+        npy, meta = str(base) + ".npy", str(base) + ".json"
+        with open(meta + tag, "w", encoding="utf-8") as fh:
+            json.dump({"name": None if result.name is None else str(result.name)}, fh)
+        with open(npy + tag, "wb") as fh:
+            np.save(fh, result.to_numpy(), allow_pickle=False)
+        os.replace(meta + tag, meta)
+        os.replace(npy + tag, npy)                             # the .npy lands last: its presence means the pair is complete
+        _DISK_WRITES += 1
+        _evict_disk_if_needed()
+    except Exception:  # noqa: BLE001 -- a failed write must never fail a backtest
+        pass
+
+
+def _evict_disk_if_needed() -> None:
+    try:
+        files = [(p.stat().st_mtime, p.stat().st_size, p) for p in disk_dir().rglob("*.npy")]
+        total = sum(sz for _, sz, _ in files)
+        if total <= _DISK_MAX_BYTES:
+            return
+        for _, sz, p in sorted(files):
+            p.unlink(missing_ok=True)
+            p.with_suffix(".json").unlink(missing_ok=True)
+            total -= sz
+            if total <= _DISK_MAX_BYTES * 0.8:
+                break
+    except Exception:  # noqa: BLE001
+        pass
+
+
+
 def get_or_compute(
     frame: pd.DataFrame,
     kind: str,
@@ -189,7 +329,12 @@ def get_or_compute(
                 _CACHE_BYTES += sliced_bytes
             return sliced.copy()
 
-    result = compute_fn()
+    use_disk = disk_enabled() and len(frame) >= _DISK_MIN_ROWS
+    result = _disk_read(frame, kind, period, column, lookback) if use_disk else None
+    if result is None:
+        result = compute_fn()
+        if use_disk:
+            _disk_write(frame, kind, period, column, lookback, result)
     result_bytes = _series_nbytes(result)
 
     with _LOCK:
@@ -258,9 +403,11 @@ def clear() -> None:
     """Drops every cached series. Call when switching to a genuinely new
     dataset within the same long-lived process (e.g. multi-instrument
     search re-using a worker pool across instruments)."""
-    global _CACHE_BYTES, _HITS, _MISSES
+    global _CACHE_BYTES, _HITS, _MISSES, _DISK_HITS, _DISK_WRITES
     with _LOCK:
+        _DISK_HITS = _DISK_WRITES = 0
         _CACHE.clear()
+        _CONTENT_HASHES.clear()
         _SLICE_INDEX.clear()
         _CACHE_BYTES = 0
         _HITS = 0
@@ -276,5 +423,5 @@ def stats() -> dict:
         hit_rate = (_HITS / total) if total else 0.0
         return {
             "entries": len(_CACHE), "hits": _HITS, "misses": _MISSES, "hit_rate": hit_rate,
-            "bytes": _CACHE_BYTES, "max_bytes": _MAX_BYTES,
+            "bytes": _CACHE_BYTES, "max_bytes": _MAX_BYTES, "disk_hits": _DISK_HITS, "disk_writes": _DISK_WRITES,
         }

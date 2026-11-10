@@ -85,7 +85,83 @@ class DemoAccount:
             "avg_win": round(sum(wins) / len(wins), 2) if wins else None,
             "avg_loss": round(sum(losses) / len(losses), 2) if losses else None,
             "recent_trades": list(reversed(self.trades[-25:])),
+            "rules_sheet": rules_sheet(self), "trading_days": trading_days(self), "equity": equity_points(self),
+            "daily_room": round(r.soft_daily_limit + (self.balance - self.day_start), 2), "projection": projection(self),
+            "stage": "Evaluation" if self.status == "active" else ("Evaluation passed" if self.status == "passed" else "Evaluation failed"),
         }
+
+
+def trading_days(acct: DemoAccount) -> int:
+    return len({t["closed_at"][:10] for t in acct.trades if t.get("closed_at")})
+
+
+def rules_sheet(acct: DemoAccount) -> list[dict]:
+    """Every rule of this account in plain words, with where the account stands against it right now."""
+    r = acct.rules
+    cap = r.consistency_best_day_pct
+    cap = None if cap is None else (cap / 100.0 if cap > 1 else cap)
+    profit = max(acct.balance - acct.start_balance, 0.0)
+    best = max(acct.best_day, acct.balance - acct.day_start)
+    share = (best / profit) if profit > 0 else 0.0
+    trail = ("The floor trails your best end-of-day balance and locks once it reaches the starting balance + "
+             f"${r.lock_floor_offset:,.0f}." if r.trailing else "The floor is fixed at the starting balance minus the limit.")
+    return [
+        {"key": "profit_target", "name": "Profit target", "value": f"${r.profit_target:,.0f}",
+         "plain": "Make this much net profit to pass the evaluation.",
+         "now": f"${max(acct.balance - acct.start_balance, 0):,.0f} so far ({min(100.0 * profit / r.profit_target, 100):.0f}%)" if r.profit_target else ""},
+        {"key": "max_drawdown", "name": "Maximum loss (drawdown)", "value": f"${r.loss_limit:,.0f}",
+         "plain": "If your balance touches the loss floor, the account is breached and the evaluation is over. " + trail,
+         "now": f"Floor ${acct.floor:,.0f}; cushion ${acct.balance - acct.floor:,.0f}"},
+        {"key": "daily_limit", "name": "Daily loss limit (soft)", "value": f"${r.soft_daily_limit:,.0f}",
+         "plain": "Lose this much in one day and trading locks until tomorrow. It does NOT fail the account.",
+         "now": f"${max(r.soft_daily_limit + (acct.balance - acct.day_start), 0):,.0f} of room left today" + (" - locked for today" if acct.day_stopped else "")},
+        {"key": "consistency", "name": "Consistency (best-day rule)",
+         "value": "None" if cap is None else f"Best day <= {cap:.0%} of profit",
+         "plain": "No single day may be too large a share of your total profit." if cap is not None
+                  else "The T58 demo has no best-day cap, so one big day can pass the evaluation.",
+         "now": "" if cap is None else f"Best day is {share:.0%} of profit"},
+        {"key": "min_days", "name": "Minimum trading days", "value": "None",
+         "plain": "You may pass as soon as the target is reached; there is no minimum number of days.",
+         "now": f"{trading_days(acct)} trading day(s) so far"},
+        {"key": "max_days", "name": "Time limit", "value": f"{r.max_eval_days} days",
+         "plain": "Reach the target inside this window or start a new attempt.", "now": ""},
+        {"key": "fee", "name": "Evaluation fee (simulated)", "value": f"${r.fee:,.0f}",
+         "plain": "Simulated: shown so the cost of each attempt is visible. No money moves.", "now": f"Attempt #{acct.attempt}"},
+    ]
+
+
+def projection(acct: DemoAccount, n_sims: int = 800, max_trades: int = 1500) -> dict | None:
+    """Bootstrap the account's OWN closed trades to estimate pass chance and time. Needs 15+ trades; otherwise None.
+
+    Honest limits: it assumes future trades look like past ones, treats the loss floor as the current cushion (no further trailing),
+    and ignores the daily lock. It is a guide for how a run is going, not a promise."""
+    import numpy as np
+    pnl = np.array([t["pnl"] for t in acct.trades], dtype=float)
+    if len(pnl) < 15:
+        return None
+    r = acct.rules
+    need = r.profit_target - (acct.balance - acct.start_balance)
+    room = acct.balance - acct.floor
+    if need <= 0:
+        return {"pass_pct": 100.0, "days_to_pass": 0.0, "basis_trades": int(len(pnl))}
+    rng = np.random.default_rng(58)
+    draws = rng.choice(pnl, size=(int(n_sims), int(max_trades)))
+    path = np.cumsum(draws, axis=1)
+    hit = path >= need
+    bust = path <= -room
+    first_hit = np.where(hit.any(1), hit.argmax(1), max_trades + 1)
+    first_bust = np.where(bust.any(1), bust.argmax(1), max_trades + 1)
+    passed = first_hit < first_bust
+    days = trading_days(acct)
+    per_day = len(pnl) / max(days, 1)
+    med = float(np.median(first_hit[passed])) + 1 if passed.any() else None
+    return {"pass_pct": round(100.0 * float(passed.mean()), 1), "days_to_pass": None if med is None else round(med / per_day, 1),
+            "basis_trades": int(len(pnl))}
+
+
+def equity_points(acct: DemoAccount, limit: int = 300) -> list[float]:
+    pts = [acct.start_balance] + [t["balance"] for t in acct.trades]
+    return pts[-limit:]
 
 
 def _fresh(size: float, *, attempt: int = 1, relay_ids=None, strategy: str = "") -> DemoAccount:

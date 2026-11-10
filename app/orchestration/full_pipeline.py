@@ -95,7 +95,7 @@ import numpy as np
 import pandas as pd
 
 from app.backtest.engine import BacktestResult, run_backtest, run_holdout_comparison
-from app.backtest.adaptive_risk import build_limit_aware_preset
+from app.backtest.adaptive_risk import adaptive_from_settings, build_limit_aware_preset
 from app.backtest.statistics import format_run_summary_line
 from app.data.timeframe_resample import describe_resolved_timeframe
 from app.backtest.risk import (
@@ -339,6 +339,7 @@ class FullPipelineConfig:
     # independent of whatever edge the strategy has.
     adaptive_risk_enabled: bool = True
     adaptive_risk_daily_profit_lock_pct: float | None = 80.0
+    adaptive_risk_mode: str = "balanced"   # conservative | balanced | accelerated -- see app.backtest.adaptive_risk
     save_to_library: bool = True           # code strategies only -- manual configs aren't files
     library_status: str | None = None      # None = auto-pick from the READY/MARGINAL/NOT READY
                                             # verdict (see _VERDICT_TO_LIBRARY_STATUS below);
@@ -2467,7 +2468,7 @@ def run_full_pipeline(
     if risk.sizing_mode in ("skip", "fit_stop"):
         risk = replace(risk, sizing_mode="rr_planned")
 
-    adaptive_risk = build_limit_aware_preset(prop_rules, daily_profit_lock_pct=cfg.adaptive_risk_daily_profit_lock_pct) \
+    adaptive_risk = adaptive_from_settings(prop_rules, cfg.adaptive_risk_mode, cfg.adaptive_risk_daily_profit_lock_pct) \
         if cfg.adaptive_risk_enabled else None
     if adaptive_risk is not None:
         log(f"Adaptive risk enabled: {len(adaptive_risk.rules)} limit-aware throttle rule(s) applied to every backtest below.")

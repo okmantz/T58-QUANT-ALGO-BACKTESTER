@@ -45,6 +45,15 @@
     <div class="da-bar"><i style="width:{{ [acct.target_pct, 100]|min }}%"></i></div></div>
 </div>
 
+<div class="card" style="padding:14px;margin-bottom:14px;">
+  <h2>The rules of this account <small class="lc-muted">{{ acct.stage }} - attempt #{{ acct.attempt }}</small></h2>
+  <table class="da"><thead><tr><th>Rule</th><th>Limit</th><th>What it means</th><th>Where you stand</th></tr></thead><tbody>
+  {% for r in acct.rules_sheet %}<tr><td><b>{{ r.name }}</b></td><td>{{ r.value }}</td><td>{{ r.plain }}</td><td>{{ r.now }}</td></tr>{% endfor %}
+  </tbody></table>
+  {% if acct.projection %}<p class="help">Estimate from your {{ acct.projection.basis_trades }} closed trades: about <b>{{ acct.projection.pass_pct }}%</b> chance to pass{% if acct.projection.days_to_pass is not none %}, around <b>{{ acct.projection.days_to_pass }}</b> trading days to go{% endif %}. A guide, not a promise.</p>
+  {% else %}<p class="help">Once 15 trades have closed, this shows an estimate of your pass chance and time to pass.</p>{% endif %}
+</div>
+
 <div class="rb-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;">
   <div class="card" style="padding:14px;">
     <h2>1 · Pick the account size</h2>

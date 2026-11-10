@@ -502,6 +502,13 @@
     </div>
     <script>document.addEventListener('DOMContentLoaded', function () { t58PopulateInstrumentPicker('instrument_select'); });</script>
       <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;background:rgba(255,200,80,0.08);border:1px solid rgba(255,200,80,0.35);border-radius:8px;padding:8px 10px;margin-top:10px;"><input type="checkbox" name="adaptive_risk_enabled" style="width:auto;" checked>Enable adaptive, limit-aware position sizing (throttles risk as the account nears its daily-loss/max-drawdown limits)</label>
+    <div class="adaptive-modes" style="margin-top:8px;"><label style="font-weight:600;">Adaptive risk mode</label>
+      <select name="adaptive_risk_mode">
+        <option value="conservative">Conservative &mdash; survival first</option>
+        <option value="balanced" selected>Balanced &mdash; best payout odds per unit of time</option>
+        <option value="accelerated">Accelerated &mdash; more risk, inside strict limits</option>
+      </select>
+      <div class="muted" style="font-size:12px;">The goal is a payout without breaking a rule, not the biggest return. No mode can override your account's hard daily-loss / max-drawdown protections.</div></div>
       <p style="font-size:12px;color:var(--t-faint);margin-top:4px;">Off by default. If you ran Quick Optimize, Full Pipeline, or Iterative Refinement on this strategy with this ON, leave it ON here too -- comparing a Run &amp; Report result with this enabled against one of those with it OFF (or vice versa) is not an apples-to-apples comparison and can show wildly different results for the identical strategy and data.</p>
     </details>
   </div>

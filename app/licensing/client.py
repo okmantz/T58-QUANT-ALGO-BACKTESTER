@@ -881,6 +881,23 @@ def _activate_impl(email: str, license_key: str, remember: bool = True) -> tuple
     return True, "Activated."
 
 
+def drop_stale_lock_password() -> bool:
+    """A brand-new install must never open on a password prompt. The optional app-lock password lives in account_settings.json,
+    which can outlive a reinstall (user-data folder, or the same install folder re-used). The first activation on an install
+    therefore clears any leftover lock so the person's first screen is the license page and their first page after it is the app.
+    They can set a new lock under Account settings. Returns True when a leftover password was removed. Never raises."""
+    try:
+        from app.accounts.settings import load_account_settings, save_account_settings
+        settings = load_account_settings()
+        if not settings.has_password:
+            return False
+        settings.password_hash = ""
+        save_account_settings(settings)
+        return True
+    except Exception:  # noqa: BLE001 -- clearing a stale lock is best effort, never a reason to fail an activation
+        return False
+
+
 def activate(email: str, license_key: str, remember: bool = True) -> tuple[bool, str]:
     """Sign in. See _activate_impl for the license logic.
 
@@ -888,9 +905,13 @@ def activate(email: str, license_key: str, remember: bool = True) -> tuple[bool,
     key (which returns early, offline) or through the sheet / allowlist modes never restored anything -- a reinstall came back
     empty. It now runs after EVERY successful sign-in, whichever kind of key was used. Best effort: it never blocks or fails
     the activation itself."""
+    prior = load_state()
+    first_activation = not (prior.license_key and prior.email)
     ok, message = _activate_impl(email, license_key, remember=remember)
     _reset_master_cache()
     if ok:
+        if first_activation:
+            drop_stale_lock_password()
         try:
             if _is_master_key(license_key):
                 # Every time the master key is entered, the app comes back as a blank slate: default settings, the default

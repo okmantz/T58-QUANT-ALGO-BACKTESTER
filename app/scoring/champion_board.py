@@ -517,6 +517,13 @@ def promote_strategy(strategy_type: str, filename: str, metadata: Optional[dict[
     save_strategy_metadata(strategy_type, filename, {
         "promotion": {"stage": final, "history": history},
     }, merge=True)
+    if "champion_candidate" in crossed:
+        try:                                    # the award that unlocks the Dashboard's live P&L panel
+            from app import achievements
+            achievements.bump("champions")
+            achievements.evaluate()
+        except Exception:  # noqa: BLE001 -- an award must never fail a promotion
+            pass
     if len(crossed) > 1:
         passed = " and ".join(PROMOTION_STAGE_TITLES[x] for x in crossed[:-1])
         msg = (f"Promoted '{filename}' straight to {PROMOTION_STAGE_TITLES[final]} -- it had already earned {passed}, so both were recorded. "

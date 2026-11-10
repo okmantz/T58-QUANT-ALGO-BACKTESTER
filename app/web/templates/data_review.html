@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Data review — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<style>
+  .hc { border-left:4px solid var(--border); padding:12px 14px; margin:10px 0; border-radius:8px; background:rgba(255,255,255,.02); }
+  .hc.bad { border-left-color:var(--coral); } .hc.warn { border-left-color:#e0a800; } .hc.info { border-left-color:var(--teal); }
+  .hc h3 { margin:0 0 4px; font-size:15px; } .hc p { margin:0 0 8px; color:var(--text-muted); font-size:13px; }
+</style>
+</head>
+<body>
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Data review</h1>
+  <p>{{ name }}{% if bars %} &middot; {{ "{:,}".format(bars) }} bars{% endif %}. Each fix saves a cleaned copy; your original file is never changed.</p>
+</div>
+{% if notice %}<div class="t58-card">{{ notice }}</div>{% endif %}
+{% if error %}<div class="t58-card" style="border-color:var(--coral);">{{ error }}</div>{% endif %}
+<div class="t58-card">
+  {% for c in cards %}
+  <div class="hc {{ c.severity }}">
+    <h3>{{ c.title }}</h3>
+    <p>{{ c.detail }}</p>
+    {% if c.fix %}
+    <form method="post" action="/data-center/fix">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="name" value="{{ name }}"><input type="hidden" name="fix" value="{{ c.fix.id }}">
+      <button class="t58-btn" type="submit">{{ c.fix.label }}</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endfor %}
+  <p><a href="/data-center">&larr; Back to Data Center</a></p>
+</div>
+</div></div>
+</body></html>

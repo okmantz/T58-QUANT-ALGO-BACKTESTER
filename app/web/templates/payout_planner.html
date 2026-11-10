@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Payout Planner — T58 Quant Algo Backtester</title>
+{% include '_head_common.html' %}
+<meta name="mobile-web-app-capable" content="yes">
+<style>
+  * { box-sizing: border-box; }
+  .pp-step { background: var(--panel-2); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; margin-bottom: 14px; }
+  .pp-step h2 { display: flex; align-items: center; gap: 10px; font-size: 15px; margin: 0 0 4px; color: var(--text); }
+  .pp-step h2 .n { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--teal); color: var(--on-teal); font-size: 13px; font-weight: 800; }
+  .pp-step p.help { font-size: 12.5px; color: var(--t-faint); margin: 0 0 10px 34px; line-height: 1.5; }
+  .pp-step select, .pp-step input[type=text], .pp-step input[type=number] { width: 100%; padding: 11px 12px; border-radius: 9px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 14px; }
+  .pp-step select:focus, .pp-step input:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(var(--teal-rgb), .15); }
+  .pp-acct { display: grid; grid-template-columns: auto 1fr 130px; gap: 10px; align-items: center; padding: 9px 4px; border-bottom: 1px solid var(--border-light); font-size: 13.5px; }
+  .pp-acct:last-child { border-bottom: none; }
+  .pp-acct .size { color: var(--t-faint); font-size: 12px; }
+  .pp-acct input[type=number] { padding: 8px 10px; font-size: 13px; }
+  .pp-go { width: 100%; padding: 15px; border-radius: 12px; border: 1px solid var(--teal); background: var(--teal); color: var(--on-teal); font-size: 16px; font-weight: 700; box-shadow: 0 0 22px rgba(var(--teal-rgb), .35); cursor: pointer; }
+  .pp-error { background: var(--err-bg); border: 1px solid var(--err-bd); color: var(--err-fg); padding: 12px 14px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
+  .pp-hero { background: linear-gradient(135deg, rgba(var(--teal-rgb), .14), var(--panel-2)); border: 1px solid rgba(var(--teal-rgb), .35); border-radius: 16px; padding: 18px 20px; margin-bottom: 16px; }
+  .pp-hero .k { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--t-faint); }
+  .pp-hero .v { font-size: 19px; font-weight: 700; margin-top: 4px; line-height: 1.35; }
+  .pp-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-bottom: 16px; }
+  .pp-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; }
+  .pp-card h3 { margin: 0 0 8px; font-size: 16px; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .pp-pill { font-size: 11px; font-weight: 800; letter-spacing: .05em; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border-light); }
+  .pp-pill.good { background: var(--ok-bg); color: var(--ok-fg); border-color: var(--ok-bd); }
+  .pp-pill.warn { background: rgba(245, 180, 60, .14); color: #f5b43c; border-color: rgba(245, 180, 60, .4); }
+  .pp-pill.bad { background: var(--err-bg); color: var(--err-fg); border-color: var(--err-bd); }
+  .pp-why { font-size: 13px; color: var(--t-soft); line-height: 1.5; margin: 0 0 12px; }
+  .pp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .pp-stat { background: var(--panel-3); border: 1px solid var(--border-light); border-radius: 10px; padding: 10px 12px; }
+  .pp-stat .l { font-size: 10.5px; color: var(--t-faint); text-transform: uppercase; letter-spacing: .04em; }
+  .pp-stat .x { font-size: 18px; font-weight: 700; margin-top: 2px; }
+  .pp-stat .s { font-size: 11.5px; color: var(--t-faint); margin-top: 1px; }
+  .pp-note { font-size: 12px; color: var(--t-faint); margin: 10px 0 0; line-height: 1.5; }
+  .pp-par { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+  .pp-par th { text-align: left; font-size: 10.5px; text-transform: uppercase; color: var(--t-faint); padding: 6px 4px; border-bottom: 1px solid var(--border-light); }
+  .pp-par td { padding: 7px 4px; border-bottom: 1px solid var(--border-light); }
+  .pp-panel { background: var(--panel-2); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; margin-bottom: 16px; }
+  .pp-panel h3 { margin: 0 0 4px; font-size: 15px; }
+</style>
+</head>
+<body>
+{% set active_page = active_page|default('payout_planner') %}
+<div class="t58-shell">
+{% include '_sidebar.html' %}
+<div class="t58-main">
+<div class="t58-page-header">
+  <h1>Payout planner</h1>
+  <p>Turn pass and payout odds into decisions: how many evaluations you will probably buy before the first payout, what that costs,
+  how long it takes, and what running two evaluations at once does to the timeline.</p>
+</div>
+
+{% if error %}<div class="pp-error">{{ error }}</div>{% endif %}
+
+{% if result %}
+{% set cmp = result.comparison %}
+<div class="pp-hero">
+  <div class="k">The short answer</div>
+  <div class="v">{{ cmp.headline }}</div>
+  {% if cmp.fastest or cmp.cheapest %}
+  <div class="pp-note" style="margin-top:8px;">
+    {% if cmp.fastest %}Fastest to a first payout: <b>{{ cmp.fastest }}</b>. {% endif %}
+    {% if cmp.cheapest %}Lowest fee spend: <b>{{ cmp.cheapest }}</b>. {% endif %}
+    {% if cmp.most_likely_per_attempt %}Most likely per attempt: <b>{{ cmp.most_likely_per_attempt }}</b>.{% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="pp-cards">
+  {% for p in cmp.plans %}
+  {% set tone = 'good' if p.verdict == 'WORTH PLAYING' else ('bad' if p.verdict in ('NOT VIABLE', 'NOT WORTH THE FEES') else 'warn') %}
+  <div class="pp-card">
+    <h3>{{ p.label }}<span class="pp-pill {{ tone }}">{{ p.verdict }}</span></h3>
+    <p class="pp-why">{{ p.verdict_reason }}</p>
+    <div class="pp-grid">
+      <div class="pp-stat"><div class="l">Chance one attempt pays out</div><div class="x">{{ '%.1f' % (p.p_first_payout_per_attempt * 100) }}%</div><div class="s">pass {{ '%.0f' % (p.p_pass * 100) }}% &times; paid {{ '%.0f' % (p.q_payout * 100) }}%</div></div>
+      <div class="pp-stat"><div class="l">Evaluations to a first payout</div><div class="x">{{ ('%.1f' % p.expected_attempts) if p.expected_attempts else '—' }}</div><div class="s">{% if p.attempts_for_90pct %}{{ p.attempts_for_90pct }} to be 90% sure{% endif %}</div></div>
+      <div class="pp-stat"><div class="l">Expected fee spend</div><div class="x">{{ ('$' ~ '{:,.0f}'.format(p.expected_fee_spend)) if p.expected_fee_spend is not none else 'enter price' }}</div><div class="s">{% if p.budget_for_90pct is not none %}${{ '{:,.0f}'.format(p.budget_for_90pct) }} budget for 90%{% endif %}</div></div>
+      <div class="pp-stat"><div class="l">Calendar days to first payout</div><div class="x">{{ ('%.0f' % p.expected_days_to_first_payout) if p.expected_days_to_first_payout is not none else '—' }}</div><div class="s">{% if p.days_assumed %}failed attempts assumed as long as a pass{% endif %}</div></div>
+      <div class="pp-stat"><div class="l">First payout (your share)</div><div class="x">{{ ('$' ~ '{:,.0f}'.format(p.expected_first_payout_net)) if p.expected_first_payout_net is not none else '—' }}</div></div>
+      <div class="pp-stat"><div class="l">Left after fees</div><div class="x">{{ ('$' ~ '{:,.0f}'.format(p.expected_net_after_fees)) if p.expected_net_after_fees is not none else '—' }}</div><div class="s">{% if p.roi_multiple %}{{ '%.1f' % p.roi_multiple }}&times; the fees{% endif %}</div></div>
+    </div>
+    {% for note in p.notes %}<p class="pp-note">{{ note }}</p>{% endfor %}
+  </div>
+  {% endfor %}
+</div>
+
+{% if result.lanes > 1 %}
+<div class="pp-panel">
+  <h3>What if you run {{ result.lanes }} evaluations at once?</h3>
+  <p class="pp-note" style="margin-top:0;">Parallel evaluations shorten the wait and multiply the bill. The same strategy on the same days tends to fail together, so
+  this assumes {{ '%.0f' % (result.independence * 100) }}% independence between them; the range is shown so you can see the best and worst case.</p>
+  {% for block in result.parallel %}
+  <table class="pp-par">
+    <thead><tr><th>{{ block.label }}</th><th>Days to first payout</th><th>Best case</th><th>Worst case</th><th>Expected fees</th><th>vs one at a time</th></tr></thead>
+    <tbody>
+    {% for q in block.plans %}
+      <tr>
+        <td>{{ q.lanes }} at once</td>
+        <td>{{ ('%.0f' % q.expected_days_to_first_payout) if q.expected_days_to_first_payout is not none else '—' }}</td>
+        <td>{{ ('%.0f' % q.days_if_independent) if q.days_if_independent is not none else '—' }}</td>
+        <td>{{ ('%.0f' % q.days_if_fully_correlated) if q.days_if_fully_correlated is not none else '—' }}</td>
+        <td>{{ ('$' ~ '{:,.0f}'.format(q.expected_fee_spend)) if q.expected_fee_spend is not none else '—' }}</td>
+        <td>{% if q.lanes == 1 %}baseline{% elif q.days_saved is not none %}{{ '%.0f' % q.days_saved }} days faster{% if q.extra_spend is not none %}, +${{ '{:,.0f}'.format(q.extra_spend) }}{% endif %}{% else %}—{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if result.skipped %}
+<div class="pp-panel"><h3>Left out</h3>{% for s in result.skipped %}<p class="pp-note">{{ s }}</p>{% endfor %}</div>
+{% endif %}
+<p class="pp-note">Planned from {{ result.n_sims }} simulated accounts per option for <b>{{ result.strategy }}</b> on <b>{{ result.dataset }}</b>, each backtested at that
+account's own size and checked against its own rules. Fees come from the firm table (verify at checkout) or the price you typed. Simulation results are estimates, not promises.</p>
+{% endif %}
+
+<form method="post" action="/payout-planner/run" style="margin-top:18px;">
+
+  <div class="pp-step">
+    <h2><span class="n">1</span>Pick a strategy</h2>
+    <p class="help">Any strategy from your library.</p>
+    <select name="strategy_pick" required>
+      <option value="">— choose a saved strategy —</option>
+      {% for s in strategies %}
+      <option value="{{ s.type }}::{{ s.name }}" {{ 'selected' if form_values.get('strategy_pick') == s.type ~ '::' ~ s.name else '' }}>{{ s.name }} ({{ s.type }})</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="pp-step">
+    <h2><span class="n">2</span>Pick market data</h2>
+    <p class="help">The bundled ES, NQ and GC data are ready to use; anything you imported shows up here too.</p>
+    <select name="existing_dataset" required>
+      <option value="">— choose a dataset —</option>
+      {% for d in stored_datasets %}
+      <option value="{{ d.name }}" {{ 'selected' if form_values.get('existing_dataset') == d.name else '' }}>{{ d.name }}</option>
+      {% endfor %}
+    </select>
+    <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:10px; margin-top:10px;">
+      <div><label style="font-size:12px;color:var(--t-faint)">Risk per trade (%)</label><input type="number" step="0.05" min="0.01" name="risk_value" value="{{ form_values.get('risk_value', '0.5') }}"></div>
+      <div><label style="font-size:12px;color:var(--t-faint)">Tick size</label><input type="number" step="any" name="pip_size" value="{{ form_values.get('pip_size', '0.25') }}"></div>
+      <div><label style="font-size:12px;color:var(--t-faint)">$ per point</label><input type="number" step="any" name="contract_size" value="{{ form_values.get('contract_size', '') }}" placeholder="e.g. 20 for NQ"></div>
+    </div>
+  </div>
+
+  <div class="pp-step">
+    <h2><span class="n">3</span>Pick the accounts to compare</h2>
+    <p class="help">Lucid 50k and 100k are ticked for you. Leave a price blank to use the firm table; if the table has none, type the price you will actually pay.</p>
+    {% for a in accounts %}
+    <div class="pp-acct" {% if loop.index > 2 %}data-extra="1"{% endif %}>
+      <input type="checkbox" name="accounts" value="{{ a.key }}" style="width:auto;" {{ 'checked' if (a.default and not form_values) or (a.key in request.form.getlist('accounts')) else '' }}>
+      <div>{{ a.label }} <span class="size">${{ '{:,.0f}'.format(a.account_size) }}</span></div>
+      <input type="number" step="0.01" min="0" name="price_{{ a.key }}" value="{{ form_values.get('price_' ~ a.key, '') }}"
+             placeholder="{{ ('$' ~ '%.0f' % a.known_price) if a.known_price else 'price?' }}">
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="pp-step">
+    <h2><span class="n">4</span>Run it</h2>
+    <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:10px; margin-bottom:12px;">
+      <div><label style="font-size:12px;color:var(--t-faint)">Evaluations at once</label>
+        <select name="lanes">{% for n in range(1, max_lanes + 1) %}<option value="{{ n }}" {{ 'selected' if (form_values.get('lanes', '2')|int) == n else '' }}>{{ n }}</option>{% endfor %}</select></div>
+      <div><label style="font-size:12px;color:var(--t-faint)">How different are they? (0–1)</label><input type="number" step="0.1" min="0" max="1" name="independence" value="{{ form_values.get('independence', '0.5') }}"></div>
+      <div><label style="font-size:12px;color:var(--t-faint)">Simulations</label><input type="number" min="200" max="10000" step="100" name="n_sims" value="{{ form_values.get('n_sims', '1500') }}"></div>
+    </div>
+    <button class="pp-go" type="submit">Plan my payout</button>
+  </div>
+</form>
+
+</div>
+</div>
+</body>
+</html>

@@ -568,6 +568,8 @@ _HTML_TEMPLATE = '''<!DOCTYPE html>
 {simulation_section}
 {risk_reconciliation_section}
 <details class="fold"><summary><span class="fold-title">Backtest configuration (execution &amp; risk)</span></summary><div class="fold-body">{risk_config_table}</div></details>
+<details class="fold" open><summary><span class="fold-title">Breakdowns (tap a red slice to leave it out)</span></summary><div class="fold-body">{breakdown_section}</div></details>
+<details class="fold"><summary><span class="fold-title">Take it to TradingView (settings ID)</span></summary><div class="fold-body">{tradingview_section}</div></details>
 <details class="fold"><summary><span class="fold-title">Prop-firm rules used</span></summary><div class="fold-body">{rules_table}</div></details>
 </section>
 
@@ -988,6 +990,29 @@ def _simulation_section(report: dict) -> str:
     return f"<h2>How this was simulated</h2><ul>{items}</ul>"
 
 
+def _breakdown_html(backtest_result) -> str:
+    from app.reports.breakdowns import breakdown_section
+    try:
+        return breakdown_section(getattr(backtest_result, "trades", None) if backtest_result is not None else None)
+    except Exception:  # noqa: BLE001 -- an optional section must never break a report
+        return '<p class="muted">Breakdowns are unavailable for this run.</p>'
+
+
+def _tradingview_section(report: dict) -> str:
+    """Backtest -> live chart in one copy-paste: the settings ID plus the (one-time) Pine indicator it feeds."""
+    from html import escape
+    from app.reports import tv_bridge
+    sid = report.get("tradingview_settings_id") or tv_bridge.settings_id_for_report(report)
+    return (
+        '<p>Copy this ID, add the <b>T58 Settings</b> indicator to a TradingView chart once, and paste the ID into its single '
+        'input. The chart then shows the exact configuration this report was run with.</p>'
+        f'<p><input id="t58-sid" readonly value="{escape(sid)}" style="width:100%;font-family:monospace;padding:8px;" '
+        'onclick="this.select()"> <button type="button" onclick="navigator.clipboard.writeText('
+        "document.getElementById('t58-sid').value)\">Copy ID</button></p>"
+        f'<details><summary>Pine indicator (add it once)</summary><pre style="white-space:pre-wrap;">{escape(tv_bridge.pine_indicator())}</pre></details>'
+    )
+
+
 def _risk_config_table(risk_config: dict | None) -> str:
     if not risk_config:
         return "<p>No risk configuration was recorded for this run.</p>"
@@ -1384,6 +1409,8 @@ def export_html(
         ),
         final_parameters_section=_final_parameters_section(report.get("final_parameters"), report.get("baseline_parameters")),
         risk_config_table=_risk_config_table(report.get("risk_config")),
+        tradingview_section=_tradingview_section(report),
+        breakdown_section=_breakdown_html(backtest_result),
         simulation_section=_simulation_section(report),
         risk_reconciliation_section=_risk_reconciliation_section(report["historical_backtest"]["statistics"]),
         base_css=theme.BASE_CSS,

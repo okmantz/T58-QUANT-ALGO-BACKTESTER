@@ -71,6 +71,8 @@ _VALID_TRIGGERS = {
 # the market calms) may still be 0.0.
 SELF_LOCKING_TRIGGERS = frozenset({"consecutive_losses", "drawdown_pct", "progress_to_target_pct"})
 MIN_PROBE_MULTIPLIER = 0.05
+MIN_BASE_MULTIPLIER = 0.25
+MAX_BASE_MULTIPLIER = 1.5   # the most any mode may ever push size above the strategy's own sizing
 
 
 class AdaptiveRiskError(Exception):
@@ -133,8 +135,14 @@ class AdaptiveRiskConfig:
     # whatever PropRules/target the backtest is being run against, since this module has no PropRules dependency).
     volatility_lookback_bars: int = 2000        # only consulted if any rule uses "volatility_percentile" --
     # see volatility_percentile_series's docstring for what this controls and the trade-off in changing it.
+    base_multiplier: float = 1.0                # size multiplier while NO throttle rule is firing. Below 1 = a
+    # cautious baseline (Conservative mode); above 1 = the Accelerated mode's push. It is HARD-CAPPED at
+    # MAX_BASE_MULTIPLIER and applies only while every protective rule is quiet: the moment any throttle or
+    # lock fires the push is dropped entirely (see AdaptiveRiskState.active_multiplier), so acceleration can
+    # never stack on top of, or soften, a protection.
 
     def __post_init__(self):
+        self.base_multiplier = min(max(float(self.base_multiplier), MIN_BASE_MULTIPLIER), MAX_BASE_MULTIPLIER)
         if self.rules and not all(isinstance(r, AdaptiveRiskRule) for r in self.rules):
             self.rules = [r if isinstance(r, AdaptiveRiskRule) else AdaptiveRiskRule(**r) for r in self.rules]
 
@@ -266,12 +274,19 @@ class AdaptiveRiskState:
         if not config.enabled or not config.rules:
             return 1.0
         mult = 1.0
+        fired = False
         for rule in config.rules:
             if self._rule_active(rule, config.profit_target_amount, current_vol_percentile):
+                fired = True
                 m = rule.risk_multiplier
                 if rule.trigger in SELF_LOCKING_TRIGGERS and m < MIN_PROBE_MULTIPLIER:
                     m = MIN_PROBE_MULTIPLIER
                 mult *= m
+        # The mode's baseline (cautious or accelerated) only ever applies while every protection is quiet.
+        # A conservative baseline (< 1) is kept even under throttling -- it can only make size smaller.
+        base = config.base_multiplier
+        if base < 1.0 or not fired:
+            mult *= base
         return mult
 
     def active_rule_labels(self, config: AdaptiveRiskConfig, current_vol_percentile: float | None = None) -> list[str]:
@@ -411,3 +426,91 @@ def build_limit_aware_preset(
             label=f"Locked for the day: banked profit >= {daily_profit_lock_pct:g}% of the daily-loss limit's size",
         ))
     return AdaptiveRiskConfig(enabled=True, rules=rules, volatility_lookback_bars=volatility_lookback_bars)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Three selectable modes. The objective is the probability of reaching a payout WITHOUT breaking a rule, not raw return.
+# Every mode is the same limit-aware ladder as build_limit_aware_preset with different dials; none of them can switch
+# off or loosen the hard account protections (RiskConfig daily-loss / max-drawdown circuit breakers sit outside this
+# module and are never touched here) -- Accelerated only raises the baseline while all protections are quiet.
+# ---------------------------------------------------------------------------------------------------------------------
+ADAPTIVE_MODES = ("conservative", "balanced", "accelerated")
+DEFAULT_ADAPTIVE_MODE = "balanced"
+
+ADAPTIVE_MODE_INFO = {
+    "conservative": {
+        "label": "Conservative",
+        "tagline": "Survival first",
+        "blurb": "Starts a little smaller, backs off early and locks in a good day sooner. Slowest to a payout, "
+                 "but the least likely to blow the account.",
+    },
+    "balanced": {
+        "label": "Balanced",
+        "tagline": "Best payout odds per unit of time",
+        "blurb": "Full size while the account is healthy, then steps down at 50% and 75% of each limit. The default.",
+    },
+    "accelerated": {
+        "label": "Accelerated",
+        "tagline": "More risk, inside strict limits",
+        "blurb": "Sizes up to 1.25x while the account is healthy and ahead of every limit, and drops the extra the "
+                 "instant any protection fires. It never overrides your account's hard protections.",
+    },
+}
+
+# (fractions of each limit where the ladder steps down, volatility percentiles, baseline size, daily profit lock % of limit)
+_MODE_DIALS = {
+    "conservative": dict(first=0.35, second=0.60, vol=(80.0, 95.0), base=0.75, lock=60.0),
+    "balanced": dict(first=0.50, second=0.75, vol=(85.0, 97.0), base=1.0, lock=80.0),
+    "accelerated": dict(first=0.60, second=0.85, vol=(88.0, 98.0), base=1.25, lock=100.0),
+}
+
+
+def normalize_adaptive_mode(mode) -> str:
+    key = str(mode or "").strip().lower()
+    return key if key in ADAPTIVE_MODES else DEFAULT_ADAPTIVE_MODE
+
+
+def build_mode_preset(
+    prop_rules,
+    mode: str = DEFAULT_ADAPTIVE_MODE,
+    daily_profit_lock_pct: float | None = None,
+    volatility_lookback_bars: int = 2000,
+) -> AdaptiveRiskConfig:
+    """The adaptive-risk config for one of the three modes. `daily_profit_lock_pct=None` uses the mode's own value.
+
+    Balanced is exactly build_limit_aware_preset's output (so results stay comparable with every earlier run)."""
+    mode = normalize_adaptive_mode(mode)
+    dials = _MODE_DIALS[mode]
+    lock = dials["lock"] if daily_profit_lock_pct is None else daily_profit_lock_pct
+    if mode == "balanced":
+        return build_limit_aware_preset(prop_rules, daily_profit_lock_pct=lock,
+                                        volatility_lookback_bars=volatility_lookback_bars)
+    first, second = dials["first"], dials["second"]
+    pct = lambda f: f"{f * 100:g}%"  # noqa: E731
+    rules = [
+        AdaptiveRiskRule("daily_loss_pct", prop_rules.daily_loss_limit_pct * first, 0.5,
+                         f"Halved: {pct(first)} of the way to today's daily-loss limit"),
+        AdaptiveRiskRule("daily_loss_pct", prop_rules.daily_loss_limit_pct * second, 0.5,
+                         f"Quartered: {pct(second)} of the way to today's daily-loss limit"),
+        AdaptiveRiskRule("drawdown_pct", prop_rules.max_drawdown_pct * first, 0.5,
+                         f"Halved: {pct(first)} of the way to the overall max-drawdown limit"),
+        AdaptiveRiskRule("drawdown_pct", prop_rules.max_drawdown_pct * second, 0.5,
+                         f"Quartered: {pct(second)} of the way to the overall max-drawdown limit"),
+        AdaptiveRiskRule("volatility_percentile", dials["vol"][0], 0.5,
+                         f"Halved: realized volatility (ATR) at/above its own {dials['vol'][0]:g}th trailing percentile"),
+        AdaptiveRiskRule("volatility_percentile", dials["vol"][1], 0.25,
+                         f"Quartered: realized volatility (ATR) at/above its own {dials['vol'][1]:g}th trailing percentile"),
+    ]
+    if lock is not None:
+        rules.append(AdaptiveRiskRule(
+            "daily_profit_pct", prop_rules.daily_loss_limit_pct * (lock / 100.0), 0.0,
+            f"Locked for the day: banked profit >= {lock:g}% of the daily-loss limit's size"))
+    return AdaptiveRiskConfig(enabled=True, rules=rules, base_multiplier=dials["base"],
+                              volatility_lookback_bars=volatility_lookback_bars)
+
+
+def adaptive_from_settings(prop_rules, mode=DEFAULT_ADAPTIVE_MODE, daily_profit_lock_pct: float | None = 80.0) -> AdaptiveRiskConfig:
+    """What every pipeline calls. The explicit daily-profit-lock setting predates the modes and belongs to Balanced;
+    Conservative and Accelerated carry their own lock level."""
+    mode = normalize_adaptive_mode(mode)
+    return build_mode_preset(prop_rules, mode, daily_profit_lock_pct if mode == "balanced" else None)

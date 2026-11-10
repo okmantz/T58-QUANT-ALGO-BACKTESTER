@@ -18,43 +18,29 @@ SECTION_GUIDES = {
         "tagline": "Everything that produces a new strategy, from a blank page to a candidate worth testing.",
         "description": (
             "Create is where a strategy comes from in the first place -- either generated broadly by the "
-            "system (the Strategy Discovery Engine, Research Agent/Director/Loop, Generate Strategies) when you don't yet "
+            "system (the Strategy Discovery Engine, AI Research, Research Loop, Generate Strategies) when you don't yet "
             "have a specific idea, or built directly (Strategy Library) when you do. Nothing here is validated "
             "yet -- a strategy that comes out of Create still needs to go through Test and Optimize before "
             "it's trustworthy."
         ),
         "roadmap": [
             "No idea yet? Open the Strategy Discovery Engine -- pick a market and a prop firm, press Start, and it "
-            "searches, tests and rejects on its own. One tool instead of separate Search / Evolution / Forge / Speed Run labs.",
+            "searches, tests and rejects on its own. One tool instead of separate Search / Evolution / Forge / Speed Run labs (those pages are retired; their searches are presets here).",
             "Have a specific idea already? Paste its code (Python, PineScript, MQL5), describe it in plain English, or "
             "build it directly in the Strategy Library.",
-            "Want an LLM to reason about market structure and propose ideas? Try Research Agent, Research "
-            "Director, or the background Research Loop.",
-            "The classic labs (Speed Run, Evolution Lab) are still under More tools below -- they are now presets of the "
-            "Discovery Engine. Once you have a survivor you like, send it to Full Pipeline for a validated verdict.",
+            "Want an LLM to reason about market structure and propose ideas? Try AI Research, or the background Research Loop.",
+            "Once you have a survivor you like, send it to Full Pipeline for a validated verdict.",
         ],
         "primary_buttons": [{"label": "Strategy Discovery Engine", "href": "/discovery-engine"}, {"label": "Strategy Library", "href": "/library"}],
         "tools": [
             {"name": "Strategy Discovery Engine", "href": "/discovery-engine",
              "desc": "No strategy yet? Pick a market + prop firm and let the engine find candidates for you."},
             {"name": "Generate Strategies (AI)", "href": "/generate-strategies", "desc": "LLM-assisted strategy code generation."},
-            {"name": "Research Agent", "href": "/research-agent", "desc": "LLM reasons over market structure for ideas."},
-            {"name": "Research Director", "href": "/research", "desc": "Directs a deeper, multi-step research pass."},
+            {"name": "AI Research", "href": "/research", "desc": "LLM reasons over market structure and directs a deeper, multi-step research pass."},
             {"name": "Research Loop (background)", "href": "/research-loop", "desc": "Keeps researching unattended, on a schedule."},
             {"name": "Strategy Library", "href": "/library", "desc": "Build, edit, or browse strategies directly."},
             {"name": "Pine Indicator Creator", "href": "/pine-indicator",
              "desc": "TradingView (Pine v5) indicators from an idea or pasted code, checked before you copy them."},
-        ],
-        # "More tools": the classic labs. Search Lab / Evolution Lab / Forge / Speed Run are presets of the Strategy Discovery
-        # Engine now; their own pages still work for people who want every knob.
-        "more_tools": [
-            {"name": "Forge Strategy (classic)", "href": "/forge", "desc": "Original one-button generate + screen + prop-survival check. The Discovery Engine's deep preset covers this."},
-            {"name": "Speed Run", "href": "/speed-run", "desc": "Classic faster, narrower single-pass search (a Discovery Engine preset)."},
-            {"name": "Multi-Instrument Speed Run", "href": "/speed-run/multi-instrument", "desc": "Speed Run across several datasets at once."},
-            {"name": "Evolution Lab (GA)", "href": "/evolution",
-             "desc": "Genetic algorithm that evolves strategy parameter sets across generations."},
-            {"name": "Multi-Instrument Evolution Lab", "href": "/evolution/multi-instrument",
-             "desc": "Evolution Lab run across several instruments and timeframes at once."},
         ],
     },
     "test": {
@@ -78,6 +64,7 @@ SECTION_GUIDES = {
             {"name": "Run & Report", "href": "/", "desc": "One strategy, one dataset, one full backtest report."},
             {"name": "Payout Probability", "href": "/payout-probability", "desc": "Monte Carlo odds of reaching a funded payout."},
             {"name": "Prop-Firm Recommender", "href": "/prop-firm-recommender", "desc": "Find which prop firm's rules fit a strategy best."},
+            {"name": "Payout Planner", "href": "/payout-planner", "desc": "Evaluations, fees and days to a first payout, Lucid 50k vs 100k, and two evals at once."},
         ],
     },
     "champion": {
@@ -195,10 +182,8 @@ SECTION_GUIDES = {
 
 # web href -> desktop nav key (MainWindow._nav_items) of the equivalent tab
 DESKTOP_NAV_FOR_HREF = {
-    "/forge": "forge", "/generate-strategies": "genstrat", "/research-agent": "researchagent",
-    "/research": "researchdirector", "/research-loop": "researchloop", "/speed-run": "speedrun",
-    "/speed-run/multi-instrument": "speedrunmulti", "/library": "stratlibrary",
-    "/evolution": "evolution", "/evolution/multi-instrument": "evolutionmulti",
+    "/generate-strategies": "genstrat", "/research": "researchdirector", "/research-loop": "researchloop",
+    "/library": "stratlibrary",
     "/": "run", "/payout-probability": "payout", "/prop-firm-recommender": "propfirmrec",
     "/family-diversity": "familydiversity", "/portfolio": "portfolio", "/ensemble": "ensemble",
     "/overnight-autopilot": "autopilot_pointer", "/compare": "compare",
@@ -210,7 +195,7 @@ DESKTOP_NAV_FOR_HREF = {
 }
 
 # Tools that exist only in the web app (no desktop tab); the desktop Start Here page skips them.
-WEB_ONLY_HREFS = frozenset({"/pine-indicator", "/discovery-engine"})
+WEB_ONLY_HREFS = frozenset({"/pine-indicator", "/discovery-engine", "/payout-planner"})
 
 # Sections that get a desktop Start Here page. (Optimize and Validate already
 # have their own overview pages on both builds.)

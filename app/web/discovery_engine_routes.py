@@ -52,8 +52,8 @@ STEP_LABELS = {
     "not_promoted": "Not checked further",
 }
 
-PRESET_PAGES = {"search_lab": "/search", "evolution_lab": "/evolution", "evolution_loop": "/evolution", "forge": "/forge",
-                "speed_run": "/speed-run", "discovery": "/discover"}
+# Only Hypothesis-first discovery still has a page of its own; Search / Evolution / Forge / Speed Run are retired pages (their searches are presets here).
+PRESET_PAGES = {"discovery": "/discover"}
 
 
 def engine_status() -> dict:
@@ -198,7 +198,7 @@ def _page_context(**extra) -> dict:
 
 @discovery_engine_bp.route("/discovery-engine")
 def page():
-    return render_template("discovery_engine.html", **_page_context(form={"effort": request.args.get("effort", "standard")}))
+    return render_template("discovery_engine.html", notice=request.args.get("notice"), **_page_context(form={"effort": request.args.get("effort", "standard")}))
 
 
 def _run_engine_job(job_id, req, held_guard: str, pool_for=None):

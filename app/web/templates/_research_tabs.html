@@ -1,0 +1,5 @@
+{# One AI Research page, two modes: "Ask a question" (the ReAct agent) and "Run analyses" (the Director). #}
+<div style="display:flex;gap:8px;margin:0 0 14px;">
+  <a href="/research?mode=analyze" class="t58-btn" style="{{ '' if research_mode == 'analyze' else 'opacity:.55;' }}">Run analyses</a>
+  <a href="/research?mode=ask" class="t58-btn" style="{{ '' if research_mode == 'ask' else 'opacity:.55;' }}">Ask a question</a>
+</div>

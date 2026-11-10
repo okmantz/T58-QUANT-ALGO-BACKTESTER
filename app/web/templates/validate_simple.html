@@ -33,7 +33,7 @@
   <div class="lc-card">
     <div class="lc-row">
       <div class="lc-col">
-        <label class="flabel" for="lc-strategy-pick">Strategy</label>
+        <label class="flabel" for="lc-strategy-pick">Step 1 &middot; Pick a strategy</label>
         <select class="inp" name="strategy_pick" id="lc-strategy-pick">
           {# v9.15: grouped by strategy type (Manual / Python / PineScript /
              MQL5) -- the same optgroup structure the Test page and
@@ -50,7 +50,7 @@
         </select>
       </div>
       <div class="lc-col">
-        <label class="flabel" for="lc-dataset-pick">Market data</label>
+        <label class="flabel" for="lc-dataset-pick">Step 2 &middot; Pick market data</label>
         <select class="inp" name="existing_dataset" id="lc-dataset-pick">
           <option value="">— upload a CSV instead —</option>
           {% for g in dataset_groups %}
@@ -65,7 +65,7 @@
         <input type="file" name="csv_file" id="lc-csv-file" accept=".csv">
       </div>
       <div class="lc-col">
-        <label class="flabel" for="lc-prop-preset">Prop firm</label>
+        <label class="flabel" for="lc-prop-preset">Prop firm to test against</label>
         <select class="inp" name="prop_preset" id="lc-prop-preset">
           <option value="">— type the rules in Advanced —</option>
           {% for p in prop_presets %}
@@ -75,7 +75,7 @@
         <div class="lc-hint" style="margin-top:5px;">Its rules show in the rail &rarr; and harden this run.</div>
       </div>
       <div class="lc-col">
-        <label class="flabel" for="lc-timeframe">Timeframe</label>
+        <label class="flabel" for="lc-timeframe">Step 3 &middot; Pick a timeframe</label>
         <select class="inp" name="timeframe" id="lc-timeframe">
           <option value="">Dataset's native timeframe (default)</option>
           {% for tf in timeframe_choices %}

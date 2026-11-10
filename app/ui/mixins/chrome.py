@@ -419,8 +419,8 @@ class ChromeMixin:
             (None, None, "\u2460 CREATE", None, NEON_VIOLET),
             ("starthere_create", "", "Start Here", self._starthere_frames["create"], NEON_VIOLET),
             ("genstrat", "", "Generate Strategies (AI)", self.tab_genstrat, NEON_VIOLET),
-            ("researchagent", "", "Research Agent", self.tab_researchagent, NEON_VIOLET),
-            ("researchdirector", "", "\U0001F50D Research Director", self.tab_research_director, NEON_VIOLET),
+            ("researchagent", "", "\U0001F50D AI Research - Ask", self.tab_researchagent, NEON_VIOLET),
+            ("researchdirector", "", "\U0001F50D AI Research - Analyze", self.tab_research_director, NEON_VIOLET),
             ("researchloop", "", "\u21bb Research Loop (Background)", self.tab_research_loop, NEON_VIOLET),
             ("youridea", "", "\U0001F4A1 Your Idea", self.tab_youridea, NEON_VIOLET),
             # Moved here from DEPLOYMENT (v9.6 lifecycle pass): Overnight
@@ -428,9 +428,6 @@ class ChromeMixin:
             # with the other create/discovery tools. Still just a pointer
             # at Speed Run's own tab/frame, exactly as before.
             ("autopilot_pointer", "", "\u26a1 Overnight Autopilot", self.tab_speedrun, NEON_VIOLET),
-            ("speedrun", "", "\u26a1 Speed Run", self.tab_speedrun, NEON_VIOLET),
-            ("speedrunmulti", "", "\u26a1 Multi-Instrument Speed Run", self.tab_speedrun_multi, NEON_VIOLET),
-            ("forge", "", "\u26a1 Forge Strategy", self.tab_forge, NEON_LIME),
             ("strategy", "", "Strategy Builder", self.tab_strategy, NEON_VIOLET),
 
             (None, None, "\u2461 TEST", None, NEON_CYAN),
@@ -449,11 +446,7 @@ class ChromeMixin:
             ("optimize_simple", "", "\u2726 Optimize (pick your engines)", self.tab_optimize_simple, BLUE),
             ("fullpipeline", "", "Full Pipeline (all-in-one)", self.tab_fullpipeline, BLUE),
             ("quickoptimize", "", "\u26a1 Quick Optimize", self.tab_quickoptimize, BLUE),
-            ("search", "", "Search Lab", self.tab_search, BLUE),
-            ("evolution", "", "Evolution Lab (GA)", self.tab_evolution, BLUE),
             ("multiobj", "", "Multi-Objective Optimization", self.tab_multiobj, BLUE),
-            ("searchmulti", "", "Multi-Instrument Search Lab", self.tab_search_multi, BLUE),
-            ("evolutionmulti", "", "Multi-Instrument Evolution Lab", self.tab_evolution_multi, BLUE),
             ("refine", "", "Iterative Refinement", self.tab_refine, BLUE),
             ("risksweep", "", "\U0001F4CA Risk Sweep", self.tab_risksweep, BLUE),
 
@@ -529,7 +522,7 @@ class ChromeMixin:
             ("support", "", "\U0001F6DF Support", self.tab_support, METAL_BRIGHT),
 
             (None, None, "\u2461 EDUCATION", None, METAL_BRIGHT),
-            ("education", "", "\U0001F393 Education (course)", self.tab_education, METAL_BRIGHT),
+            ("education", "", "\U0001F393 University", self.tab_education, METAL_BRIGHT),
             ("resources", "", "\U0001F393 Resources", self.tab_resources, METAL_BRIGHT),
         ]
         self._tab_frame_by_key = {k: frame for k, _icon, _label, frame, _color in self._nav_items if k}

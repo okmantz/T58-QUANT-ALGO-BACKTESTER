@@ -117,9 +117,9 @@
   <div class="t58-nav-divider"></div>
   <div class="t58-nav-section-label">Strategy Lab</div>
 
-  {% set create_pages   = ['forge', 'speed_run', 'speed_run_multi_instrument', 'generate_strategies', 'research_agent', 'research', 'research_loop', 'discover', 'overnight_autopilot', 'discovery_engine', 'start_here_create'] %}
-  {% set test_pages     = ['run', 'payout_probability', 'full_pipeline'] %}
-  {% set optimize_pages = ['optimize_hub', 'optimize_simple', 'rescue', 'search', 'search_multi_instrument', 'multi_market', 'refine', 'full_pipeline', 'quick_optimize', 'multi_objective', 'evolution', 'evolution_multi_instrument', 'risk_sweep', 'cross_instrument'] %}
+  {% set create_pages   = ['generate_strategies', 'research', 'research_loop', 'discover', 'overnight_autopilot', 'discovery_engine', 'start_here_create'] %}
+  {% set test_pages     = ['run', 'payout_probability', 'full_pipeline', 'payout_planner'] %}
+  {% set optimize_pages = ['optimize_hub', 'optimize_simple', 'rescue', 'multi_market', 'refine', 'full_pipeline', 'quick_optimize', 'multi_objective', 'risk_sweep', 'cross_instrument'] %}
   {% set validate_pages = ['validate_hub', 'validate_simple', 'wfo', 'wfga', 'cpcv', 'pbo', 'sensitivity', 'parameter_robustness', 'regime_matrix'] %}
   {% set champion_pages = ['champion_simple', 'family_diversity', 'ensemble', 'portfolio', 'universe', 'compare'] %}
 
@@ -254,13 +254,13 @@
     </div>
   </details>
 
-  <!-- (12) Education -- Education (Course), Resources, Playground, Library, then the
+  <!-- (12) Education -- University, Resources, Playground, Library, then the
        User Manual last (all siblings, same left alignment). -->
   <details class="t58-nav-group">
     <summary><span class="t58-nav-icon"><svg class="lu"><use href="#lu-graduation-cap"/></svg></span> Education <span class="chev"><svg class="lu"><use href="#lu-chevron-right"/></svg></span></summary>
     <div class="t58-nav-group-items">
       <a href="/education" class="t58-nav-item {{ 'active' if active_page == 'education' else '' }}">
-        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-school"/></svg></span><span class="label">Education (Course)</span>
+        <span class="t58-nav-icon"><svg class="lu"><use href="#lu-school"/></svg></span><span class="label">University</span>
       </a>
       <a href="/resources" class="t58-nav-item {{ 'active' if active_page == 'resources' else '' }}">
         <span class="t58-nav-icon"><svg class="lu"><use href="#lu-book-open-check"/></svg></span><span class="label">Resources</span>

@@ -110,7 +110,7 @@
       {% for f in g.files %}
       <tr>
         <td><span class="t58-health-dot {{ 'ok' if f.healthy else 'bad' }}"></span></td>
-        <td>{{ f.name }}</td>
+        <td>{{ f.name }}{% if f.ok %} <a href="/data-center/review?name={{ f.name | urlencode }}" style="font-size:11px;">Review &amp; fix</a>{% endif %}</td>
         <td>{{ f.timeframe or '--' }}</td>
         <td>{{ "{:,}".format(f.bar_count) if f.ok else '--' }}</td>
         <td style="font-size:11px;">{% if f.start %}{{ f.start }} &rarr; {{ f.end }}{% else %}--{% endif %}</td>

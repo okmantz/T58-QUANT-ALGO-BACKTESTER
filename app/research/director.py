@@ -389,7 +389,10 @@ def _ablation_verdict(rows: list[dict], essential: list[str], unnecessary: list[
         "is worth backtesting on its own -- fewer free parameters, same or better pass rate."
         if unnecessary else None
     )
-    return {"rows": rows, "essential": essential, "unnecessary": unnecessary, "verdict": " ".join(lines), "simplification_suggestion": simplified_note}
+    from app.reports.ablation_view import rule_effects
+    result = {"rows": rows, "essential": essential, "unnecessary": unnecessary, "verdict": " ".join(lines), "simplification_suggestion": simplified_note}
+    result["rule_effects"] = rule_effects(result)
+    return result
 
 
 # ---------------------------------------------------------------------------

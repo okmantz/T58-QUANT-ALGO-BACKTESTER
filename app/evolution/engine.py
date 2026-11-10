@@ -74,7 +74,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
-from app.backtest.adaptive_risk import build_limit_aware_preset
+from app.backtest.adaptive_risk import adaptive_from_settings, build_limit_aware_preset
 from app.backtest.engine import run_backtest
 from app.backtest.risk import RiskConfig, account_size_mismatch_message, with_prop_safety_defaults
 from app.evolution import checkpoint as evo_checkpoint
@@ -660,6 +660,7 @@ class EvolutionConfig:
     # than nominal unthrottled sizing.
     adaptive_risk_enabled: bool = True
     adaptive_risk_daily_profit_lock_pct: float | None = 80.0
+    adaptive_risk_mode: str = "balanced"   # conservative | balanced | accelerated -- see app.backtest.adaptive_risk
 
     # Parallelism for PRE-FILTER and the ROBUSTNESS/OOS/MONTE CARLO/PROP
     # SIMULATION stage -- the two stages that run once per candidate and

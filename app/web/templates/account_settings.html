@@ -363,6 +363,19 @@
       <input type="range" value="60" tabindex="-1"><span class="ac-p-dot"></span>
     </div>
 
+    {% if live_pnl_unlocked %}
+    <hr class="divider">
+    <label>Dashboard</label>
+    <label class="checkbox-row" style="display:flex;gap:8px;align-items:center;"><input type="checkbox" id="pz-livepnl" style="width:auto;"> Show the live P&amp;L panel above the Dashboard stats</label>
+    <p class="field-note">Earned by promoting your first strategy to champion. The panel is collapsed until you open or pin it.</p>
+    <script>(function(){var c=document.getElementById('pz-livepnl');if(!c)return;try{c.checked=localStorage.getItem('t58-live-pnl')==='1';}catch(e){}
+      c.addEventListener('change',function(){try{localStorage.setItem('t58-live-pnl',c.checked?'1':'0');}catch(e){}});})();</script>
+    {% else %}
+    <hr class="divider">
+    <label>Dashboard</label>
+    <p class="field-note">&#128274; Live P&amp;L panel &mdash; promote your first strategy to champion to unlock it.</p>
+    {% endif %}
+
     <hr class="divider">
     <label>Background</label>
     <div id="pz-grid" role="radiogroup" aria-label="Background">

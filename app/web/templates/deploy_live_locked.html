@@ -27,6 +27,7 @@
   <p>Live trading is off until three safety steps are done. Nothing is wrong -- this is the guard working. You can connect and test your prop-firm accounts right now, before turning trading on.</p>
 </div>
 
+{% include '_deploy_demo_card.html' %}
 {% for s in checklist %}
 <div class="step {{ 'done' if s.ok else '' }}">
   <div class="dot">{{ '✓' if s.ok else loop.index }}</div>

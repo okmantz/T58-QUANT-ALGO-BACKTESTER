@@ -76,27 +76,66 @@ def user_data_dir() -> Path:
     return (Path(xdg) if xdg else Path.home() / ".local" / "share") / name
 
 
-def _seed_bundled_raw_data(raw_dir: Path) -> None:
-    """Copy CSVs embedded by PyInstaller into the persistent raw-data folder,
-    preserving any instrument subfolders in the bundle rather than flattening
-    them (mirrors list_stored_datasets()'s recursive scan below)."""
-    if not getattr(sys, "frozen", False):
-        return
-    bundle_root = getattr(sys, "_MEIPASS", None)
+_SEED_LEDGER_NAME = ".t58_seeded.json"
+
+
+def _read_seed_ledger(raw_dir: Path) -> set[str]:
+    try:
+        return set(json.loads((raw_dir / _SEED_LEDGER_NAME).read_text(encoding="utf-8")).get("seeded", []))
+    except Exception:  # noqa: BLE001 -- a missing or corrupt ledger just means "seed whatever is missing"
+        return set()
+
+
+def _write_seed_ledger(raw_dir: Path, seeded: set[str]) -> None:
+    try:
+        (raw_dir / _SEED_LEDGER_NAME).write_text(json.dumps({"seeded": sorted(seeded)}, indent=1), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _seed_bundled_raw_data(raw_dir: Path, bundle_root: "str | Path | None" = None) -> list[str]:
+    """First run of a packaged build: copy the bundled starter data (ES / NQ / GC history and the pack manifests) into the
+    writable data folder so nothing has to be imported. Instrument subfolders are preserved (mirrors list_stored_datasets()'s
+    recursive scan below).
+
+    Each file is copied ONCE and recorded in a small ledger, so a dataset the person deletes stays deleted, while a newer
+    build that ships an extra file still delivers it. Returns the relative names copied this call."""
+    if bundle_root is None:
+        if not getattr(sys, "frozen", False):
+            return []
+        bundle_root = getattr(sys, "_MEIPASS", None)
     if not bundle_root:
-        return
-    bundled_raw = Path(bundle_root) / "data" / "raw"
-    if not bundled_raw.exists():
-        return
-    for ext in RAW_DATA_EXTENSIONS:
-        for source in bundled_raw.rglob(f"*{ext}"):
-            destination = raw_dir / source.relative_to(bundled_raw)
-            if not destination.exists():
+        return []
+    bundle_root = Path(bundle_root)
+    copied: list[str] = []
+    ledger = _read_seed_ledger(raw_dir)
+    bundled_raw = bundle_root / "data" / "raw"
+    if bundled_raw.exists():
+        for ext in RAW_DATA_EXTENSIONS:
+            for source in bundled_raw.rglob(f"*{ext}"):
+                rel = source.relative_to(bundled_raw).as_posix()
+                destination = raw_dir / rel
+                if rel in ledger or destination.exists():
+                    ledger.add(rel)
+                    continue
                 try:
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(source, destination)
+                    ledger.add(rel)
+                    copied.append(rel)
                 except OSError:
                     continue
+        _write_seed_ledger(raw_dir, ledger)
+    # The manifests that pin the sealed holdout live one level up (data/), beside data/raw.
+    data_dir = raw_dir.parent
+    for name in ("data_pack.json", "data_manifest.json"):
+        source, destination = bundle_root / "data" / name, data_dir / name
+        if source.is_file() and not destination.exists():
+            try:
+                shutil.copy2(source, destination)
+            except OSError:
+                continue
+    return copied
 
 
 _SEEDED_RAW_DIRS: set[str] = set()
