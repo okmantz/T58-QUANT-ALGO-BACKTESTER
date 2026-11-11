@@ -29,6 +29,11 @@ class FrozenEntry:
     side: int                 # +1 long, -1 short
     price: float
     stop_dist: float          # initial stop distance in price points (> 0)
+    # True (default): the fill is the OPEN of ``bar`` (next-bar-open entries), so the rest of that bar's range (its high/low after the
+    # open) is live exposure and is replayed. False: the fill is at/after ``bar``'s close (``price`` = that close), so the first bar that
+    # can hurt the position is ``bar + 1``. Before 2026-11-11 every entry was treated as the second kind, which skipped the entry bar's own
+    # stop/target touches for open-filled entries.
+    fills_at_open: bool = True
 
 
 @dataclass(frozen=True)
@@ -102,7 +107,8 @@ def simulate_exit(o, h, l, c, atr, e: FrozenEntry, p: ExitPolicy, *, cost_points
     mfe = 0.0
     last = min(n - 1, e.bar + (p.max_bars if p.max_bars is not None else n))
     exit_px, reason, exit_bar = None, "data_end", last
-    for i in range(e.bar + 1, last + 1):
+    first_bar = e.bar if e.fills_at_open else e.bar + 1
+    for i in range(first_bar, last + 1):
         if side > 0:
             adverse, favour = l[i] - entry, h[i] - entry
         else:

@@ -70,7 +70,8 @@ def run(frames: dict, cfg: Prop30Config | None = None) -> dict:
     bars, atr, nb = prepare_bars(raw, start=cfg.discovery[0], end=cfg.discovery[1], minutes=cfg.minutes)
     ents = cell_entries(best.cell, nb, atr)
     def _lab_ledger(pol, es):
-        led, _, rs = build_ledger(bars, atr, es, pol, best.cell.instrument, risk_usd=cfg.risk_usd, max_contracts=cfg.max_contracts, label=pol.name)
+        led, _, rs = build_ledger(bars, atr, es, pol, best.cell.instrument, risk_usd=cfg.risk_usd, max_contracts=cfg.max_contracts, label=pol.name,
+                                 flatten_time_ct=rules.flatten_time_ct)
         return led, (sum(rs) / len(rs) if rs else 0.0)
 
     lab = run_exit_lab(bars, ents, rules, policies=default_policy_grid(), risk_usd=cfg.risk_usd, instrument=best.cell.instrument, cfg=tcfg,
@@ -83,7 +84,7 @@ def run(frames: dict, cfg: Prop30Config | None = None) -> dict:
         b2, a2, nb2 = prepare_bars(frames[r.cell.instrument], start=cfg.discovery[0], end=cfg.discovery[1], minutes=cfg.minutes)
         pol = next(p for p in EXIT_GRID if p.name == r.cell.exit_name)
         led, _, _ = build_ledger(b2, a2, cell_entries(r.cell, nb2, a2), pol, r.cell.instrument, risk_usd=cfg.risk_usd,
-                                 max_contracts=cfg.max_contracts, label=r.cell.key)
+                                 max_contracts=cfg.max_contracts, label=r.cell.key, flatten_time_ct=rules.flatten_time_ct)
         ledgers[r.cell.key] = led
     if len(ledgers) > 1:
         pr = allocate_weights(ledgers, rules, grid=(0.0, 0.5, 1.0), data_start=cfg.discovery[0], data_end=cfg.discovery[1], cfg=tcfg)
@@ -97,7 +98,7 @@ def run(frames: dict, cfg: Prop30Config | None = None) -> dict:
     bF, aF, nbF = prepare_bars(raw, start=cfg.discovery[0], end=None, minutes=cfg.minutes)
     pol = next(p for p in EXIT_GRID if p.name == best.cell.exit_name)
     ledF, _, _ = build_ledger(bF, aF, cell_entries(best.cell, nbF, aF), pol, best.cell.instrument, risk_usd=cfg.risk_usd,
-                              max_contracts=cfg.max_contracts, label=best.cell.key)
+                              max_contracts=cfg.max_contracts, label=best.cell.key, flatten_time_ct=rules.flatten_time_ct)
     parts = Partitions(cfg.discovery, cfg.development, cfg.holdout, selection_cutoff=cfg.development[1])
     val = validate_prop30(ledF, rules, parts, config_id=best.cell.key, observed_ranges=_observed(cfg, full_end), cfg=tcfg)
     out["validation"] = val.to_dict()
