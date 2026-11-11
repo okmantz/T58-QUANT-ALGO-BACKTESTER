@@ -681,16 +681,16 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
         trailing_lock=True, trailing_lock_offset_pct=0.2, max_contracts=4, rules_checked_on="2026-10-07",
         trailing_distance_basis="account", flatten_time_ct="15:45",
         consistency_rule_pct=None, min_trading_days=1,
-        payout_frequency_days=3,
+        payout_frequency_days=5,
         funded_consistency_rule_pct=40.0,
         as_of=_AS_OF,
         source_note=(
             "CORRECTED 2026-09-13 against lucidtrading.com (LucidPro track) -- previous values were stale. "
             "Confirmed: $3,000 profit target on $50k = 6% (was modeled as 8%); $1,200 daily loss limit = "
             "2.4% (was 4%); $2,000 EOD trailing max loss = 4% (was 8%); minimum trading days = 1, not 3 "
-            "('pass in as little as one day' is the current LucidPro rule); payout cycle = 3 trading days, "
-            "not 14 -- confirmed both by Lucid's own live pricing page ('Days to Payout: 3') and independent "
-            "sources. consistency_rule_pct stays None: LucidPro has NO consistency rule during evaluation -- "
+            "('pass in as little as one day' is the current LucidPro rule); payout cycle = 5 trading days "
+            "(CORRECTED 2026-11-11 from 3 per the owner's check of Lucid's own payout page; the 2026-09-13 stamp of 3 came from the pricing "
+            "page's 'Days to Payout' tile). consistency_rule_pct stays None: LucidPro has NO consistency rule during evaluation -- "
             "the real 40% consistency rule shown on Lucid's site applies only at the funded-payout stage "
             "(now modeled by funded_consistency_rule_pct=40.0 as of v6; see module docstring's MODELING "
             "LIMITATION note), same situation as Apex above. Lucid also "
@@ -714,7 +714,7 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
         daily_loss_limit_pct=2.4, max_drawdown_pct=3.0,
         drawdown_type="trailing", drawdown_check_mode="eod",
         consistency_rule_pct=None, min_trading_days=1,
-        payout_frequency_days=3,
+        payout_frequency_days=5,
         funded_consistency_rule_pct=40.0,
         as_of=_AS_OF,
         source_note=(
@@ -742,7 +742,7 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
         trailing_lock=True, trailing_lock_offset_pct=0.4, max_contracts=2, rules_checked_on="2026-11-04",
         trailing_distance_basis="account", flatten_time_ct="15:45",
         consistency_rule_pct=None, min_trading_days=1,
-        payout_frequency_days=3,
+        payout_frequency_days=5,
         funded_consistency_rule_pct=40.0,
         as_of=_AS_OF_V11,
         source_note=(
@@ -766,7 +766,7 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
         trailing_lock=True, trailing_lock_offset_pct=0.4, max_contracts=2, rules_checked_on="2026-11-05",
         trailing_distance_basis="account", flatten_time_ct="15:45",
         consistency_rule_pct=50.0, min_trading_days=1,
-        payout_frequency_days=3,
+        payout_frequency_days=5,
         funded_consistency_rule_pct=None,
         as_of=_AS_OF_V11,
         source_note=(
@@ -790,7 +790,7 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
         trailing_lock=True, trailing_lock_offset_pct=0.4, max_contracts=4, rules_checked_on="2026-11-05",
         trailing_distance_basis="account", flatten_time_ct="15:45",
         consistency_rule_pct=50.0, min_trading_days=1,
-        payout_frequency_days=3,
+        payout_frequency_days=5,
         funded_consistency_rule_pct=None,
         as_of=_AS_OF_V11,
         source_note=(
@@ -814,7 +814,7 @@ PROP_FIRM_PRESETS: list[PropFirmPreset] = [
         trailing_lock=True, trailing_lock_offset_pct=0.4, max_contracts=6, rules_checked_on="2026-11-05",
         trailing_distance_basis="account", flatten_time_ct="15:45",
         consistency_rule_pct=50.0, min_trading_days=1,
-        payout_frequency_days=3,
+        payout_frequency_days=5,
         funded_consistency_rule_pct=None,
         as_of=_AS_OF_V11,
         source_note=(
@@ -1027,7 +1027,7 @@ _RULE_CORRECTIONS: dict[str, tuple[dict, str]] = {
         "(was $200). APEX PROHIBITS AUTOMATION."),
     "lucid_50k": ({},
         "Lucid help centre (support.lucidtrading.com: LucidPro Evaluation Account, Drawdown, Daily Loss Limit, Consistency, Payouts; read 2026-10-17): target $3,000, "
-        "EOD trailing MLL $2,000 locking at $50,100 once the balance passes $52,100 (the $100 lock offset), DLL $1,200 is a SOFT breach (locks the session, matches "
+        "EOD trailing MLL $2,000 locking at $50,100 once the balance passes $52,100 (the $100 lock offset), payout cycle 5 trading days (owner-verified 2026-11-11; modelled by payout_frequency_days=5), DLL $1,200 is a SOFT breach (locks the session, matches "
         "'lock_day'), 4 mini / 40 micro, consistency 40% FUNDED stage only, 90% split, $500 minimum payout. The page does not say whether the DLL counts floating loss; "
         "'floating' is kept as the conservative reading. Prices are NOT on the help centre (see FIRM_FEES)."),
     "lucid_100k": ({"daily_loss_limit_pct": 1.8, "daily_loss_action": "lock_day", "daily_loss_basis": "floating", "trailing_lock": True,
