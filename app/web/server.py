@@ -2091,7 +2091,7 @@ def _dashboard_cards_and_flow(stats: dict, board_rows: list) -> tuple[list, dict
     cards.sort(key=_rank_key, reverse=True)
     for i, c in enumerate(cards, 1):
         c["rank"] = i
-    # Pipeline in motion: Candidates (every strategy) -> Tested -> Optimized -> Validated -> Champion Candidate -> Forward Tested ->
+    # Pipeline in motion: Candidates (every strategy) -> Tested -> Optimized -> Validated -> Champion -> Forward Tested ->
     # Production Ready. Each node counts the strategies that reached it or went further (see champion_board.funnel_rank), over ALL
     # strategies on record -- not just the dozen shown as cards.
     tested_files: set = set()
