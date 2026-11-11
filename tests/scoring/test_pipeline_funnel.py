@@ -1,4 +1,4 @@
-"""Dashboard "Pipeline in motion": Candidates -> Tested -> Optimized -> Validated -> Champion Candidate -> Forward Tested -> Production Ready."""
+"""Dashboard "Pipeline in motion": Candidates -> Tested -> Optimized -> Validated -> Champion -> Forward Tested -> Production Ready."""
 from app.scoring import champion_board as cb
 from app.strategy.library import VALIDATION_STEP_METHODS
 
@@ -16,7 +16,7 @@ STRONG_RUN = {"eval_pass_probability": 75.0, "first_payout_probability": 70.0}
 
 def test_stage_order_and_titles_match_the_dashboard_spec():
     assert [cb.FUNNEL_TITLES[k] for k in cb.FUNNEL_STAGES] == [
-        "Candidates", "Tested", "Optimized", "Validated", "Champion Candidate", "Forward Tested", "Production Ready"]
+        "Candidates", "Tested", "Optimized", "Validated", "Champion", "Forward Tested", "Production Ready"]
 
 
 def test_rank_climbs_with_what_is_on_record():
@@ -25,10 +25,10 @@ def test_rank_climbs_with_what_is_on_record():
     assert cb.funnel_rank(_meta(last_run=STRONG_RUN, last_optimize={"improved": True})) == 2
 
 
-def test_passing_validation_makes_a_champion_candidate_without_clicking_promote():
+def test_passing_validation_reaches_the_champion_step_without_clicking_promote():
     m = _meta(last_run=STRONG_RUN, validation_methods_run=_all_validation(), last_validation={"efficiency": 0.7},
               last_champion_check={"verdict": "READY"})
-    assert cb.funnel_rank(m) == 4                      # validated AND meets the Eval/Payout/OOS thresholds -> Champion Candidate
+    assert cb.funnel_rank(m) == 4                      # validated AND meets the Eval/Payout/OOS thresholds -> Champion
 
 
 def test_validation_that_does_not_meet_the_gate_stays_validated():
@@ -37,14 +37,14 @@ def test_validation_that_does_not_meet_the_gate_stays_validated():
     assert cb.funnel_rank(m) == 3
 
 
-def test_a_not_ready_verdict_is_never_a_champion_candidate():
+def test_a_not_ready_verdict_is_never_a_champion():
     m = _meta(last_run=STRONG_RUN, validation_methods_run=_all_validation(), last_validation={"efficiency": 0.7},
               last_champion_check={"verdict": "NOT READY"})
     assert cb.funnel_rank(m) == 3
 
 
 def test_already_promoted_strategies_count_at_their_promoted_stage_or_beyond():
-    for stage, want in (("validated", 4), ("champion_candidate", 4), ("forward_testing", 5), ("production_ready", 6)):
+    for stage, want in (("champion", 4), ("champion_candidate", 4), ("forward_testing", 5), ("production_ready", 6)):     # champion_candidate = legacy key
         assert cb.funnel_rank(_meta(promotion={"stage": stage, "history": {}})) == want, stage
 
 
