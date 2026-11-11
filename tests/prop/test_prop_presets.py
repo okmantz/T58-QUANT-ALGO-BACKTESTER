@@ -56,11 +56,11 @@ def test_multiple_account_sizes_offered_where_expected():
 
 def test_lucid_payout_frequency_matches_current_lucidpro_terms():
     """Regression guard: this preset was previously modeled as a 14-day
-    payout cycle when Lucid's own live pricing page (LucidPro, 50K Pro
-    Funded) advertises 3 days -- see app.prop.presets' source_note."""
+    payout cycle, then 3. Owner-confirmed 2026-11-11: Lucid pays on a
+    5-trading-day cycle (see app.prop.presets' source_note)."""
     for key in ("lucid_50k", "lucid_100k"):
         p = get_preset(key)
-        assert p.payout_frequency_days == 3
+        assert p.payout_frequency_days == 5
         assert p.min_trading_days == 1
 
 
