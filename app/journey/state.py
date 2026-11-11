@@ -27,7 +27,7 @@ STAGES = [
     ("pass", "Pass the evaluation", "/guardian"),
     ("payout", "Receive the first payout", "/accounts"),
 ]
-CHAMPION_STAGES = ("champion_candidate", "forward_testing", "production_ready")
+CHAMPION_STAGES = ("champion", "forward_testing", "production_ready")
 
 DEFAULT_SETTINGS = {"preset_key": "", "strategy": "", "forward_trades_required": 30, "forward_days_required": 14,
                     "backtest_max_drawdown": None}
@@ -90,19 +90,41 @@ def _strategy_inputs(cfg: dict) -> dict:
     return out
 
 
+def _best_board_row(rows: list):
+    """The furthest-along strategy on the Champion board (promotion stage, then funnel rank, then strength). Only strategies the person has
+    actually worked on count (tested at least): an untouched library entry is not progress. None when there is none."""
+    from app.scoring import champion_board as cb
+    rows = [r for r in (rows or []) if int(r.get("funnel_rank") or 0) >= 1 or cb.PROMOTION_STAGES.index(r["promotion"]["stage"]) >= 1]
+    if not rows:
+        return None
+    return max(rows, key=lambda r: (cb.PROMOTION_STAGES.index(r["promotion"]["stage"]), int(r.get("funnel_rank") or 0),
+                                    r["strength"] if r.get("strength") is not None else -1.0))
+
+
 def _champion_inputs(st: dict) -> dict:
-    """Where the current strategy sits on the Champion board: has it been tested at all, and has it been promoted to champion."""
-    out = {"found": False, "tested": bool(st.get("ran")), "promoted": False, "stage_title": ""}
+    """Where the strategy the mission is tracking sits on the Champion board.
+
+    2026-11-11 fix: the mission used to look ONLY at the "current strategy" setting, so a strategy that was tested, validated and promoted on
+    the Champion page -- but was never (or is no longer) the "current" one -- left the mission stuck on "Test a strategy". The tracked strategy
+    is now the current one when it matches a board row, otherwise the furthest-along strategy on the board, and its test / validation / promotion
+    record (read from the board, the same record the Champion page shows) fills in what the current-strategy checklist does not know."""
+    out = {"found": False, "tested": bool(st.get("ran")), "promoted": False, "stage_title": "", "row": None, "name": "", "val_ran": 0,
+           "via_board": False}
     try:
         from app.reports import strategy_state as ss
         from app.scoring import champion_board as cb
+        rows = cb.list_board()
         cur = ss.get_current_strategy()
-        if cur:
-            row = cb.match_current_to_row(cur, cb.list_board())
-            if row:
-                promo = row.get("promotion") or {}
-                out.update(found=True, tested=out["tested"] or bool(row.get("verdict")), stage_title=promo.get("stage_title", ""),
-                           promoted=promo.get("stage") in CHAMPION_STAGES)
+        row = cb.match_current_to_row(cur, rows) if cur else None
+        if row is None:
+            row = _best_board_row(rows)
+            out["via_board"] = row is not None
+        if row:
+            promo = row.get("promotion") or {}
+            val = row.get("validation") or {}
+            out.update(found=True, row=row, name=row.get("display_name") or "", stage_title=promo.get("stage_title", ""),
+                       tested=out["tested"] or bool(row.get("verdict")) or int(row.get("funnel_rank") or 0) >= 1 or row.get("eval_pct") is not None,
+                       promoted=promo.get("stage") in CHAMPION_STAGES, val_ran=int(val.get("ran") or 0))
     except Exception:  # noqa: BLE001
         pass
     return out
@@ -180,8 +202,15 @@ def compute(today: date | None = None) -> dict:
     stages: dict[str, dict] = {}
 
     ch = _champion_inputs(st)
+    if not st["set"] and ch["found"]:                      # nothing is "current", but the board has a strategy: track that one
+        st.update(set=True, name=st["name"] or ch.get("name", ""))
+    if ch["found"]:
+        st["ran"] = max(int(st["ran"]), int(ch.get("val_ran") or 0))
+        if ch["promoted"]:                                  # the Champion gate itself requires a backtest and all five checks on record
+            st["ran"] = max(st["ran"], 5)
     stages["test"] = {"requirements": [
-        _req("A strategy is selected", st["set"], st["name"] or "Open a strategy from the Library and set it as current."),
+        _req("A strategy is selected", st["set"], ((st["name"] + " (furthest-along strategy on the Champion board)") if ch.get("via_board") and st["name"] else st["name"])
+             or "Open a strategy from the Library and set it as current."),
         _req("A full test has been run on it", ch["tested"] if st["set"] else None, "Run the Full Pipeline on the Test page." if not ch["tested"] else "A result is on file."),
     ]}
     stages["refine"] = {"requirements": [
@@ -236,6 +265,11 @@ def compute(today: date | None = None) -> dict:
         unmet = [r for r in rs if r["met"] is False]
         stages[key]["unmet"] = [r["label"] for r in unmet]
         stages[key]["done"] = not unmet and any(r["met"] is True for r in rs)
+    # A strategy promoted to champion has, by that gate, been tested and validated: the earlier strategy stages can never read "not done"
+    # once the promotion stage is done (the mission used to keep showing "Test a strategy" for a strategy already promoted).
+    if stages["champion"]["done"]:
+        for key in ("test", "refine"):
+            stages[key]["done"], stages[key]["unmet"] = True, []
     cur = None
     out = []
     for key, label, href in STAGES:
