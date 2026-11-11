@@ -35,6 +35,12 @@ INSTRUMENTS = {
     "GC": {"micro_pv": 10.0, "cost_points": 0.3, "slip_points": 0.1},
     "CL": {"micro_pv": 100.0, "cost_points": 0.03, "slip_points": 0.01},
 }
+# A mini future is 10 micros (NQ/ES/GC/CL alike). ``PropRules.max_contracts`` (and every preset, e.g. Lucid 50K "4 mini / 40 micro") counts MINI
+# contracts, so the micro-equivalent cap is ``max_contracts * MICROS_PER_MINI``. Before 2026-11-11 the scanner treated it as a micro count,
+# i.e. it silently sized at one tenth of the allowed size.
+MICROS_PER_MINI = 10
+# New futures session begins 18:00 New York time; a trade must be flat before the firm's flatten time inside its own session.
+SESSION_ROLL_NY_MIN = 18 * 60
 SESSION_OPENS = {"ny_open": "09:30", "ny_pre": "08:30", "london": "03:00", "asia": "20:00"}
 
 
@@ -278,22 +284,73 @@ def cell_entries(cell: "Cell", nb: pd.DataFrame, atr: np.ndarray) -> list:
     return _signals(cell.family, nb, atr, cell.session, dict(cell.params))
 
 
+def _flatten_ny_minute(flatten_time_ct: str | None) -> int | None:
+    """Firm flatten time ("HH:MM" America/Chicago) -> minutes after midnight in New York (Chicago + 1h)."""
+    if not flatten_time_ct:
+        return None
+    return _hm(str(flatten_time_ct)) + 60
+
+
+def _flatten_limits(bars: pd.DataFrame, flatten_ny_min: int) -> tuple:
+    """``(allowed, run_end)`` per bar: ``allowed[j]`` = bar j opens before the flatten time of its own futures session (or after the new
+    session's 18:00 roll); ``run_end[j]`` = the last bar of the unbroken allowed run containing j (the latest bar a position opened on j
+    may still be held through)."""
+    ny = pd.DatetimeIndex(bars["timestamp"]).tz_localize("UTC").tz_convert("America/New_York")
+    mins = np.asarray(ny.hour * 60 + ny.minute, dtype=np.int64)
+    dates = np.asarray([d.toordinal() for d in ny.date], dtype=np.int64)
+    sess = dates + (mins >= SESSION_ROLL_NY_MIN).astype(np.int64)
+    allowed = (mins < flatten_ny_min) | (mins >= SESSION_ROLL_NY_MIN)
+    n = len(bars)
+    if n == 0:
+        return allowed, np.zeros(0, dtype=np.int64)
+    brk = np.concatenate([[0], ((sess[1:] != sess[:-1]) | (allowed[1:] != allowed[:-1])).astype(np.int64)])
+    run_id = np.cumsum(brk)
+    ends = np.concatenate([np.flatnonzero(np.diff(run_id) != 0), [n - 1]])
+    return allowed, ends[run_id]
+
+
 def build_ledger(bars: pd.DataFrame, atr: np.ndarray, entries: Sequence[FrozenEntry], policy: ExitPolicy, instrument: str, *,
-                 risk_usd: float, max_contracts: int, label: str) -> tuple:
-    """Size in whole micro contracts (floor), skip what cannot be sized, replay the exit, return ``(ledger, n_skipped, r_list)``."""
+                 risk_usd: float, max_contracts: int, label: str, flatten_time_ct: str | None = None) -> tuple:
+    """Size in whole micro contracts (floor), skip what cannot be sized, replay the exit, return ``(ledger, n_skipped, r_list)``.
+
+    Realism rules (2026-11-11 audit):
+      * ``max_contracts`` is the firm's MINI-contract limit; the cap in micro-equivalents is ``max_contracts * MICROS_PER_MINI``;
+      * ``flatten_time_ct`` ("HH:MM" Chicago, e.g. a preset's ``flatten_time_ct``): no position is held past the flatten time of its own
+        futures session -- an exit that would run later is replayed on the bars up to the last pre-flatten bar and closed at its close,
+        and an entry that would open after the flatten time is skipped;
+      * ONE position at a time: an entry whose bar is not after the previous trade's exit bar is skipped.
+    ``n_skipped`` counts every skipped signal (cannot size, after flatten, or overlapping an open position)."""
     spec = INSTRUMENTS[instrument]
     pv, cost_pts, slip = spec["micro_pv"], spec["cost_points"], spec["slip_points"]
+    cap_micros = int(max(0, max_contracts)) * MICROS_PER_MINI
     o, h, l, c = (bars[k].to_numpy(float) for k in ("open", "high", "low", "close"))
     ref_atr = float(np.nanmedian(atr))
+    flat_min = _flatten_ny_minute(flatten_time_ct)
+    allowed = run_end = None
+    if flat_min is not None and len(bars):
+        allowed, run_end = _flatten_limits(bars, flat_min)
     et, xt, pnl, mae, mfe, cost, risk, side, rs = [], [], [], [], [], [], [], [], []
     skipped = 0
+    last_exit_bar = -1
     ts = bars["timestamp"].to_numpy()
-    for e in entries:
-        n_c = int(min(max_contracts, math.floor(risk_usd / (e.stop_dist * pv)))) if e.stop_dist > 0 else 0
+    for e in sorted(entries, key=lambda x: x.bar):
+        if e.bar <= last_exit_bar:                       # one position at a time
+            skipped += 1
+            continue
+        if allowed is not None and not allowed[e.bar]:   # would open after the flatten time
+            skipped += 1
+            continue
+        n_c = int(min(cap_micros, math.floor(risk_usd / (e.stop_dist * pv)))) if e.stop_dist > 0 else 0
         if n_c < 1:
             skipped += 1
             continue
-        r = simulate_exit(o, h, l, c, atr, e, policy, cost_points=cost_pts, slippage_points=slip, ref_atr=ref_atr)
+        if run_end is not None:
+            stop_ix = int(run_end[e.bar]) + 1            # replay only up to (and including) the last pre-flatten bar
+            r = simulate_exit(o[:stop_ix], h[:stop_ix], l[:stop_ix], c[:stop_ix], atr[:stop_ix], e, policy, cost_points=cost_pts,
+                              slippage_points=slip, ref_atr=ref_atr)
+        else:
+            r = simulate_exit(o, h, l, c, atr, e, policy, cost_points=cost_pts, slippage_points=slip, ref_atr=ref_atr)
+        last_exit_bar = r.exit_bar
         act_risk = n_c * e.stop_dist * pv
         et.append(ts[e.bar])
         xt.append(ts[r.exit_bar])
@@ -352,7 +409,8 @@ def scan(frames: dict, rules: PropRules, *, discovery_end, discovery_start=None,
                 for pol in exits:
                     cell = Cell(fam, inst, session, tuple(sorted(params.items())), pol.name)
                     rep.n_trials += 1
-                    led, skipped, rs = build_ledger(bars, atr, ents, pol, inst, risk_usd=risk_usd, max_contracts=max_contracts, label=cell.key)
+                    led, skipped, rs = build_ledger(bars, atr, ents, pol, inst, risk_usd=risk_usd, max_contracts=max_contracts, label=cell.key,
+                                                 flatten_time_ct=getattr(rules, "flatten_time_ct", None))
                     if len(led) < 30:
                         continue
                     r = np.asarray(rs)
