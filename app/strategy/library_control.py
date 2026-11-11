@@ -12,7 +12,7 @@ A value nobody has measured is None (rendered "--"), never a made-up 0.
 
 Status mapping (the four control-center lanes):
     Forward Testing  promotion stage forward_testing/production_ready, a recorded forward test, or status ready_for_demo
-    Ready            champion-check verdict READY, or status validated / ready_for_live, or promotion >= champion_candidate
+    Ready            champion-check verdict READY, or status validated / ready_for_live, or promotion >= champion
     Developing       the strategy has been run or searched, but is not yet Ready
     Research         everything else (drafts, failed tests, untested ideas)
 
@@ -63,7 +63,7 @@ def lane_for(meta: dict, status: str) -> str:
     if promo in ("forward_testing", "production_ready") or meta.get("last_forward_test") or status == "ready_for_demo":
         return "Forward Testing"
     verdict = str((meta.get("last_champion_check") or {}).get("verdict") or "").upper()
-    if verdict == "READY" or status in ("validated", "ready_for_live") or promo in ("champion_candidate", "validated"):
+    if verdict == "READY" or status in ("validated", "ready_for_live") or promo in ("champion", "champion_candidate", "validated"):
         return "Ready"
     if meta.get("last_run") or meta.get("last_search") or meta.get("last_optimize") or status in ("tested_passed", "tested_failed"):
         return "Developing"

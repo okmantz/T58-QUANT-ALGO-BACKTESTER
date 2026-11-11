@@ -221,6 +221,14 @@ class PythonStrategy(Strategy):
         except OSError:
             return None
 
+    def _evict_cached_module(self) -> bool:
+        """Drops this file's cached module. Returns True if one was cached (so a fresh-module retry is meaningful)."""
+        key = self._cache_key() if _module_cache_enabled() else None
+        if key is None:
+            return False
+        with _MODULE_CACHE_LOCK:
+            return _MODULE_CACHE.pop(key, None) is not None
+
     def _load_module(self):
         key = self._cache_key() if _module_cache_enabled() else None
         if key is not None:
@@ -293,8 +301,20 @@ class PythonStrategy(Strategy):
 
         try:
             raw_signals = module.generate_signals(df.copy())
-        except Exception as exc:  # noqa: BLE001
-            raise StrategyError(f"Uploaded strategy raised an exception: {exc}") from exc
+        except Exception as first_exc:  # noqa: BLE001
+            # A cached module can carry module-level state (arrays, memo dicts) sized for an EARLIER, differently
+            # sized dataframe (lookahead truncation, walk-forward folds, GA runs on other slices), which surfaces as
+            # e.g. "index 401 is out of bounds for axis 1 with size 401". Evict the cached module and retry ONCE on a
+            # freshly executed copy; only if that also fails is the error the strategy's own.
+            if not self._evict_cached_module():
+                raise StrategyError(f"Uploaded strategy raised an exception: {first_exc}") from first_exc
+            try:
+                module = self._load_module_uncached()
+                raw_signals = module.generate_signals(df.copy())
+            except StrategyError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise StrategyError(f"Uploaded strategy raised an exception: {exc}") from exc
 
         # Preserve .attrs (dynamic stop/target info) before any coercion below,
         # since pd.Series(raw_signals, index=...) or a fresh Series does not
