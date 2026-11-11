@@ -73,15 +73,25 @@ _VALIDATION_METHOD_LABELS: dict[str, str] = {
 # (tooled through) and still sit at "candidate" here forever if nobody has
 # explicitly promoted it.
 
-PROMOTION_STAGES = ("candidate", "validated", "champion_candidate", "forward_testing", "production_ready")
+# 2026-11-11: ONE promotion step. A strategy is TESTED, OPTIMIZED and VALIDATED by running the tools (those are evidence the board reads, not
+# buttons), and is then PROMOTED TO CHAMPION in a single press. There is no separate "Promote to Validated". Stage keys saved before this
+# date are read through ``LEGACY_STAGE_ALIASES`` (a saved "validated" is just a candidate whose evidence is still on file; a saved
+# "champion_candidate" is a champion), so nothing on disk needs migrating.
+PROMOTION_STAGES = ("candidate", "champion", "forward_testing", "production_ready")
 
 PROMOTION_STAGE_TITLES: dict[str, str] = {
     "candidate": "Candidate",
-    "validated": "Validated",
-    "champion_candidate": "Champion Candidate",
+    "champion": "Champion",
     "forward_testing": "Forward Testing",
     "production_ready": "Production Ready",
 }
+LEGACY_STAGE_ALIASES: dict[str, str] = {"validated": "candidate", "champion_candidate": "champion"}
+
+
+def normalize_stage(stage: Optional[str]) -> str:
+    """A stored promotion stage key -> a current one (unknown / missing -> "candidate")."""
+    st = LEGACY_STAGE_ALIASES.get(str(stage or ""), str(stage or "candidate"))
+    return st if st in PROMOTION_STAGES else "candidate"
 
 # Minimum wall-clock time a strategy must sit in Forward Testing before it's
 # eligible for Production Ready. This app doesn't yet track live/forward
@@ -93,10 +103,7 @@ PROMOTION_STAGE_TITLES: dict[str, str] = {
 # result tracking lands.
 MIN_FORWARD_TEST_DAYS = 14.0
 
-# One press of Promote may cross several gates, but never past this stage (see evaluate_promotion).
-CASCADE_STOP_STAGES = ("champion_candidate",)
-
-# Thresholds for the Validated -> Champion Candidate gate. Chosen to match
+# Thresholds for the Candidate -> Champion gate (applied after the five validation checks are on record). Chosen to match
 # the same eval/payout bar Full Pipeline's own scorecard treats as
 # meaningfully strong (see app.scoring.t58_scorecard), not arbitrary.
 CHAMPION_CANDIDATE_MIN_EVAL_PCT = 60.0
@@ -179,9 +186,7 @@ class PromotionState:
     can_promote: bool
     requirements: list[PromotionRequirement] = field(default_factory=list)
     promoted_at: dict[str, float] = field(default_factory=dict)  # stage -> unix ts
-    # 2026-11-04: every stage ONE press of Promote crosses, in order. A strategy that has already earned Validated AND Champion Candidate
-    # (all five checks run, thresholds met) used to be offered "Promote to Validated" first and "Promote to Champion Candidate" second;
-    # now the button names the stage it will actually land on and the history records each stage crossed.
+    # The stage(s) ONE press of Promote crosses (always at most one since 2026-11-11: "Promote to Champion").
     path: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -219,6 +224,43 @@ class PromotionState:
         }
 
 
+def _best_oos(metadata: dict[str, Any]) -> Optional[float]:
+    """The OOS quality the board shows: the best reading from ANY validation method on record (walk-forward, CPCV, WFGA, PBO), then the most
+    recent validation. The Champion gate reads the same number the row displays, so running Sensitivity last cannot erase an OOS reading that
+    CPCV already produced (the old gate read only ``last_validation``)."""
+    methods_run = metadata.get("validation_methods_run") or {}
+    for key in ("wfo", "cpcv", "wfga", "pbo"):
+        v = oos_pct(methods_run.get(key) or {})
+        if v is not None:
+            return v
+    return oos_pct(metadata.get("last_validation") or {})
+
+
+def _champion_threshold_requirements(eval_pct, payout_pct, oos, verdict: str) -> list:
+    return [
+        PromotionRequirement(
+            "eval_threshold", f"Eval pass probability >= {CHAMPION_CANDIDATE_MIN_EVAL_PCT:.0f}%",
+            eval_pct is not None and eval_pct >= CHAMPION_CANDIDATE_MIN_EVAL_PCT,
+            f"Currently {eval_pct:.1f}%." if eval_pct is not None else "No eval pass probability on record yet.",
+        ),
+        PromotionRequirement(
+            "payout_threshold", f"Payout probability >= {CHAMPION_CANDIDATE_MIN_PAYOUT_PCT:.0f}%",
+            payout_pct is not None and payout_pct >= CHAMPION_CANDIDATE_MIN_PAYOUT_PCT,
+            f"Currently {payout_pct:.1f}%." if payout_pct is not None else "No payout probability on record yet.",
+        ),
+        PromotionRequirement(
+            "oos_threshold", f"OOS validation quality >= {CHAMPION_CANDIDATE_MIN_OOS_PCT:.0f}%",
+            oos is not None and oos >= CHAMPION_CANDIDATE_MIN_OOS_PCT,
+            f"Currently {oos:.1f}%." if oos is not None else "No OOS efficiency on record yet.",
+        ),
+        PromotionRequirement(
+            "not_rejected", "Champion Check has not returned NOT READY",
+            verdict != "NOT READY",
+            "" if verdict != "NOT READY" else "Last Champion Check verdict was NOT READY.",
+        ),
+    ]
+
+
 def _requirements_for_next_stage(metadata: dict[str, Any], current_stage: str) -> list[PromotionRequirement]:
     """Explicit, named requirements to advance FROM current_stage to the
     next one. Every transition has its own concrete checklist -- nothing
@@ -232,11 +274,13 @@ def _requirements_for_next_stage(metadata: dict[str, Any], current_stage: str) -
 
     eval_pct = _num(last_run, "eval_pass_probability")
     payout_pct = _num(last_run, "first_payout_probability", "eval_pass_probability")
-    oos = oos_pct(last_validation)
+    oos = _best_oos(metadata)
     verdict = str(last_champion_check.get("verdict") or last_run.get("verdict") or "").upper()
     ladder_stage = str(last_champion_check.get("ladder_stage") or "").upper()
 
     if current_stage == "candidate":
+        # 2026-11-11: this gate IS the single "Promote to Champion" gate: tested + the five validation checks + lookahead clean (below), then
+        # the eval / payout / OOS thresholds and "not rejected" (appended after the validation block).
         # UPGRADE (2026-09, "5 validation steps" progress fix): this used
         # to be a single "validated_run" requirement satisfied by bool(
         # last_validation) -- true the instant ANY ONE of the 5 deeper-
@@ -281,33 +325,10 @@ def _requirements_for_next_stage(metadata: dict[str, Any], current_stage: str) -
                 lookahead.get("clean") is not False,
                 "" if lookahead.get("clean") is not False else "Fix the confirmed lookahead leak before validating further.",
             ),
+            *_champion_threshold_requirements(eval_pct, payout_pct, oos, verdict),
         ]
 
-    if current_stage == "validated":
-        return [
-            PromotionRequirement(
-                "eval_threshold", f"Eval pass probability >= {CHAMPION_CANDIDATE_MIN_EVAL_PCT:.0f}%",
-                eval_pct is not None and eval_pct >= CHAMPION_CANDIDATE_MIN_EVAL_PCT,
-                f"Currently {eval_pct:.1f}%." if eval_pct is not None else "No eval pass probability on record yet.",
-            ),
-            PromotionRequirement(
-                "payout_threshold", f"Payout probability >= {CHAMPION_CANDIDATE_MIN_PAYOUT_PCT:.0f}%",
-                payout_pct is not None and payout_pct >= CHAMPION_CANDIDATE_MIN_PAYOUT_PCT,
-                f"Currently {payout_pct:.1f}%." if payout_pct is not None else "No payout probability on record yet.",
-            ),
-            PromotionRequirement(
-                "oos_threshold", f"OOS validation quality >= {CHAMPION_CANDIDATE_MIN_OOS_PCT:.0f}%",
-                oos is not None and oos >= CHAMPION_CANDIDATE_MIN_OOS_PCT,
-                f"Currently {oos:.1f}%." if oos is not None else "No OOS efficiency on record yet.",
-            ),
-            PromotionRequirement(
-                "not_rejected", "Champion Check has not returned NOT READY",
-                verdict != "NOT READY",
-                "" if verdict != "NOT READY" else "Last Champion Check verdict was NOT READY.",
-            ),
-        ]
-
-    if current_stage == "champion_candidate":
+    if current_stage == "champion":
         return [
             PromotionRequirement(
                 "champion_check_ready", "Champion Check is READY or a Forward-Test Candidate",
@@ -341,32 +362,16 @@ def evaluate_promotion(metadata: dict[str, Any]) -> PromotionState:
     """The full promotion picture for one strategy's metadata dict: which
     stage it's actually at (never inferred past what promote_strategy has
     explicitly recorded), what the next stage is, and exactly what's
-    missing to get there."""
+    missing to get there. Candidate -> Champion is ONE step (2026-11-11);
+    Forward Testing and Production Ready are never entered by anything but
+    their own explicit, gated press."""
     promotion = metadata.get("promotion") or {}
-    stage = promotion.get("stage") or "candidate"
-    if stage not in PROMOTION_STAGES:
-        stage = "candidate"
+    stage = normalize_stage(promotion.get("stage"))
     idx = PROMOTION_STAGES.index(stage)
     next_stage = PROMOTION_STAGES[idx + 1] if idx + 1 < len(PROMOTION_STAGES) else None
 
     requirements = _requirements_for_next_stage(metadata, stage)
     can_promote = bool(next_stage) and all(r.met for r in requirements)
-
-    # Cascade: when the next stage's gate is met, check whether the stage AFTER it is already earned too (its gate reads the same saved
-    # evidence), and keep going up to Champion Candidate. Forward Testing and Production Ready are never entered by cascade: starting a
-    # forward test is a deliberate act and Production Ready needs elapsed real time.
-    path: list[str] = []
-    if can_promote:
-        cur = stage
-        while True:
-            nxt = PROMOTION_STAGES[PROMOTION_STAGES.index(cur) + 1]
-            if not all(r.met for r in _requirements_for_next_stage(metadata, cur)):
-                break
-            path.append(nxt)
-            if nxt in CASCADE_STOP_STAGES or PROMOTION_STAGES.index(nxt) + 1 >= len(PROMOTION_STAGES):
-                break
-            cur = nxt
-        next_stage = path[-1]
 
     return PromotionState(
         stage=stage,
@@ -376,7 +381,7 @@ def evaluate_promotion(metadata: dict[str, Any]) -> PromotionState:
         can_promote=can_promote,
         requirements=requirements,
         promoted_at=dict(promotion.get("history") or {}),
-        path=path,
+        path=[next_stage] if (can_promote and next_stage) else [],
     )
 
 
@@ -387,13 +392,13 @@ def evaluate_promotion(metadata: dict[str, Any]) -> PromotionState:
 # "how many strategies do I have" and the numbers never rise from one step to the next. A strategy's step is worked out from what is
 # really on record for it -- not only from the Promote button -- because a strategy that has passed validation, or is already being
 # forward tested, should show as such without anyone having to click through the stages by hand (2026-10-31).
-FUNNEL_STAGES = ("candidates", "tested", "optimized", "validated", "champion_candidate", "forward_tested", "production_ready")
+FUNNEL_STAGES = ("candidates", "tested", "optimized", "validated", "champion", "forward_tested", "production_ready")
 FUNNEL_TITLES: dict[str, str] = {
     "candidates": "Candidates",
     "tested": "Tested",
     "optimized": "Optimized",
     "validated": "Validated",
-    "champion_candidate": "Champion Candidate",
+    "champion": "Champion",
     "forward_tested": "Forward Tested",
     "production_ready": "Production Ready",
 }
@@ -402,7 +407,7 @@ FUNNEL_HREFS: dict[str, str] = {
     "tested": "/runs",
     "optimized": "/optimize-simple",
     "validated": "/validate-simple",
-    "champion_candidate": "/champion-simple",
+    "champion": "/champion-simple",
     "forward_tested": "/forward-test",
     "production_ready": "/champion-simple",
 }
@@ -415,23 +420,22 @@ def funnel_rank(metadata: dict[str, Any], promo: Optional[PromotionState] = None
     - optimized:          Quick Optimize / the GA or a Search Lab run is on record
     - validated:          all five validation checks ran, OR it was promoted to Validated or beyond, OR Full Pipeline ran its own
                           validation gates and none rejected it (verdict READY / MARGINAL)
-    - champion candidate: it PASSED validation. Anything promoted to Validated, Champion Candidate or further has; so has a strategy
-                          whose validation is complete and that meets the app's own Validated -> Champion Candidate gate (Eval, Payout
-                          and OOS thresholds met, last Champion Check not NOT READY)
+    - champion:           it was promoted to Champion or further, or it is complete and meets the whole Candidate -> Champion gate (all five
+                          checks on record, Eval / Payout / OOS thresholds met, last Champion Check not NOT READY)
     - forward tested:     promoted to Forward Testing, or a forward-test result is on record
     - production ready:   promoted to Production Ready, or deployed
     """
     metadata = metadata or {}
     promo = promo or evaluate_promotion(metadata)
-    idx = PROMOTION_STAGES.index(promo.stage)          # 0 candidate, 1 validated, 2 champion candidate, 3 forward testing, 4 production
+    idx = PROMOTION_STAGES.index(promo.stage)          # 0 candidate, 1 champion, 2 forward testing, 3 production ready
     check = metadata.get("last_champion_check") or {}
     verdict = str(check.get("verdict") or (metadata.get("last_run") or {}).get("verdict") or "").upper()
 
     optimized = bool(metadata.get("last_optimize") or metadata.get("last_search"))
     validation_complete = validation_summary(metadata)["complete"]
     validated = validation_complete or idx >= 1 or verdict in ("READY", "MARGINAL")
-    forward = idx >= 3 or bool(metadata.get("last_forward_test"))
-    production = idx >= 4 or bool(metadata.get("last_deploy"))
+    forward = idx >= 2 or bool(metadata.get("last_forward_test"))
+    production = idx >= 3 or bool(metadata.get("last_deploy"))
 
     rank = 0
     if metadata.get("last_run") or optimized or validated or metadata.get("validation_methods_run") or metadata.get("last_validation") or check:
@@ -442,7 +446,7 @@ def funnel_rank(metadata: dict[str, Any], promo: Optional[PromotionState] = None
         rank = max(rank, 3)
         passed = idx >= 1
         if not passed:
-            passed = all(r.met for r in _requirements_for_next_stage(metadata, "validated"))
+            passed = all(r.met for r in _requirements_for_next_stage(metadata, "candidate"))
         if passed:
             rank = max(rank, 4)
     if forward:
@@ -475,8 +479,7 @@ def pipeline_flow_nodes(rows: list[dict[str, Any]], tested_files: Optional[set] 
 
 
 _NEXT_AFTER: dict[str, str] = {
-    "validated": "Next: open Champion Board and promote it once the pass-probability and out-of-sample thresholds are met.",
-    "champion_candidate": "Next: start a forward test (Forward Test page) on paper or a demo account -- that is the step that proves it with real fills.",
+    "champion": "Next: start a forward test (Forward Test page) on paper or a demo account -- that is the step that proves it with real fills.",
     "forward_testing": "Next: let the forward test run; Production Ready unlocks after the minimum number of days and a clean result.",
     "production_ready": "Next: open Deploy Live and follow the connection checklist before risking an evaluation fee.",
 }
@@ -510,26 +513,19 @@ def promote_strategy(strategy_type: str, filename: str, metadata: Optional[dict[
 
     history = dict((metadata.get("promotion") or {}).get("history") or {})
     now = time.time()
-    crossed = state.path or [state.next_stage]
-    for st in crossed:
-        history[st] = now
-    final = crossed[-1]
+    final = state.next_stage
+    history[final] = now
     save_strategy_metadata(strategy_type, filename, {
         "promotion": {"stage": final, "history": history},
     }, merge=True)
-    if "champion_candidate" in crossed:
+    if final == "champion":
         try:                                    # the award that unlocks the Dashboard's live P&L panel
             from app import achievements
             achievements.bump("champions")
             achievements.evaluate()
         except Exception:  # noqa: BLE001 -- an award must never fail a promotion
             pass
-    if len(crossed) > 1:
-        passed = " and ".join(PROMOTION_STAGE_TITLES[x] for x in crossed[:-1])
-        msg = (f"Promoted '{filename}' straight to {PROMOTION_STAGE_TITLES[final]} -- it had already earned {passed}, so both were recorded. "
-               f"{_what_next_after(final)}")
-    else:
-        msg = f"Promoted '{filename}' to {PROMOTION_STAGE_TITLES[final]}. {_what_next_after(final)}"
+    msg = f"Promoted '{filename}' to {PROMOTION_STAGE_TITLES[final]}. {_what_next_after(final)}"
     return True, msg.strip(), final
 
 
@@ -537,6 +533,7 @@ def demote_strategy(strategy_type: str, filename: str, to_stage: str = "candidat
     """Manual downgrade -- e.g. a strategy that regressed during Forward
     Testing and should be pulled back rather than left showing a stage it
     no longer deserves. Always allowed (no gate on stepping backward)."""
+    to_stage = LEGACY_STAGE_ALIASES.get(to_stage, to_stage)
     if to_stage not in PROMOTION_STAGES:
         return False, f"Unknown stage '{to_stage}'."
     from app.strategy.library import load_strategy_metadata
@@ -561,14 +558,7 @@ def candidate_dimensions(metadata: dict[str, Any]) -> dict[str, Any]:
     # "last_validation" is only whichever check ran most recently (often one
     # with no efficiency figure, e.g. Sensitivity), so prefer the best OOS
     # reading from ANY validation method on record, then fall back to it.
-    oos_value = None
-    methods_run = metadata.get("validation_methods_run") or {}
-    for key in ("wfo", "cpcv", "wfga", "pbo"):
-        oos_value = oos_pct(methods_run.get(key) or {})
-        if oos_value is not None:
-            break
-    if oos_value is None:
-        oos_value = oos_pct(last_validation)
+    oos_value = _best_oos(metadata)
     _score = _num(last_champion_check, "t58_score")
     return {
         "status": status_from_verdict(verdict),
@@ -647,9 +637,7 @@ def row_next_step(row: dict[str, Any]) -> dict[str, str]:
     if promo["next_stage"] is None:
         return {"kind": "final", "text": "Final stage reached", "href": "", "label": ""}
     if promo["can_promote"]:
-        crossed = promo.get("path_titles") or []
-        extra = f" (it has already earned {' and '.join(crossed[:-1])}, so one press records both)" if len(crossed) > 1 else ""
-        return {"kind": "promote", "text": f"Ready for {promo['next_stage_title']}{extra}", "href": "", "label": ""}
+        return {"kind": "promote", "text": f"Ready for {promo['next_stage_title']}: press Promote to {promo['next_stage_title']}", "href": "", "label": ""}
 
     unmet = [r for r in promo["requirements"] if not r["met"]]
     first = unmet[0]
@@ -753,13 +741,13 @@ def list_board(strategy_type: Optional[str] = None) -> list[dict[str, Any]]:
 
 def strongest_validated_candidate(rows: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
     """The board's actual "champion" pick: the strongest candidate strategy
-    that has already earned at least "validated" promotion stage (i.e. has
+    that has already been promoted to Champion or beyond (i.e. has
     genuinely been through this app's own validation tools, not just
     whichever one happens to post the highest raw metric). Among eligible
     rows, ranks by promotion-stage depth first (further along the pipeline
     beats a higher raw score at an earlier stage), then by composite
     strength as the tiebreaker. Returns None -- not a fallback guess --
-    when nothing has reached "validated" yet, so the caller can say so
+    when nothing has reached Champion yet, so the caller can say so
     honestly instead of crowning an unvalidated strategy."""
     eligible = [r for r in rows if r["promotion"]["stage"] != "candidate"]
     if not eligible:
@@ -961,8 +949,8 @@ def five_question_snapshot(current: Optional[dict], rows: list[dict[str, Any]]) 
 # ---------------------------------------------------------------------------
 PODIUM_PLACES = (1, 2, 3)
 PODIUM_LABELS = {1: "1st place", 2: "2nd place", 3: "3rd place"}
-# A strategy can take a podium place once it has cleared the Champion Candidate gate.
-PODIUM_MIN_STAGE = "champion_candidate"
+# A strategy can take a podium place once it has been promoted to Champion.
+PODIUM_MIN_STAGE = "champion"
 _FORWARD_OK_LADDER = ("FORWARD-TEST CANDIDATE", "EVALUATE", "FUNDED")
 
 
@@ -1005,7 +993,7 @@ def assessment_for_row(row: dict[str, Any]) -> dict[str, Any]:
         headline, tone = "Final stage reached", "ok"
     elif eligible:
         headline, tone = "Eligible", "ok"
-    elif can_stage and issues:
+    elif issues:
         headline, tone = "Blocked by an open issue", "bad"
     else:
         headline, tone = "Not eligible yet", "warn"
