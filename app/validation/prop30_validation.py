@@ -6,7 +6,10 @@ What it refuses to do:
     selection cut-off plus an embargo -- a holdout read before is development data (``independence_audit``);
   * report eventual / chain Monte Carlo pass as a 30-day pass (it never consumes one);
   * declare success from simulation alone: the best verdict a simulation-only run can reach is ``ESTABLISHED_ON_HOLDOUT_PENDING_FORWARD``;
-    ``CONFIRMED`` additionally needs forward results recorded in ``ForwardRegistry``.
+    ``CONFIRMED`` additionally needs forward results recorded in ``ForwardRegistry`` AND a PRE-REGISTERED sequential test (Wald SPRT,
+    ``app.validation.sequential_forward``) that has crossed its accept boundary. (Until 2026-11-11 this was "Wilson 95% lower bound >= 65%
+    on >= 6 attempts", which is unreachable in practice: at n = 12 it needs 12/12 passes, and a true 80% strategy clears it ~7% of the time.
+    The confidence requirement was NOT loosened -- the test was replaced by one whose error rates and power are fixed in advance.)
 Statistics come from ``app.prop.thirty_day`` (dependence-aware intervals, calendar-day clock from purchase).
 """
 from __future__ import annotations
@@ -22,6 +25,7 @@ import pandas as pd
 
 from app.prop.simulator import PropRules
 from app.prop.thirty_day import ThirtyDayConfig, ThirtyDayResult, TradeLedger, claim_target_achieved, evaluate_thirty_day
+from app.validation.sequential_forward import ACCEPT_TARGET, SequentialDesign, decide, forward_outcome_flags, independent_attempts
 
 DEFAULT_EMBARGO_DAYS = 30
 
@@ -77,7 +81,8 @@ def independence_audit(parts: Partitions, observed_ranges: Sequence[ObservedRang
 
 # ------------------------------------------------------------------------------------------------------------------ forward test
 class ForwardRegistry:
-    """Append-only JSON log of forward (paper/live) 30-day attempts for a frozen configuration."""
+    """Append-only JSON log of forward (paper/live) 30-day attempts for a frozen configuration, plus the PRE-REGISTERED sequential design
+    that will judge them. Rows without a ``kind`` (files written before 2026-11-11) are attempts."""
 
     def __init__(self, path):
         self.path = Path(path)
@@ -88,21 +93,54 @@ class ForwardRegistry:
         except (OSError, ValueError):
             return []
 
+    def _save(self, rows: list) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(rows, indent=2))
+
+    def _attempts(self, config_id: str) -> list:
+        return [r for r in self._load() if r.get("kind", "attempt") == "attempt" and r["config_id"] == config_id]
+
+    def register_design(self, config_id: str, design: SequentialDesign | None = None) -> SequentialDesign:
+        """Pre-register the stopping rule for ``config_id``. Idempotent for the same design; a DIFFERENT design for an already registered
+        configuration is refused (changing the rule after seeing results is how forward tests get gamed)."""
+        design = design or SequentialDesign()
+        rows = self._load()
+        for r in rows:
+            if r.get("kind") == "design" and r["config_id"] == config_id:
+                if r["design"] != design.to_dict():
+                    raise ValueError(f"A different sequential design is already pre-registered for {config_id!r}; it cannot be changed.")
+                return design
+        rows.append({"kind": "design", "config_id": config_id, "design": design.to_dict()})
+        self._save(rows)
+        return design
+
+    def design(self, config_id: str) -> SequentialDesign | None:
+        for r in self._load():
+            if r.get("kind") == "design" and r["config_id"] == config_id:
+                return SequentialDesign(**r["design"])
+        return None
+
     def record(self, config_id: str, start: str, outcome: str, days: float | None = None) -> None:
         if outcome not in ("passed", "failed", "open"):
             raise ValueError("outcome must be passed / failed / open")
         rows = self._load()
-        rows.append({"config_id": config_id, "start": start, "outcome": outcome, "days": days})
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(rows, indent=2))
+        rows.append({"kind": "attempt", "config_id": config_id, "start": start, "outcome": outcome, "days": days})
+        self._save(rows)
 
     def summary(self, config_id: str, horizon_days: int = 30) -> dict:
-        rows = [r for r in self._load() if r["config_id"] == config_id and r["outcome"] != "open"]
-        n = len(rows)
-        k = sum(1 for r in rows if r["outcome"] == "passed" and (r.get("days") is None or r["days"] <= horizon_days))
+        """Resolved forward attempts, the descriptive Wilson interval (information only) and the SEQUENTIAL decision. The decision uses
+        the pre-registered design (the default design is registered on first use) over NON-OVERLAPPING attempts only."""
+        resolved = [r for r in self._attempts(config_id) if r["outcome"] != "open"]
+        n = len(resolved)
+        k = sum(1 for r in resolved if r["outcome"] == "passed" and (r.get("days") is None or r["days"] <= horizon_days))
         from app.prop.thirty_day import wilson_interval
         lo, hi = wilson_interval(k / n, n) if n else (0.0, 1.0)
-        return {"n_resolved": n, "n_passed": k, "p_pass": (k / n) if n else None, "lower": lo, "upper": hi}
+        design = self.design(config_id) or SequentialDesign(horizon_days=horizon_days)
+        kept, n_excl = independent_attempts(resolved, design.horizon_days)
+        seq = decide(design, forward_outcome_flags(kept, design.horizon_days))
+        seq["n_excluded_overlap"] = int(n_excl)
+        seq["design_registered"] = self.design(config_id) is not None
+        return {"n_resolved": n, "n_passed": k, "p_pass": (k / n) if n else None, "lower": lo, "upper": hi, "sequential": seq}
 
 
 # ------------------------------------------------------------------------------------------------------------------ validation
@@ -154,7 +192,8 @@ def walk_forward_spans(start, end, test_days: int = 120, step_days: int | None =
 def validate_prop30(ledger: TradeLedger, rules: PropRules, parts: Partitions, *, config_id: str = "candidate",
                     observed_ranges: Sequence[ObservedRange] = (), cfg: ThirtyDayConfig | None = None,
                     forward: ForwardRegistry | None = None, sealed_ledger=None, sealed_fp: str | None = None,
-                    min_forward_attempts: int = 6, wf_test_days: int = 120) -> ValidationReport:
+                    min_forward_attempts: int = 6,  # retained for API compatibility; the sequential design now sets the evidence needed
+                    wf_test_days: int = 120) -> ValidationReport:
     cfg = cfg or ThirtyDayConfig()
     target = cfg.target_probability
     reasons: list = []
@@ -209,9 +248,15 @@ def validate_prop30(ledger: TradeLedger, rules: PropRules, parts: Partitions, *,
     if reasons:
         verdict = "NOT_ESTABLISHED"
     else:
-        fwd_ok = bool(fwd and fwd["n_resolved"] >= min_forward_attempts and fwd["lower"] >= target)
+        seq = (fwd or {}).get("sequential")
+        fwd_ok = bool(seq and seq["decision"] == ACCEPT_TARGET)
         verdict = "CONFIRMED" if fwd_ok else "ESTABLISHED_ON_HOLDOUT_PENDING_FORWARD"
         if not fwd_ok:
-            reasons.append(f"Simulation alone cannot confirm success: needs >= {min_forward_attempts} resolved forward attempts with a lower bound "
-                           f">= {target * 100:.0f}% (have {0 if not fwd else fwd['n_resolved']}).")
+            if seq is None:
+                reasons.append("Simulation alone cannot confirm success: no forward results are recorded. Pre-register the sequential design "
+                               "(ForwardRegistry.register_design) and record non-overlapping forward attempts.")
+            else:
+                reasons.append(f"Simulation alone cannot confirm success: the pre-registered sequential forward test is {seq['decision']} after "
+                               f"{seq['n']} independent attempt(s) ({seq['passes']} passed; LLR {seq['llr']:+.2f}, accept at {seq['accept_boundary']:+.2f}, "
+                               f"reject at {seq['reject_boundary']:+.2f}).")
     return ValidationReport(config_id, verdict, reasons, parts.to_dict(), aud.to_dict(), _brief(disc), _brief(dev), wf, rob, hold, fwd, target)

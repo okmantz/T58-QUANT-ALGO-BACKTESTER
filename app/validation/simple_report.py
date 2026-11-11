@@ -548,7 +548,7 @@ def _next_step(items: list[dict], ctx: dict, gating_missing: list[str]) -> dict:
         return {
             "key": "promote_with_care", "tone": "warn",
             "title": "Promote it, but treat the amber checks as homework",
-            "why": f"No check failed. {names} came back borderline -- fine for a Champion Candidate, worth re-checking before real money.",
+            "why": f"No check failed. {names} came back borderline -- fine for a Champion, worth re-checking before real money.",
             "label": "Go to Champion", "href": _href("/champion-simple", ctx),
         }
 
