@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-11 - audit follow-ups: 30-day scoring wired in, sequential forward test, champion ladder, mission fix
+- **Index-401 crash**: `PythonStrategy` cached the imported module, so a strategy holding state sized for one DataFrame raised `index N is out of bounds` on the next, longer one. On failure the cached module is evicted and the call retried once on a fresh import; genuine strategy errors still surface unchanged.
+- **Discovery Engine scores the 30-day objective**: every champion carries a `thirty_day` record (`evaluate_thirty_day`: P(pass <= 30d), dependence-aware 95% interval, bust rate) and prop-mode ranking is by (lower bound, P(pass 30d), edge_lb_r). The CLI takes `--prop-preset` (default `lucid_50k`) instead of a bare `PropRules()`.
+- **Forward gate**: the "95% lower bound >= 65%" gate needed 12/12 passes at n=12 (6.9% power at a true 80%). It is not loosened; `app/validation/sequential_forward.py` adds a pre-registered Wald SPRT (p0 0.40, p1 0.65, alpha 0.05, beta 0.20, n_max 40) with an exact operating characteristic, non-overlapping attempts and an INCONCLUSIVE outcome. `validate_prop30` confirms only on ACCEPT_TARGET.
+- **Opportunity scanner**: `max_contracts` is in minis (x10 micros), one position at a time, and trades are cut at the preset's flatten time (late entries skipped).
+- **Lucid**: payout cadence is 5 trading days (was 3).
+- **Exit lab**: simulation starts on the entry bar for open-filled entries (`fills_at_open`); close-filled entries still start at the next bar.
+- **Champion ladder**: candidate -> champion -> forward testing -> production ready. One "Promote to Champion" step replaces "Promote to Validated"; legacy `validated` reads as candidate and `champion_candidate` as champion.
+- **T58 Mission** follows the strategy's record on the Champion board, so a tested, validated and promoted strategy no longer leaves the mission on "Test a strategy".
+
 ## 2026-11-10 - 30-day prop evaluation research initiative
 - **New evaluator** `app/prop/thirty_day.py`: P(pass within 30/60 calendar days of purchase), purchased every weekday, floating drawdown/daily loss, cost stress, regimes, losing streaks and a dependence-aware 95% interval. It never reports eventual/chain MC pass as a 30-day number.
 - **Audit fixes**: `sizing_summary.skip_rate` is now per signal (was episodes/bars); `run_attempt_replay` gains opt-in calendar-day, truncation and mid-signal controls (defaults unchanged); rolling-evaluation labels say *trading* days.
