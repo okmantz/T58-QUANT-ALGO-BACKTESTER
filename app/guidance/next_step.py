@@ -179,7 +179,7 @@ def resolve(board_row: Optional[dict] = None, run: Optional[dict] = None) -> dic
 
     # ---- past validation: forward / demo -------------------------------------------------------------------
     stage = f.get("stage")
-    if stage in ("champion_candidate",):
+    if stage in ("champion", "champion_candidate"):
         return _out("forward_test", "info", "Forward-test it for 2+ weeks",
                     "Validated on history; now it has to survive data it has never seen.",
                     ["1. Start a forward test on the same instrument.", "2. Don't touch the parameters while it runs.",
