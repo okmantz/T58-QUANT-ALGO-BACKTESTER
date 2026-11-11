@@ -53,12 +53,13 @@ def test_status_from_verdict():
 def test_fresh_strategy_starts_at_candidate_and_cannot_promote():
     state = cb.evaluate_promotion({})
     assert state.stage == "candidate"
-    assert state.next_stage == "validated"
+    assert state.next_stage == "champion"          # ONE promotion step: there is no "Promote to Validated"
+    assert state.next_stage_title == "Champion"
     assert state.can_promote is False
     assert any(not r.met for r in state.requirements)
 
 
-def test_candidate_to_validated_requires_backtest_and_validation():
+def test_candidate_to_champion_requires_backtest_and_validation():
     md = {"last_run": {"eval_pass_probability": 80}}
     state = cb.evaluate_promotion(md)
     # Backtested, but none of the 5 deeper validation methods run yet ->
@@ -72,7 +73,7 @@ def test_candidate_to_validated_requires_backtest_and_validation():
         assert req_by_key[f"validated_{method}"].met is False
 
 
-def test_candidate_to_validated_partial_credit_increases_per_method():
+def test_candidate_to_champion_partial_credit_increases_per_method():
     """PARTIAL-CREDIT FIX (2026-09): running each additional one of the 5
     validation methods should move stage_pct forward on its own, not just
     flip a single boolean once and then sit still no matter how many more
@@ -109,23 +110,21 @@ def test_promote_strategy_succeeds_once_requirements_met():
         library.record_validation_result(stype, fname, {"method": method, "efficiency": 0.6})
     ok, message, new_stage = cb.promote_strategy(stype, fname)
     assert ok is True
-    # 2026-11-04: every gate this strategy has already earned is crossed in ONE press (Validated AND Champion Candidate here),
-    # so a strategy that passed everything is promoted to Champion Candidate, not parked at Validated.
-    assert new_stage == "champion_candidate"
-    assert "Validated" in message and "Champion Candidate" in message
+    # 2026-11-11: tested -> optimized -> validated is evidence the tools record; ONE press then promotes straight to Champion.
+    assert new_stage == "champion"
+    assert "Champion" in message and "Validated" not in message
 
     # Never automatic: re-reading metadata directly must show the same
     # stage this call just wrote -- nothing else could have set it.
     meta = library.load_strategy_metadata(stype, fname)
-    assert meta["promotion"]["stage"] == "champion_candidate"
-    assert "validated" in meta["promotion"]["history"] and "champion_candidate" in meta["promotion"]["history"]
+    assert meta["promotion"]["stage"] == "champion"
+    assert "champion" in meta["promotion"]["history"] and "validated" not in meta["promotion"]["history"]
 
 
 def test_cannot_skip_a_stage():
     stype, fname = _seed()
     library.save_strategy_metadata(stype, fname, {"promotion": {"stage": "candidate", "history": {}}}, merge=True)
-    # Even with strong metrics, promotion never enters Forward Testing by cascade: it stops at champion_candidate
-    # (starting a forward test is deliberate) and every crossed stage is recorded in the history.
+    # Even with strong metrics, promotion never enters Forward Testing: it stops at champion (starting a forward test is deliberate).
     library.save_strategy_metadata(stype, fname, {
         "last_run": {"eval_pass_probability": 95, "first_payout_probability": 90, "verdict": "READY"},
         "last_champion_check": {"verdict": "READY", "t58_score": 95},
@@ -134,11 +133,11 @@ def test_cannot_skip_a_stage():
         library.record_validation_result(stype, fname, {"method": method, "efficiency": 0.9})
     ok, _msg, new_stage = cb.promote_strategy(stype, fname)
     assert ok is True
-    assert new_stage == "champion_candidate"  # earned both gates; never forward_testing
+    assert new_stage == "champion"  # never forward_testing
     assert "forward_testing" not in library.load_strategy_metadata(stype, fname)["promotion"]["history"]
 
 
-def test_validated_to_champion_candidate_requires_thresholds():
+def test_a_legacy_validated_stage_reads_as_candidate_and_still_needs_the_champion_thresholds():
     stype, fname = _seed()
     library.save_strategy_metadata(stype, fname, {
         "promotion": {"stage": "validated", "history": {"validated": 1.0}},
@@ -152,10 +151,17 @@ def test_validated_to_champion_candidate_requires_thresholds():
     assert "60%" in message  # eval threshold called out specifically
 
 
-def test_champion_candidate_requires_ready_verdict():
+def test_a_legacy_champion_candidate_stage_reads_as_champion():
+    assert cb.normalize_stage("champion_candidate") == "champion" and cb.normalize_stage("validated") == "candidate"
+    assert cb.normalize_stage("nonsense") == "candidate" and cb.normalize_stage(None) == "candidate"
+    st = cb.evaluate_promotion({"promotion": {"stage": "champion_candidate", "history": {}}})
+    assert st.stage == "champion" and st.stage_title == "Champion" and st.next_stage == "forward_testing"
+
+
+def test_champion_requires_ready_verdict_for_forward_testing():
     stype, fname = _seed()
     library.save_strategy_metadata(stype, fname, {
-        "promotion": {"stage": "champion_candidate", "history": {"champion_candidate": 1.0}},
+        "promotion": {"stage": "champion", "history": {"champion": 1.0}},
         "last_run": {"eval_pass_probability": 85, "verdict": "MARGINAL"},
         "last_champion_check": {"verdict": "MARGINAL"},
     }, merge=True)
@@ -185,11 +191,11 @@ def test_production_ready_is_terminal():
 
 def test_demote_strategy_always_allowed():
     stype, fname = _seed()
-    library.save_strategy_metadata(stype, fname, {"promotion": {"stage": "champion_candidate", "history": {}}}, merge=True)
-    ok, message = cb.demote_strategy(stype, fname, "validated")
+    library.save_strategy_metadata(stype, fname, {"promotion": {"stage": "champion", "history": {}}}, merge=True)
+    ok, message = cb.demote_strategy(stype, fname, "candidate")
     assert ok is True
     meta = library.load_strategy_metadata(stype, fname)
-    assert meta["promotion"]["stage"] == "validated"
+    assert meta["promotion"]["stage"] == "candidate"
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +222,7 @@ def test_strongest_validated_candidate_ignores_unvalidated_high_metrics():
     # ...and a modest but actually-validated strategy.
     _stype2, fname_mod = _seed("modest_but_validated.py")
     library.save_strategy_metadata(stype, fname_mod, {
-        "promotion": {"stage": "validated", "history": {"validated": 1.0}},
+        "promotion": {"stage": "champion", "history": {"champion": 1.0}},
         "last_run": {"eval_pass_probability": 65, "first_payout_probability": 60},
         "last_validation": {"method": "cpcv", "efficiency": 0.55},
     }, merge=True)
@@ -236,7 +242,7 @@ def test_strongest_validated_candidate_none_when_nothing_validated():
 def test_five_question_snapshot_prefers_current_strategy():
     stype, fname = _seed("tracked.py")
     library.save_strategy_metadata(stype, fname, {
-        "promotion": {"stage": "validated", "history": {"validated": 1.0}},
+        "promotion": {"stage": "champion", "history": {"champion": 1.0}},
         "last_run": {"eval_pass_probability": 55, "first_payout_probability": 50, "verdict": "MARGINAL"},
         "last_validation": {"method": "cpcv", "efficiency": 0.3},
         "last_champion_check": {"verdict": "MARGINAL"},
@@ -247,7 +253,7 @@ def test_five_question_snapshot_prefers_current_strategy():
     snap = cb.five_question_snapshot({"strategy_name": "tracked", "instrument": "ES"}, rows)
     assert snap is not None
     assert snap["what"] == "tracked"
-    assert snap["where"] == "Validated"
+    assert snap["where"] == "Champion"
     assert snap["is_it_working"] == "MARGINAL"
     assert "OOS" in snap["why"] or "degradation" in snap["why"].lower()
 

@@ -15,7 +15,7 @@ def clean_library_dir(tmp_path, monkeypatch):
     shutil.rmtree(base, ignore_errors=True)
 
 
-def _seed(name, *, instrument="GC", score=70.0, stage="champion_candidate", eval_pct=75.0):
+def _seed(name, *, instrument="GC", score=70.0, stage="champion", eval_pct=75.0):
     library.save_strategy_bytes(b"print('x')\n", name, "python")
     methods = {m: {"recorded_at": 1, "efficiency": 0.7} for m in library.VALIDATION_STEP_METHODS}
     library.save_strategy_metadata("python", name, {
@@ -33,7 +33,7 @@ def _row(name):
 
 
 def test_assessment_eligible_has_score_and_four_checks():
-    _seed("a.py", stage="validated")
+    _seed("a.py", stage="candidate")
     a = cb.assessment_for_row(_row("a.py"))
     assert a["eligible"] and a["headline"] == "Eligible" and a["score"] == 70.0
     assert [c["label"] for c in a["checks"]] == ["Validation completed", "READY requirements satisfied",
@@ -42,7 +42,7 @@ def test_assessment_eligible_has_score_and_four_checks():
 
 
 def test_open_lookahead_issue_blocks_even_when_gates_pass():
-    _seed("b.py", stage="validated")
+    _seed("b.py", stage="candidate")
     library.save_strategy_metadata("python", "b.py", {"lookahead": {"clean": False}})
     a = cb.assessment_for_row(_row("b.py"))
     assert not a["eligible"] and a["tone"] == "bad" and not a["checks"][3]["ok"]
@@ -79,14 +79,14 @@ def test_same_market_needs_explicit_replace_and_comparison_names_a_leader():
 
 
 def test_unready_strategy_cannot_take_a_place():
-    _seed("c.py", stage="validated")
+    _seed("c.py", stage="candidate")
     ok, msg = cb.award_place("python", "c.py", 1)
     assert not ok and "Champion Candidate" in msg
 
 
 def test_champion_page_renders_with_assessment_and_without_rerun(tmp_path):
     import app.web.server as server
-    _seed("pg.py", stage="validated")
+    _seed("pg.py", stage="candidate")
     server.app.config["TESTING"] = True
     with server.app.test_client() as c:
         r = c.get("/champion-simple")
