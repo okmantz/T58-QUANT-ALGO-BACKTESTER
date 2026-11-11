@@ -2,7 +2,7 @@
 
     python -m scripts.run_discovery_engine --preset search_lab --data data/raw/NQ_5m.csv --symbol NQ [--families a,b | ready | all]
                                            [--pool ES=data/raw/ES_5m.csv --pool YM=...] [--max-candidates 2000] [--seed 42]
-                                           [--out reports/discovery_run.json] [--retest]
+                                           [--prop-preset lucid_50k] [--out reports/discovery_run.json] [--retest]
 
 Presets (the old labs): search_lab, evolution_lab, evolution_loop, forge, speed_run, discovery.
 Every preset shares ONE objective (edge_lb_r), ONE entry floor (100+ trades, t>=1, cost<0.15R), ONE lifetime trial ledger, a sealed slice
@@ -28,11 +28,22 @@ def _load(path: str):
     return res.dataframe
 
 
-def _risk(symbol: str):
+def _risk(symbol: str, balance: float = 100000.0):
     from app.backtest.risk import RiskConfig
     from app.data.instrument_specs import apply_any_instrument_spec, micro_equivalent
     m = micro_equivalent(symbol.upper())
-    return apply_any_instrument_spec(RiskConfig(initial_balance=100000, risk_mode="percent", risk_value=0.5), (m.symbol if m else symbol.upper()))
+    return apply_any_instrument_spec(RiskConfig(initial_balance=float(balance), risk_mode="percent", risk_value=0.5), (m.symbol if m else symbol.upper()))
+
+
+def _prop(preset_key: str):
+    """The REAL prop-firm preset (e.g. lucid_50k) as ``(PropRules, account_size)``. Before 2026-11-11 the CLI passed a bare ``PropRules()``, so
+    its pass/fail never reflected any firm's rules."""
+    from app.prop.presets import get_preset
+    try:
+        p = get_preset(preset_key)
+    except Exception as exc:  # noqa: BLE001
+        raise SystemExit(f"unknown --prop-preset {preset_key!r}: {exc}")
+    return p.to_prop_rules(), float(p.account_size)
 
 
 def main(argv=None) -> int:
@@ -49,16 +60,16 @@ def main(argv=None) -> int:
     ap.add_argument("--sealed-frac", type=float, default=0.10)
     ap.add_argument("--out", default="reports/discovery_run.json")
     ap.add_argument("--retest", action="store_true")
+    ap.add_argument("--prop-preset", default="lucid_50k", help="prop-firm preset the 30-day objective is scored under (default lucid_50k)")
     a = ap.parse_args(argv)
 
     from app.discovery.hypothesis import preregister_v13_families
     from app.discovery_engine.engine import DiscoveryEngine, EngineRequest
     from app.discovery_engine.retest import RetestStore, lab_ranking, run_retests
-    from app.prop.simulator import PropRules
-
     preregister_v13_families()
+    rules, balance = _prop(a.prop_preset)
     df = _load(a.data)
-    risk = _risk(a.symbol)
+    risk = _risk(a.symbol, balance)
     if a.retest:
         for key, out in run_retests(df, risk, RetestStore(), instrument=a.symbol, progress=print):
             pass
@@ -67,11 +78,11 @@ def main(argv=None) -> int:
     frames, risks = {a.symbol.upper(): df}, {a.symbol.upper(): risk}
     for item in a.pool:
         sym, _, path = item.partition("=")
-        frames[sym.upper()], risks[sym.upper()] = _load(path), _risk(sym)
+        frames[sym.upper()], risks[sym.upper()] = _load(path), _risk(sym, balance)
     fams = None
     if a.families:
         fams = a.families if a.families in ("all", "ready") else [f.strip() for f in a.families.split(",") if f.strip()]
-    req = EngineRequest(preset=a.preset, df=df, risk=risk, prop_rules=PropRules(), instrument=a.symbol.upper(), timeframe=a.timeframe, families=fams,
+    req = EngineRequest(preset=a.preset, df=df, risk=risk, prop_rules=rules, instrument=a.symbol.upper(), timeframe=a.timeframe, families=fams,
                         seed=a.seed, sealed_frac=a.sealed_frac, frames=frames, risks=risks, max_candidates=a.max_candidates or None,
                         max_promote=a.max_promote or None, progress_cb=print)
     res = DiscoveryEngine().run(req)
@@ -82,7 +93,9 @@ def main(argv=None) -> int:
     for c, p in zip(res.champions, res.promotions):
         verdict = "PASS -> forward test" if p.get("passed") else f"FAIL at {p.get('failed_step')}: {p.get('failed_reason')}"
         lb = c.get("edge_lb_r")
-        print(f"  {c.get('family') or '?':30s} edge_lb_r={'n/a' if lb is None else format(lb, '+.3f')}  {verdict}")
+        td = c.get("thirty_day")
+        p30 = "" if not td else f"  P(pass<=30d)={td['p_pass_30'] * 100:.1f}% (95% lb {td['lower_bound'] * 100:.1f}%)"
+        print(f"  {c.get('family') or '?':30s} edge_lb_r={'n/a' if lb is None else format(lb, '+.3f')}{p30}  {verdict}")
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(res.to_dict(), indent=1, default=str), encoding="utf-8")
