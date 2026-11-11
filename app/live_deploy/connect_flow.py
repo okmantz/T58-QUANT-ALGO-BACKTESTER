@@ -370,7 +370,7 @@ def preflight_checklist(
         except Exception:  # noqa: BLE001
             pass
 
-    # Where this strategy is on the journey (Candidate -> Validated -> Champion Candidate -> Forward Testing -> Production Ready)
+    # Where this strategy is on the journey (Candidate -> Champion -> Forward Testing -> Production Ready)
     if strategy_meta is not None:
         try:
             from app.scoring.champion_board import PROMOTION_STAGE_TITLES, PROMOTION_STAGES, evaluate_promotion
