@@ -50,8 +50,16 @@ def test_create_page_has_no_start_here_section():
     body = r.get_data(as_text=True)
     assert "Start Here" not in body
     assert "What this section is for" not in body
-    for tool in _SECTION_START_HERE["create"]["tools"]:
-        assert f'href="{tool["href"]}"' in body
+    # Create is just the two paths: a strategy panel and the Discovery Engine.
+    assert "I have a strategy" in body
+    assert 'href="/discovery-engine"' in body
+    assert "Everything in Create" not in body
+    main = body[body.index("cr-paths"):]
+    assert "Strategy Library" not in main and "AI Research" not in main
+    for tab in ("Manual", "Python", "PineScript", "MQL5", "Generate Strategies", "Pine Indicator Creator"):
+        assert tab in body
+    assert "See if it survives" not in main and "lc-test-link" not in main
+    assert "Next step" in main
 
 
 def test_test_start_here_redirects_to_the_test_page():

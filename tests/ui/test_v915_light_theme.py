@@ -25,7 +25,7 @@ LIFECYCLE = ROOT / "app/web/templates/_lifecycle_css.html"
 # blocks removed). If a dark declaration changes, these break.
 # 2026-10-22: theme.css digest re-pinned after the Personalize work (seasonal backdrops, Bible verse bar, live-PnL pill) ADDED
 # new dark-scope rules; no existing dark token or rule was changed (test_dark_token_values_pinned still passes).
-DARK_HASH = {  # re-pinned 2026-11: only NEW selectors added (adv-sec, pf-*, readability block); no existing dark rule changed
+DARK_HASH = {  # re-pinned 2026-11 (readability pass: lighter dark text tokens); only NEW selectors added (adv-sec, pf-*, readability block); no existing dark rule changed
     # NOTE (WS-E, 2026-10-10): hashes measured on the pre-task working
     # tree with the same normalisation _dark_hash() applies. The WS-E
     # edits only ADD light-scoped rules, so a correct tree reproduces
@@ -42,7 +42,7 @@ DARK_HASH = {  # re-pinned 2026-11: only NEW selectors added (adv-sec, pf-*, rea
     # Re-pinned 2026-10-30: Lucide sidebar icons (.lu, muted nav-icon colour), the notification bell + inbox panel rules, and the
     # three unlockable backdrops (obsidian-gold / sakura-reverie / abyssal-blue) were added to theme.css (commits f49c523..e0ec4f8).
     # No dark token moved (test_dark_token_values_pinned still passes).
-    "theme.css": "4829f4129edd06972eaa66d6c65b3a2f86cc2101775bea9f8f8452b5c7de234b",
+    "theme.css": "791e32c07aeae8a2a1adee38ad3346a1c8609e68e4b2cb384f5d28694a507ab6",
     # Re-pinned 2026-10-28: .badge.pass now uses var(--ok) instead of var(--teal) (commit 8f643dd); in the dark scope both are #35e0b0.
     # Re-pinned 2026-10-30: the "Why this verdict" waterfall component (.wf / .wf-step rules) was ADDED (commit f49c523); no existing rule changed.
     "job-theme.css": "1ea80e4f3812928af01d78a9f684cf1e6d13381ea3cebcdba7662127ba89b0a2",
@@ -51,22 +51,22 @@ DARK_HASH = {  # re-pinned 2026-11: only NEW selectors added (adv-sec, pf-*, rea
     # Re-pinned (repo cleanup): the pages' hard-coded colors became var(--token) references whose DARK
     # values are the old literals (verified token-by-token: reverse-substituting reproduces the original CSS
     # exactly), and theme.css gained the page-token block. job-theme.css's pin had already drifted.
-    "_lifecycle_css.html": "49697425da247eb7abb70ff39bc2f08a8df2a699cd2d3490aa0f00fe2777dff4",
+    "_lifecycle_css.html": "cc807ab8f2137b7b9180299e487e7a123340e1f376dc737f998a0ae8c29b801a",
 }
 
 DARK_TOKENS = {  # :root values as found at task start -- do not move
     "--bg": "#05070a", "--panel": "#0d1017", "--panel-2": "#10141c",
     "--panel-3": "#151a24", "--border": "#1c2230",
     "--border-light": "#2a3242", "--text": "#e7ebf2",
-    "--text-muted": "#8a93a6", "--text-dim": "#5b6478",
+    "--text-muted": "#b9c2d2", "--text-dim": "#9ba6ba",
     "--teal": "#35e0b0", "--violet": "#8b7cff", "--coral": "#ff6f6f",
     "--amber": "#f0b429",
 }
 LC_DARK_TOKENS = {  # .lc-scope values as found at task start
     "--lc-bg": "#0a0a0d", "--lc-panel": "#10131a", "--lc-panel2": "#141926",
     "--lc-panel3": "#1a2130", "--lc-border": "#232b3a",
-    "--lc-border2": "#2d3648", "--lc-text": "#e8eaf0",
-    "--lc-muted": "#8b93a5", "--lc-faint": "#5c6478", "--lc-acc": "#00e5a0",
+    "--lc-border2": "#2d3648", "--lc-text": "#eef0f5",
+    "--lc-muted": "#b6bfcf", "--lc-faint": "#9aa5b9", "--lc-acc": "#00e5a0",
 }
 
 

@@ -18,6 +18,17 @@ def iso(tmp_path, monkeypatch):
     return tmp_path
 
 
+def _promoted(monkeypatch):
+    """The current strategy has been tested and promoted to champion (the board lookup is its own, separately tested, module)."""
+    monkeypatch.setattr(state, "_champion_inputs", lambda st: {"found": True, "tested": True, "promoted": True, "stage_title": "Champion Candidate"})
+
+
+def test_timeline_is_the_seven_requested_stages():
+    assert [label for _k, label, _h in state.STAGES] == [
+        "Test a strategy", "Optimize or validate a strategy", "Promote strategy to champion", "Complete forward testing",
+        "Purchase evaluation", "Pass the evaluation", "Receive the first payout"]
+
+
 def _recent(i):
     """A date inside the journey's rolling window whatever day the suite runs (hard-coded 2026-10-xx dates aged out of it)."""
     return (date.today() - timedelta(days=i % 27 + 1)).isoformat()
@@ -31,7 +42,7 @@ def trades(n, pnl=10.0, **kw):
 
 def test_fresh_user_starts_at_strategy_with_labelled_example(iso):
     r = state.compute()
-    assert r["current"] == "strategy" and r["done"] == 0 and len(r["stages"]) == 7
+    assert r["current"] == "test" and r["done"] == 0 and len(r["stages"]) == 7
     assert r["dashboard"]["illustrative"] and "Example only" in r["dashboard"]["note"]
     assert any("strategy" in a.lower() for a in r["next_actions"])
 
@@ -40,10 +51,21 @@ def test_forward_requirement_counts_down(iso, monkeypatch):
     from app.reports import strategy_state as ss
     monkeypatch.setattr(ss, "get_current_strategy", lambda: {"strategy_name": "alpha", "instrument": "MES", "library_type": "", "library_filename": ""})
     monkeypatch.setattr(ss, "robustness_score", lambda *a, **k: {"ran_count": 4, "passed_count": 4, "decided_count": 4})
+    _promoted(monkeypatch)
     trades(15)
     r = state.compute()
-    assert r["current"] == "forward" and r["stages"][0]["state"] == "done"
+    assert r["current"] == "forward" and [x["state"] for x in r["stages"][:3]] == ["done"] * 3
     assert "You need 15 more qualifying trades." in r["next_actions"]
+
+
+def test_champion_stage_waits_for_the_promotion(iso, monkeypatch):
+    from app.reports import strategy_state as ss
+    monkeypatch.setattr(ss, "get_current_strategy", lambda: {"strategy_name": "alpha", "instrument": "MES", "library_type": "", "library_filename": ""})
+    monkeypatch.setattr(ss, "robustness_score", lambda *a, **k: {"ran_count": 4, "passed_count": 4, "decided_count": 4})
+    monkeypatch.setattr(state, "_champion_inputs", lambda st: {"found": True, "tested": True, "promoted": False, "stage_title": "Validated"})
+    r = state.compute()
+    assert r["current"] == "champion" and [x["state"] for x in r["stages"][:2]] == ["done", "done"]
+    assert any("Champion page" in a for a in r["next_actions"])
 
 
 def test_violating_trades_do_not_qualify(iso):
@@ -65,12 +87,13 @@ def test_full_journey_to_first_payout(iso, monkeypatch):
     from app.reports import strategy_state as ss
     monkeypatch.setattr(ss, "get_current_strategy", lambda: {"strategy_name": "alpha", "instrument": "MES"})
     monkeypatch.setattr(ss, "robustness_score", lambda *a, **k: {"ran_count": 5, "passed_count": 5, "decided_count": 5})
+    _promoted(monkeypatch)
     trades(31)
     state.save_settings({"preset_key": "lucid_50k", "forward_days_required": 1})
     a = ds.add_account({"firm": "Lucid Trading", "preset_key": "lucid_50k", "size": 50000, "fee": 172})
     assert state.compute()["current"] == "pass"
     ds.update_account(a["id"], {"status": "passed"})
-    assert state.compute()["current"] == "funded"
+    assert state.compute()["current"] == "payout"           # passed, still to be activated and paid
     ds.update_account(a["id"], {"stage": "funded", "status": "active", "live_account_id": "x"})
     assert state.compute()["current"] == "payout"
     ds.add_payout(a["id"], "2026-11-01", 500)

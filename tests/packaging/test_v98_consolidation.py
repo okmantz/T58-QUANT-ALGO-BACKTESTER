@@ -128,10 +128,9 @@ def test_optimize_page_carries_timeframe_and_champion_has_no_rerun_picker(client
 
 def test_create_page_single_multi_select(client, raw_dir):
     body = client.get("/start-here/create").get_data(as_text=True)
-    assert 'name="datasets" multiple' in body
-    assert '<optgroup label="ES1!">' in body
-    assert 'id="create_timeframes_pick"' in body
-    assert 'name="timeframes"' in body
+    # Create is now just the two paths: no dataset or timeframe pickers (those live on Test / Discovery Engine)
+    assert 'name="datasets"' not in body and 'name="timeframes"' not in body
+    assert "I have a strategy" in body
 
 
 # ---------------------------------------------------- (d) one dropdown

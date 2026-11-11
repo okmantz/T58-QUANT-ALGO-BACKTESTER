@@ -365,7 +365,7 @@ def test_engine_is_inside_create_not_its_own_sidebar_entry():
     from app.web.server import app
     c = app.test_client()
     create = c.get("/start-here/create").get_data(as_text=True)
-    assert 'href="/discovery-engine"' in create and "I don&rsquo;t have one yet" in create and "I have a strategy" in create
+    assert 'href="/discovery-engine"' in create and "I don&rsquo;t have a strategy" in create and "I have a strategy" in create
     # the old standalone sidebar entry (it sat right before "(1) Create") is gone; Create is the way in
     sidebar = create.split('class="t58-main"')[0]
     assert 'href="/discovery-engine"' not in sidebar

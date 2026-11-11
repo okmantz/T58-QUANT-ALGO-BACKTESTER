@@ -226,7 +226,8 @@ def test_form_page_renders_with_dropdowns_and_sidebar_link(client):
     assert "t58-multiselect.js" in body
     # v9.8: the link moved from the sidebar into the Optimize page's
     # Individual tools grid (the sidebar keeps single lifecycle links).
-    assert 'href="/cross-instrument"' in client.get("/optimize-simple").get_data(as_text=True)
+    # (the Individual tools grid was later removed from Optimize: the optimizer covers it, the page itself stays reachable)
+    assert client.get("/cross-instrument").status_code == 200
 
 
 def test_start_requires_two_instruments(client):

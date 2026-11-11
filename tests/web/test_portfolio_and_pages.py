@@ -51,7 +51,7 @@ def test_api_portfolio_and_pages_render(client):
     r = client.get("/api/portfolio")
     if r.status_code == 200:
         assert "accounts" in r.get_json()
-    for url, needle in (("/full-pipeline", "Batch &amp; scheduling"), ("/validate-simple", "Regime matrix"), ("/start-here/create", "cr-chip")):
+    for url, needle in (("/full-pipeline", "Batch &amp; scheduling"), ("/validate-simple", "Regime matrix"), ("/start-here/create", "cr-paths")):
         resp = client.get(url, follow_redirects=True)
         if resp.status_code == 200:
             body = resp.get_data(as_text=True)

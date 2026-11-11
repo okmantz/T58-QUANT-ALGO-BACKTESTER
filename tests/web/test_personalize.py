@@ -56,7 +56,8 @@ def test_pages_load_personalize_and_settings_card_present(client=None):
     assert "t58-personalize.js" in html and 'id="pz-grid"' in html and 'id="pz-verse"' in html
     assert 'id="ac-row"' in html and 'id="ac-hex"' in html and 'id="pz-fx"' in html
     # requested order: picture, profile, security, personalize, subscription, app
-    pos = [html.index(m) for m in ("<h2>Profile picture</h2>", "<h2>Profile</h2>", "<h2>Security</h2>",
+    assert "Accent color" in html and "Accent colour" not in html
+    pos = [html.index(m) for m in ("<h2>Profile</h2>", "<h2>Security</h2>",
                                    "<h2>Personalize</h2>", "<h2>Subscription</h2>", "<h2>App</h2>")]
     assert pos == sorted(pos)
 

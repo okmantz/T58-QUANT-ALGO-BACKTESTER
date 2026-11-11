@@ -101,7 +101,8 @@ def test_pine_indicator_page_and_api(client):
 
 
 def test_pine_tool_is_on_the_create_page(client):
-    assert 'href="/pine-indicator"' in client.get("/start-here/create").get_data(as_text=True)
+    body = client.get("/start-here/create").get_data(as_text=True)
+    assert "Pine Indicator Creator" in body and "/pine-indicator/?embed=1" in body
 
 
 def test_mobile_access_has_install_tab_and_sidebar_has_no_install_slot(client):

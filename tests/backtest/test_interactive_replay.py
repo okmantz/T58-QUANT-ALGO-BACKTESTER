@@ -140,8 +140,11 @@ def test_replay_form_has_library_and_pip_detect_and_prop_preset_ui():
     strategy_mode=manual with no way to pick a saved strategy, no pip-
     size detection, and no prop-firm preset -- all three now exist."""
     body = _client().get("/replay").get_data(as_text=True)
-    assert "tab-library" in body  # strategy-library picker
-    assert "detectPipSize" in body  # reuses the existing shared endpoint
+    assert "library_strategy_select" in body  # strategy-library picker
+    assert "detectPipSize" not in body  # pip size is auto-detected from the data now
+    # four plain steps: strategy, market data, prop firm, start
+    for label in ("Select strategy", "Select market data", "Select prop firm", "Start replay"):
+        assert label in body
     assert "initPropFirmPresetDropdown" in body  # reuses the shared preset dropdown
 
 

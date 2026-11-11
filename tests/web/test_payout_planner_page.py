@@ -39,8 +39,11 @@ def test_the_page_loads_with_lucid_50k_and_100k_ticked_by_default(client):
     assert html.count("checked") >= 2
 
 
-def test_the_planner_is_linked_from_the_test_section(client):
-    assert "/payout-planner" in client.get("/full-pipeline").get_data(as_text=True)
+def test_the_planner_lives_in_the_prop_journey_tabs(client):
+    body = client.get("/accounts").get_data(as_text=True)
+    assert "/payout-planner?embed=1" in body
+    assert "/prop-firm-recommender?embed=1" in body
+    assert "/payout-planner" not in client.get("/full-pipeline").get_data(as_text=True)
 
 
 def test_each_missing_step_gets_a_plain_message(client):

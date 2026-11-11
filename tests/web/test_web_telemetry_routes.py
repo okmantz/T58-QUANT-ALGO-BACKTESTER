@@ -158,8 +158,8 @@ def test_universe_page_renders_with_sidebar_and_chat(real_client):
     assert "data-t58-universe" in html and "data-t58-survivors" in html
     assert "/static/telemetry.js" in html and "t58-pc-launcher" in html
     # v9.8: sidebar lifecycle sections are single links (Owen's spec);
-    # Universe is reached from the Champion page's Individual tools grid.
-    assert 'href="/universe"' in real_client.get("/champion-simple").get_data(as_text=True)
+    # The Champion page's "other tools" grid was removed; the page itself is still served.
+    assert real_client.get("/universe").status_code == 200
 
 
 def test_evolution_status_json_carries_progress_when_running(real_client):

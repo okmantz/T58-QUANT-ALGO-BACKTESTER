@@ -12,11 +12,16 @@ def isolated(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_no_codes_ship_by_default(isolated):
+def test_listed_codes_ship_labelled_and_never_change_a_price(isolated):
     cat = catalog.catalog()
-    assert cat["plans"] and cat["firms"]
-    assert all(f["offer"]["code"] == "" and not f["offer"]["active"] for f in cat["firms"])
+    by = {f["firm"]: f for f in cat["firms"]}
+    assert by["FTMO"]["offer"]["code"] == "GORILLA" and by["FTMO"]["offer"]["listed"]
+    assert by["FTMO"]["offer"]["source"] == "PropFirmGorilla" and by["FTMO"]["offer"]["up_to_pct"] == 20
+    assert by["Apex Trader Funding"]["offer"]["up_to_pct"] == 90
+    # an "up to" figure is never subtracted from a price
     assert all(p["price_with_code"] is None for p in cat["plans"])
+    assert {m["firm"] for m in cat["more_codes"]} >= {"Tradeify", "My Funded Futures"}
+    assert cat["codes_source"]["checked_on"]
 
 
 def test_every_firm_in_presets_has_a_card_and_algo_badge_follows_presets(isolated):
