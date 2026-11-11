@@ -4,7 +4,8 @@
 
 What is shared (and therefore cannot drift between labs again):
 
-  * ONE objective        edge_lb_r (day-block-bootstrap lower bound of mean R after costs, complexity-charged)
+  * ONE objective        edge_lb_r (day-block-bootstrap lower bound of mean R after costs, complexity-charged); in prop mode each champion
+                         is also scored on the 30-day prop objective (``evaluate_thirty_day``) under the request's prop rules, which leads the ranking
   * ONE entry floor      100+ trades, mean-R t >= 1, cost < 0.15 R (``app.discovery_engine.objective.DEFAULT_FLOOR``)
   * ONE trial count      the lifetime ledger, clustered to effective trials, read BEFORE the run books itself
   * ONE sealed slice     the last ``sealed_frac`` of the data is carved off BEFORE any backend sees a bar; it is read once, by the
@@ -273,7 +274,7 @@ class DiscoveryEngine:
 
     # --------------------------------------------------------------------------------------------------- champion prep
     def _prepare_champions(self, champions: list, dev_df, req: EngineRequest, preset: Preset) -> list:
-        from app.discovery_engine.engine_steps import edge_record, evaluate_spec
+        from app.discovery_engine.engine_steps import edge_record, evaluate_spec, thirty_day_record
         self._floor_rejects = []
         ranked = []
         for c in champions or []:
@@ -289,6 +290,11 @@ class DiscoveryEngine:
             rec = edge_record(trades, spec)
             c["edge_lb_r"] = rec["edge_lb_r"]
             c["edge"] = rec
+            # 30-day prop objective (2026-11-11): in prop mode every champion is also scored on P(pass <= 30 calendar days of purchase) under
+            # the REQUEST'S prop rules (the dependence-aware lower bound is what ranks them). Never loosens a gate: floor / promotion unchanged.
+            c["thirty_day"] = (thirty_day_record(trades, req.risk, req.prop_rules, dev_df, label=str(c.get("candidate_id") or ""),
+                                                 instrument=req.instrument)
+                               if getattr(req, "objective_mode", "prop") != "net_profit" else None)
             if c.get("provenance") is None:
                 c["provenance"] = prov.capture(seed=req.seed, df=dev_df, config={"preset": preset.name, "overrides": req.overrides}, spec=spec,
                                                instrument=req.instrument, timeframe=req.timeframe, edge=rec).to_dict()
@@ -299,7 +305,12 @@ class DiscoveryEngine:
                 c["floor_reasons"].append(f"mean-R t {sc.t_stat:.2f} < {obj.DEFAULT_FLOOR.min_t_stat:g}")
             ranked.append(c)
         # the ONE ranking: edge_lb_r (None sorts last); candidates under the floor stay listed but cannot be promoted
-        ranked.sort(key=lambda c: (-1e9 if c["edge_lb_r"] is None else c["edge_lb_r"]), reverse=True)
+        # Ranking: edge_lb_r (None sorts last). In prop mode with rules, the 30-day pass LOWER bound leads and edge_lb_r breaks ties.
+        def _rank(c):
+            edge = -1e9 if c["edge_lb_r"] is None else c["edge_lb_r"]
+            td = c.get("thirty_day")
+            return ((td["lower_bound"], td["p_pass_30"], edge) if td else (-1.0, -1.0, edge))
+        ranked.sort(key=_rank, reverse=True)
         eligible = [c for c in ranked if not c["floor_reasons"]]
         for c in ranked:
             if c["floor_reasons"]:

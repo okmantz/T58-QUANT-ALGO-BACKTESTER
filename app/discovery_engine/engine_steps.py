@@ -76,6 +76,43 @@ def edge_record(trades, spec: dict | None = None) -> dict:
             "n_trades": sc.n_trades, "t_stat": sc.t_stat}
 
 
+def thirty_day_record(trades, risk, rules, df, *, label: str = "", instrument: str = "") -> dict | None:
+    """Score a champion's trades on the 30-day prop objective: P(pass <= 30 calendar days of purchase) under ``rules``, with the
+    dependence-aware 95% interval (``app.prop.thirty_day.evaluate_thirty_day``). Returns a JSON-safe dict, or ``None`` when it cannot be
+    measured (no trades, no rules, a ledger that cannot be built). Dollars are the champion's own account dollars.
+
+    Measured MAE/MFE are required by floating-drawdown rules; if a trade list carries none the closed-P&L proxy is used and the record says
+    so (``excursions_proxy``) -- it is optimistic, never silent."""
+    if rules is None or not trades:
+        return None
+    try:
+        from app.prop.thirty_day import ExcursionsMissingError, ThirtyDayConfig, TradeLedger, evaluate_thirty_day, rank_key
+        led = TradeLedger.from_trades(list(trades), risk, strategy=label, instrument=instrument)
+        if not len(led):
+            return None
+        ts = pd.to_datetime(df["timestamp"]) if df is not None and "timestamp" in getattr(df, "columns", []) else None
+        d0 = ts.iloc[0] if ts is not None and len(ts) else None
+        d1 = ts.iloc[-1] if ts is not None and len(ts) else None
+        proxy = False
+        try:
+            res = evaluate_thirty_day(led, rules, data_start=d0, data_end=d1, cfg=ThirtyDayConfig(), with_sensitivity=False)
+        except ExcursionsMissingError:
+            proxy = True
+            res = evaluate_thirty_day(led, rules, data_start=d0, data_end=d1, cfg=ThirtyDayConfig(allow_proxy_excursions=True), with_sensitivity=False)
+        notes = list(res.notes)
+        acct = float(getattr(rules, "account_size", 0.0) or 0.0)
+        bal = float(getattr(risk, "initial_balance", 0.0) or 0.0)
+        if acct > 0 and bal > 0 and abs(acct - bal) / acct > 0.01:
+            notes.append(f"the strategy was sized on a ${bal:,.0f} account but scored on a ${acct:,.0f} evaluation: dollars are NOT rescaled.")
+        return {"p_pass_30": res.p_pass_30, "lower_bound": res.lower_bound, "upper_bound": float(res.interval.get("upper", 1.0)),
+                "p_bust_30": res.p_bust_30, "p_pass_60": res.p_pass_60, "median_days_to_pass": res.median_days_to_pass,
+                "n_windows": res.n_windows, "n_independent": float(res.interval.get("n_independent", 0.0)),
+                "meets_target_lower_bound": bool(res.meets_target_lower_bound), "target_probability": res.target_probability,
+                "excursions_proxy": proxy, "rank_key": [float(x) for x in rank_key(res)], "notes": notes}
+    except Exception:  # noqa: BLE001 -- the 30-day record is extra evidence; it never fails a run
+        return None
+
+
 def per_market_r(spec: dict, frames: dict, risks: dict, cost_multiplier: float = 2.0) -> dict:
     """Run the candidate's FIXED config on every market -> {symbol: (R list, day list)}. A market that fails is reported empty."""
     from app.optimize.two_stage import trade_r_and_days
