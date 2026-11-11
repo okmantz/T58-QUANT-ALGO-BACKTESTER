@@ -20,7 +20,7 @@ def iso(tmp_path, monkeypatch):
 
 def _promoted(monkeypatch):
     """The current strategy has been tested and promoted to champion (the board lookup is its own, separately tested, module)."""
-    monkeypatch.setattr(state, "_champion_inputs", lambda st: {"found": True, "tested": True, "promoted": True, "stage_title": "Champion Candidate"})
+    monkeypatch.setattr(state, "_champion_inputs", lambda st: {"found": True, "tested": True, "promoted": True, "stage_title": "Champion"})
 
 
 def test_timeline_is_the_seven_requested_stages():
@@ -62,7 +62,7 @@ def test_champion_stage_waits_for_the_promotion(iso, monkeypatch):
     from app.reports import strategy_state as ss
     monkeypatch.setattr(ss, "get_current_strategy", lambda: {"strategy_name": "alpha", "instrument": "MES", "library_type": "", "library_filename": ""})
     monkeypatch.setattr(ss, "robustness_score", lambda *a, **k: {"ran_count": 4, "passed_count": 4, "decided_count": 4})
-    monkeypatch.setattr(state, "_champion_inputs", lambda st: {"found": True, "tested": True, "promoted": False, "stage_title": "Validated"})
+    monkeypatch.setattr(state, "_champion_inputs", lambda st: {"found": True, "tested": True, "promoted": False, "stage_title": "Candidate"})
     r = state.compute()
     assert r["current"] == "champion" and [x["state"] for x in r["stages"][:2]] == ["done", "done"]
     assert any("Champion page" in a for a in r["next_actions"])
@@ -123,3 +123,28 @@ def test_settings_validation(iso):
         state.save_settings({"forward_trades_required": 2})
     with pytest.raises(ValueError):
         state.save_settings({"backtest_max_drawdown": -5})
+
+
+def test_a_promoted_strategy_advances_the_mission_even_with_no_current_strategy(iso, monkeypatch):
+    """2026-11-11 bug: tested + validated + promoted on the Champion page, yet the mission still said "Test a strategy"."""
+    row = {"display_name": "orb", "funnel_rank": 4, "strength": 70.0, "verdict": "READY", "eval_pct": 80.0,
+           "promotion": {"stage": "champion", "stage_title": "Champion"}, "validation": {"ran": 5}}
+    from app.scoring import champion_board as cb
+    monkeypatch.setattr(cb, "list_board", lambda *a, **k: [row])
+    from app.reports import strategy_state as ss
+    monkeypatch.setattr(ss, "get_current_strategy", lambda: None)
+    r = state.compute()
+    by = {s["key"]: s for s in r["stages"]}
+    assert by["test"]["state"] == "done"
+    assert r["current"] != "test"
+    assert r["done"] >= 2
+
+
+def test_an_untouched_library_strategy_is_not_progress(iso, monkeypatch):
+    row = {"display_name": "fresh", "funnel_rank": 0, "strength": None, "verdict": None, "eval_pct": None,
+           "promotion": {"stage": "candidate", "stage_title": "Candidate"}, "validation": {"ran": 0}}
+    from app.scoring import champion_board as cb
+    monkeypatch.setattr(cb, "list_board", lambda *a, **k: [row])
+    from app.reports import strategy_state as ss
+    monkeypatch.setattr(ss, "get_current_strategy", lambda: None)
+    assert state.compute()["current"] == "test"
