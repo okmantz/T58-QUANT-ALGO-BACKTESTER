@@ -48,6 +48,36 @@ def events(data: dict | None = None, today: date | None = None) -> list[dict]:
     return sorted(out, key=lambda e: (e["date"] is None, e["date"] or ""))
 
 
+def feed(data: dict | None = None, today: date | None = None, windows: int = 4) -> list[dict]:
+    """Everything the in-app calendar draws: each funded account's next ``windows`` payout windows (the first from :func:`events`, the rest one
+    payout period apart) and every payout already received. One flat list of ``{date, kind, label, account_id, amount?, note}`` rows,
+    kind being ``eligible`` / ``upcoming`` / ``received``."""
+    data = data or ds.load()
+    today = today or date.today()
+    out: list[dict] = []
+    for e in events(data, today):
+        if not e.get("date"):
+            continue
+        out.append({"date": e["date"], "kind": e["kind"], "label": e["label"], "account_id": e["account_id"], "note": e["note"]})
+        freq = 14
+        try:
+            acct = next(a for a in data["accounts"] if a["id"] == e["account_id"])
+            p = P.get_preset(acct["preset_key"]) if acct.get("preset_key") else None
+            freq = int(p.payout_frequency_days) if p else 14
+        except (StopIteration, KeyError):
+            pass
+        d = date.fromisoformat(e["date"])
+        for _ in range(max(0, windows - 1)):
+            d = add_weekdays(d, freq)
+            out.append({"date": d.isoformat(), "kind": "upcoming", "label": e["label"], "account_id": e["account_id"],
+                        "note": "Projected: the window after the one above, if you take a payout on the first day it opens."})
+    for a in data["accounts"]:
+        for p in a.get("payouts", []):
+            out.append({"date": p["date"], "kind": "received", "label": a["label"], "account_id": a["id"], "amount": p["amount"],
+                        "note": "Payout received."})
+    return sorted(out, key=lambda r: (r["date"], r["label"]))
+
+
 def ics(evts: list[dict]) -> str:
     """An iCalendar file of the payout windows, for any calendar app."""
     lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//T58//Payout Calendar//EN", "CALSCALE:GREGORIAN"]

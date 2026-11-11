@@ -70,9 +70,9 @@
   <ol class="quickstart-list">
     <li><b>Get market data.</b> Open <a href="/data-center">Data Center</a> and import a CSV or fetch data with a free key
       (keys live in <a href="/settings/api-keys">API Keys</a>). For a verdict that can say FORWARD-TEST CANDIDATE you need at least 5 years of real, non-synthetic data.</li>
-    <li><b>Pick or build a strategy.</b> Go to <a href="/start-here/create">Create</a>. Use the visual Manual builder, paste Python / PineScript / MQL5,
-      or let Search Lab / Evolution Lab find candidates for you. Saved strategies appear in the <a href="/library">Strategy Library</a>.</li>
-    <li><b>Choose your prop firm and risk.</b> On <a href="/full-pipeline">Full Pipeline</a> pick the firm preset (account size, targets, drawdown rules fill in themselves).
+    <li><b>Pick or build a strategy.</b> Go to <a href="/start-here/create">Create</a>. Choose <b>I have a strategy</b> to paste it (Manual, Python, PineScript or MQL5) or upload the file and save it to the
+      <a href="/library">Strategy Library</a>, or choose <b>I don&rsquo;t have a strategy</b> and let the Discovery Engine find candidates for you.</li>
+    <li><b>Choose your prop firm and risk.</b> On <a href="/full-pipeline">Test</a> pick <b>Prop firm</b> (the default) and a firm preset, or <b>Net profit</b> for a live account. Pip size and commission are detected from your market data.
       The defaults for risk are safe to start with.</li>
     <li><b>Run the Full Pipeline.</b> Open <a href="/full-pipeline">Test &rarr; Full Pipeline</a> and press Run. It checks the strategy for hidden cheating
       (look-ahead), overfitting, out-of-sample performance on data it never saw, Monte Carlo account simulations and prop-firm rules, then gives one verdict.
@@ -91,12 +91,12 @@
       <a href="/events/">Global Events</a>, <a href="/journal">Trading Journal</a>, <a href="/runs">Runs</a> (every past run), <a href="/mobile-access">Mobile Access</a> (QR code for your phone).</li>
     <li><b>Strategy Lab, the seven steps:</b>
       <ul>
-        <li><a href="/start-here/create"><b>1 Create</b></a> &ndash; Strategy Builder, Speed Run, Generate Strategies (AI), Research Agent / Loop, Overnight Autopilot, Discovery Engine.</li>
-        <li><a href="/full-pipeline"><b>2 Test</b></a> &ndash; Run &amp; Report, Payout Probability (Monte Carlo) and the <b>Full Pipeline</b>.</li>
+        <li><a href="/start-here/create"><b>1 Create</b></a> &ndash; paste or upload a strategy (Manual, Python, PineScript, MQL5), Generate Strategies (AI), Pine Indicator Creator, or the Discovery Engine.</li>
+        <li><a href="/full-pipeline"><b>2 Test</b></a> &ndash; the <b>Full Pipeline</b>: three steps (strategy, market data, prop firm or net profit), then Run.</li>
         <li><a href="/optimize-simple"><b>3 Optimize</b></a> &ndash; Search Lab, Evolution Lab, Iterative Refinement, Quick Optimize, Multi-Objective, Multi-Market.</li>
         <li><a href="/validate-simple"><b>4 Validate</b></a> &ndash; Walk-Forward (grid and GA), CPCV / PBO, Sensitivity, Parameter Robustness, Regime Matrix.</li>
         <li><a href="/champion-simple"><b>5 Champion</b></a> &ndash; Ensemble, Portfolio, Family Diversity, Compare.</li>
-        <li><a href="/forward-test"><b>6 Deploy</b></a> &ndash; Forward Test (MT5), Deploy Live, Live Market monitor, Replay, Webhook Relay.</li>
+        <li><a href="/forward-test"><b>6 Deploy</b></a> &ndash; tabs for T58 Demo account, MT5 Forward Test and Deploy Live, plus Monitor, Interactive Replay, TradingView bridge and Webhook Relay.</li>
         <li><a href="/graveyard"><b>7 Strategy Graveyard</b></a> &ndash; what failed and why, so you do not retest the same idea.</li>
       </ul></li>
     <li><b>Quant Lab, Options, Hedge Fund Manager:</b> optional standalone toolboxes (<a href="/quant-lab">Quant Lab</a>, <a href="/research-labs">Research Lab</a>,
@@ -138,7 +138,7 @@
   <div class="eyebrow">Your data</div>
   <h2>Your data, your license key, and reinstalling</h2>
   <p>Everything personal is filed in a vault under your <b>license key and the email you signed up with</b>: profile picture, username and password, API keys (sealed),
-  accounts, background and colour choices, saved strategies, pipeline and validation runs, reports, achievements and your liked or read research papers.</p>
+  accounts, background and color choices, saved strategies, pipeline and validation runs, reports, achievements and your liked or read research papers.</p>
   <ul>
     <li><b>After a reinstall:</b> enter your license key and email on the activation screen. Your vault is restored automatically; sign in with your usual username.
       This works with the master key too.</li>
@@ -152,7 +152,7 @@
   <div class="eyebrow">Settings</div>
   <h2>Make it yours</h2>
   <ul>
-    <li><b>Look and feel</b> (<a href="/settings/account">Account Settings</a>): background scenes (Mountains, Nordic Kingdom with drifting fog and lightning, Midnight Ocean with moving water, Rain and Misty Forest with layered mist, and more; Endless Sands, Coastal Italy and Bioluminescence are earned through achievements), six Workspace presets (Obsidian, Cyberpunk, Nordic, Evergreen, Sovereign, Midnight; also earned), accent colours, light or dark. The whole page scrolls, so every option is reachable on small screens.</li>
+    <li><b>Look and feel</b> (<a href="/settings/account">Account Settings</a>): background scenes (Mountains, Nordic Kingdom with drifting fog and lightning, Midnight Ocean with moving water, Rain and Misty Forest with layered mist, and more; Endless Sands, Coastal Italy and Bioluminescence are earned through achievements), six Workspace presets (Obsidian, Cyberpunk, Nordic, Evergreen, Sovereign, Midnight; also earned), accent colors, light or dark. The whole page scrolls, so every option is reachable on small screens.</li>
     <li><b>Morning Brief:</b> opens once when you first sign in, then stays collapsed. Open it any time with its button; it will open again after you sign out and back in.</li>
     <li><b>Achievements:</b> unlock them as you work; the filters (all, unlocked, locked and by category) show only what you pick.</li>
     <li><b>Strategy Library:</b> search, tag-filter and reload any saved strategy from the dropdown on Run &amp; Report.</li>

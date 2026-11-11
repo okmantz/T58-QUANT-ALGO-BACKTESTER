@@ -26,8 +26,8 @@
   --border: #1c2230;
   --border-light: #2a3242;
   --text: #e7ebf2;
-  --text-muted: #8a93a6;
-  --text-dim: #5b6478;
+  --text-muted: #b9c2d2;   /* 7+:1 on every dark surface and scene (readability pass, Nov 2026) */
+  --text-dim: #9ba6ba;     /* 5+:1 -- was #5b6478 (2.6:1 over photo scenes) */
 
   --teal: #35e0b0;
   --teal-dim: #0f6e56;
@@ -698,15 +698,15 @@ a { color: var(--teal); }
    light values are legible counterparts so Light mode no longer shows dark-only tints and white-on-white text.
    Pages reference these as var(--token). ---- */
 :root {
-  --t-soft: #ccc;
-  --t-soft2: #ddd;
-  --t-soft3: #bbb;
-  --t-faint: #888;
-  --t-faint2: #999;
-  --t-faint3: #777;
-  --t-mute2: #8b95a7;
-  --t-mute3: #8a97a8;
-  --t-mute4: #9aa0aa;
+  --t-soft: #d6dae2;
+  --t-soft2: #e4e7ee;
+  --t-soft3: #c9cfdb;
+  --t-faint: #a9b1c0;
+  --t-faint2: #b2b9c7;
+  --t-faint3: #9ea7b7;
+  --t-mute2: #b4bdcd;
+  --t-mute3: #b2bdcc;
+  --t-mute4: #b8bdc8;
   --t-strong: #e6eaf2;
   --on-teal: #04120e;
   --on-teal2: #04130d;
@@ -1104,46 +1104,46 @@ html[data-bg]:not([data-bg="mountains"]) body::before {
   background-repeat: no-repeat; background-position: center; background-size: cover;
   opacity: 1; transform: translateZ(0);
 }
-html[data-bg="spring"]:not([data-theme="light"]) { --scene: url("/static/backgrounds/spring-dark.webp");  --sc1: .44; --sc2: .58; --sc3: .76; }
-html[data-bg="summer"]:not([data-theme="light"]) { --scene: url("/static/backgrounds/summer-dark.webp");  --sc1: .26; --sc2: .44; --sc3: .66; }
-html[data-bg="autumn"]:not([data-theme="light"]) { --scene: url("/static/backgrounds/autumn-dark.webp");  --sc1: .44; --sc2: .58; --sc3: .76; }
-html[data-bg="winter"]:not([data-theme="light"]) { --scene: url("/static/backgrounds/winter-dark.webp");  --sc1: .28; --sc2: .46; --sc3: .68; }
-html[data-bg="spring"][data-theme="light"] { --scene: url("/static/backgrounds/spring-light.webp"); --sc1: .22; --sc2: .42; --sc3: .62; }
-html[data-bg="summer"][data-theme="light"] { --scene: url("/static/backgrounds/summer-light.webp"); --sc1: .22; --sc2: .42; --sc3: .62; }
-html[data-bg="autumn"][data-theme="light"] { --scene: url("/static/backgrounds/autumn-light.webp"); --sc1: .22; --sc2: .42; --sc3: .62; }
-html[data-bg="winter"][data-theme="light"] { --scene: url("/static/backgrounds/winter-light.webp"); --sc1: .22; --sc2: .42; --sc3: .62; }
+html[data-bg="spring"]:not([data-theme="light"]) { --scene: url("/static/backgrounds/spring-dark.webp");  --sc1: 0.75; --sc2: 0.59; --sc3: 0.77; }
+html[data-bg="summer"]:not([data-theme="light"]) { --scene: url("/static/backgrounds/summer-dark.webp");  --sc1: 0.26; --sc2: 0.44; --sc3: 0.66; }
+html[data-bg="autumn"]:not([data-theme="light"]) { --scene: url("/static/backgrounds/autumn-dark.webp");  --sc1: 0.73; --sc2: 0.58; --sc3: 0.76; }
+html[data-bg="winter"]:not([data-theme="light"]) { --scene: url("/static/backgrounds/winter-dark.webp");  --sc1: 0.4; --sc2: 0.46; --sc3: 0.68; }
+html[data-bg="spring"][data-theme="light"] { --scene: url("/static/backgrounds/spring-light.webp"); --sc1: 0.66; --sc2: 0.72; --sc3: 0.74; }
+html[data-bg="summer"][data-theme="light"] { --scene: url("/static/backgrounds/summer-light.webp"); --sc1: 0.62; --sc2: 0.62; --sc3: 0.64; }
+html[data-bg="autumn"][data-theme="light"] { --scene: url("/static/backgrounds/autumn-light.webp"); --sc1: 0.7; --sc2: 0.73; --sc3: 0.75; }
+html[data-bg="winter"][data-theme="light"] { --scene: url("/static/backgrounds/winter-light.webp"); --sc1: 0.59; --sc2: 0.6; --sc3: 0.62; }
 /* ---- Animated scenes (Personalize -> Scenes): cosmic-drift, obsidian, midnight-ocean, rainfall-district, silent-sanctuary,
    misty-forest. Same machinery as the seasons (one fixed picture + a scrim for readable text), but the picture is a
    full-frame photograph and a sibling layer (#t58-scene-fx, built by t58-personalize.js) adds the motion. --scene-pos
    keeps each picture's focal point (the moon, the torii gate...) on screen when a narrow phone crops the sides. ---- */
-html[data-bg="cosmic-drift"]:not([data-theme="light"])       { --scene: url("/static/backgrounds/cosmic-drift-dark.webp");       --sc1: .44; --sc2: .46; --sc3: .68; --scene-pos: 50% 42%; }
-html[data-bg="obsidian"]:not([data-theme="light"])           { --scene: url("/static/backgrounds/obsidian-dark.webp");           --sc1: .42; --sc2: .40; --sc3: .64; --scene-pos: 42% 50%; }
-html[data-bg="midnight-ocean"]:not([data-theme="light"])     { --scene: url("/static/backgrounds/midnight-ocean-dark.webp");     --sc1: .50; --sc2: .46; --sc3: .68; --scene-pos: 69% 50%; }
-html[data-bg="rainfall-district"]:not([data-theme="light"])  { --scene: url("/static/backgrounds/rainfall-district-dark.webp");  --sc1: .54; --sc2: .62; --sc3: .80; --scene-pos: 52% 50%; }
-html[data-bg="silent-sanctuary"]:not([data-theme="light"])   { --scene: url("/static/backgrounds/silent-sanctuary-dark.webp");   --sc1: .50; --sc2: .58; --sc3: .78; --scene-pos: 46% 55%; }
-html[data-bg="misty-forest"]:not([data-theme="light"])       { --scene: url("/static/backgrounds/misty-forest-dark.webp");       --sc1: .56; --sc2: .62; --sc3: .80; --scene-pos: 55% 50%; }
-html[data-bg="cosmic-drift"][data-theme="light"]       { --scene: url("/static/backgrounds/cosmic-drift-light.webp");       --sc1: .38; --sc2: .44; --sc3: .64; --scene-pos: 50% 42%; }
-html[data-bg="obsidian"][data-theme="light"]           { --scene: url("/static/backgrounds/obsidian-light.webp");           --sc1: .34; --sc2: .36; --sc3: .58; --scene-pos: 42% 50%; }
-html[data-bg="midnight-ocean"][data-theme="light"]     { --scene: url("/static/backgrounds/midnight-ocean-light.webp");     --sc1: .42; --sc2: .44; --sc3: .64; --scene-pos: 69% 50%; }
-html[data-bg="rainfall-district"][data-theme="light"]  { --scene: url("/static/backgrounds/rainfall-district-light.webp");  --sc1: .42; --sc2: .48; --sc3: .66; --scene-pos: 52% 50%; }
-html[data-bg="silent-sanctuary"][data-theme="light"]   { --scene: url("/static/backgrounds/silent-sanctuary-light.webp");   --sc1: .40; --sc2: .46; --sc3: .64; --scene-pos: 46% 55%; }
-html[data-bg="misty-forest"][data-theme="light"]       { --scene: url("/static/backgrounds/misty-forest-light.webp");       --sc1: .42; --sc2: .46; --sc3: .64; --scene-pos: 55% 50%; }
+html[data-bg="cosmic-drift"]:not([data-theme="light"])       { --scene: url("/static/backgrounds/cosmic-drift-dark.webp");       --sc1: 0.44; --sc2: 0.46; --sc3: 0.68; --scene-pos: 50% 42%; }
+html[data-bg="obsidian"]:not([data-theme="light"])           { --scene: url("/static/backgrounds/obsidian-dark.webp");           --sc1: 0.42; --sc2: 0.4; --sc3: 0.64; --scene-pos: 42% 50%; }
+html[data-bg="midnight-ocean"]:not([data-theme="light"])     { --scene: url("/static/backgrounds/midnight-ocean-dark.webp");     --sc1: 0.5; --sc2: 0.46; --sc3: 0.68; --scene-pos: 69% 50%; }
+html[data-bg="rainfall-district"]:not([data-theme="light"])  { --scene: url("/static/backgrounds/rainfall-district-dark.webp");  --sc1: 0.54; --sc2: 0.62; --sc3: 0.8; --scene-pos: 52% 50%; }
+html[data-bg="silent-sanctuary"]:not([data-theme="light"])   { --scene: url("/static/backgrounds/silent-sanctuary-dark.webp");   --sc1: 0.5; --sc2: 0.58; --sc3: 0.78; --scene-pos: 46% 55%; }
+html[data-bg="misty-forest"]:not([data-theme="light"])       { --scene: url("/static/backgrounds/misty-forest-dark.webp");       --sc1: 0.74; --sc2: 0.62; --sc3: 0.8; --scene-pos: 55% 50%; }
+html[data-bg="cosmic-drift"][data-theme="light"]       { --scene: url("/static/backgrounds/cosmic-drift-light.webp");       --sc1: 0.61; --sc2: 0.55; --sc3: 0.64; --scene-pos: 50% 42%; }
+html[data-bg="obsidian"][data-theme="light"]           { --scene: url("/static/backgrounds/obsidian-light.webp");           --sc1: 0.51; --sc2: 0.57; --sc3: 0.6; --scene-pos: 42% 50%; }
+html[data-bg="midnight-ocean"][data-theme="light"]     { --scene: url("/static/backgrounds/midnight-ocean-light.webp");     --sc1: 0.52; --sc2: 0.55; --sc3: 0.64; --scene-pos: 69% 50%; }
+html[data-bg="rainfall-district"][data-theme="light"]  { --scene: url("/static/backgrounds/rainfall-district-light.webp");  --sc1: 0.55; --sc2: 0.54; --sc3: 0.66; --scene-pos: 52% 50%; }
+html[data-bg="silent-sanctuary"][data-theme="light"]   { --scene: url("/static/backgrounds/silent-sanctuary-light.webp");   --sc1: 0.53; --sc2: 0.54; --sc3: 0.64; --scene-pos: 46% 55%; }
+html[data-bg="misty-forest"][data-theme="light"]       { --scene: url("/static/backgrounds/misty-forest-light.webp");       --sc1: 0.44; --sc2: 0.48; --sc3: 0.64; --scene-pos: 55% 50%; }
 /* Unlockable scenes (Account -> Personalize; locked until earned): Obsidian Gold, Sakura Reverie, Abyssal Blue. */
-html[data-bg="obsidian-gold"]:not([data-theme="light"])  { --scene: url("/static/backgrounds/obsidian-gold-dark.webp");  --sc1: .30; --sc2: .34; --sc3: .56; --scene-pos: 50% 50%; }
-html[data-bg="sakura-reverie"]:not([data-theme="light"]) { --scene: url("/static/backgrounds/sakura-reverie-hd-dark.webp");--sc1: .34; --sc2: .46; --sc3: .70; --scene-pos: 50% 50%; }
-html[data-bg="abyssal-blue"]:not([data-theme="light"])   { --scene: url("/static/backgrounds/abyssal-blue-dark.webp");   --sc1: .32; --sc2: .38; --sc3: .62; --scene-pos: 50% 22%; }
-html[data-bg="obsidian-gold"][data-theme="light"]  { --scene: url("/static/backgrounds/obsidian-gold-light.webp");  --sc1: .22; --sc2: .28; --sc3: .50; --scene-pos: 50% 50%; }
-html[data-bg="sakura-reverie"][data-theme="light"] { --scene: url("/static/backgrounds/sakura-reverie-hd-light.webp"); --sc1: .26; --sc2: .36; --sc3: .58; --scene-pos: 50% 50%; }
-html[data-bg="abyssal-blue"][data-theme="light"]   { --scene: url("/static/backgrounds/abyssal-blue-light.webp");   --sc1: .26; --sc2: .34; --sc3: .56; --scene-pos: 50% 22%; }
+html[data-bg="obsidian-gold"]:not([data-theme="light"])  { --scene: url("/static/backgrounds/obsidian-gold-dark.webp");  --sc1: 0.3; --sc2: 0.34; --sc3: 0.56; --scene-pos: 50% 50%; }
+html[data-bg="sakura-reverie"]:not([data-theme="light"]) { --scene: url("/static/backgrounds/sakura-reverie-hd-dark.webp");--sc1: 0.76; --sc2: 0.6; --sc3: 0.74; --scene-pos: 50% 50%; }
+html[data-bg="abyssal-blue"]:not([data-theme="light"])   { --scene: url("/static/backgrounds/abyssal-blue-dark.webp");   --sc1: 0.74; --sc2: 0.44; --sc3: 0.62; --scene-pos: 50% 22%; }
+html[data-bg="obsidian-gold"][data-theme="light"]  { --scene: url("/static/backgrounds/obsidian-gold-light.webp");  --sc1: 0.49; --sc2: 0.5; --sc3: 0.5; --scene-pos: 50% 50%; }
+html[data-bg="sakura-reverie"][data-theme="light"] { --scene: url("/static/backgrounds/sakura-reverie-hd-light.webp"); --sc1: 0.53; --sc2: 0.72; --sc3: 0.7; --scene-pos: 50% 50%; }
+html[data-bg="abyssal-blue"][data-theme="light"]   { --scene: url("/static/backgrounds/abyssal-blue-light.webp");   --sc1: 0.44; --sc2: 0.44; --sc3: 0.56; --scene-pos: 50% 22%; }
 /* 2026-10-30: Nordic Kingdom (classic, unlocked at sign-in) and three earned scenes: Endless Sands, Coastal Italy, Bioluminescence. */
-html[data-bg="nordic-kingdom"]:not([data-theme="light"])  { --scene: url("/static/backgrounds/nordic-kingdom-dark.webp");  --sc1: .26; --sc2: .32; --sc3: .58; --scene-pos: 50% 50%; }
-html[data-bg="endless-sands"]:not([data-theme="light"])   { --scene: url("/static/backgrounds/endless-sands-dark.webp");   --sc1: .30; --sc2: .36; --sc3: .60; --scene-pos: 50% 50%; }
-html[data-bg="coastal-italy"]:not([data-theme="light"])   { --scene: url("/static/backgrounds/coastal-italy-dark.webp");   --sc1: .34; --sc2: .40; --sc3: .62; --scene-pos: 50% 50%; }
-html[data-bg="bioluminescence"]:not([data-theme="light"]) { --scene: url("/static/backgrounds/bioluminescence-dark.webp"); --sc1: .22; --sc2: .30; --sc3: .56; --scene-pos: 50% 50%; }
-html[data-bg="nordic-kingdom"][data-theme="light"]  { --scene: url("/static/backgrounds/nordic-kingdom-light.webp");  --sc1: .22; --sc2: .30; --sc3: .54; --scene-pos: 50% 50%; }
-html[data-bg="endless-sands"][data-theme="light"]   { --scene: url("/static/backgrounds/endless-sands-light.webp");   --sc1: .24; --sc2: .32; --sc3: .54; --scene-pos: 50% 50%; }
-html[data-bg="coastal-italy"][data-theme="light"]   { --scene: url("/static/backgrounds/coastal-italy-light.webp");   --sc1: .26; --sc2: .34; --sc3: .56; --scene-pos: 50% 50%; }
-html[data-bg="bioluminescence"][data-theme="light"] { --scene: url("/static/backgrounds/bioluminescence-light.webp"); --sc1: .24; --sc2: .32; --sc3: .56; --scene-pos: 50% 50%; }
+html[data-bg="nordic-kingdom"]:not([data-theme="light"])  { --scene: url("/static/backgrounds/nordic-kingdom-dark.webp");  --sc1: 0.67; --sc2: 0.37; --sc3: 0.58; --scene-pos: 50% 50%; }
+html[data-bg="endless-sands"]:not([data-theme="light"])   { --scene: url("/static/backgrounds/endless-sands-dark.webp");   --sc1: 0.64; --sc2: 0.63; --sc3: 0.69; --scene-pos: 50% 50%; }
+html[data-bg="coastal-italy"]:not([data-theme="light"])   { --scene: url("/static/backgrounds/coastal-italy-dark.webp");   --sc1: 0.77; --sc2: 0.75; --sc3: 0.65; --scene-pos: 50% 50%; }
+html[data-bg="bioluminescence"]:not([data-theme="light"]) { --scene: url("/static/backgrounds/bioluminescence-dark.webp"); --sc1: 0.22; --sc2: 0.49; --sc3: 0.56; --scene-pos: 50% 50%; }
+html[data-bg="nordic-kingdom"][data-theme="light"]  { --scene: url("/static/backgrounds/nordic-kingdom-light.webp");  --sc1: 0.73; --sc2: 0.73; --sc3: 0.75; --scene-pos: 50% 50%; }
+html[data-bg="endless-sands"][data-theme="light"]   { --scene: url("/static/backgrounds/endless-sands-light.webp");   --sc1: 0.73; --sc2: 0.63; --sc3: 0.6; --scene-pos: 50% 50%; }
+html[data-bg="coastal-italy"][data-theme="light"]   { --scene: url("/static/backgrounds/coastal-italy-light.webp");   --sc1: 0.49; --sc2: 0.59; --sc3: 0.71; --scene-pos: 50% 50%; }
+html[data-bg="bioluminescence"][data-theme="light"] { --scene: url("/static/backgrounds/bioluminescence-light.webp"); --sc1: 0.74; --sc2: 0.73; --sc3: 0.75; --scene-pos: 50% 50%; }
 html[data-bg]:not([data-bg="mountains"]) body::before { background-position: var(--scene-pos, center); }
 html[data-bg]:not([data-bg="mountains"]):not([data-theme="light"]) body::before {
   background-image:

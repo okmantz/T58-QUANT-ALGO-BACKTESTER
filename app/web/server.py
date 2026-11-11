@@ -10945,7 +10945,7 @@ def forward_test_info():
     from app.demo_account import TIERS, get_mode, load as _load_demo
     from app.webhook_relay.config import get_public_url
     return render_template("forward_test.html", mt5_accounts=mt5_accounts, running=running,
-                           view=("mt5" if request.args.get("view") == "mt5" else "demo"),
+                           view=(request.args.get("view") if request.args.get("view") in ("mt5", "live") else "demo"),
                            acct=_load_demo().to_dict(), tiers=TIERS, mode=get_mode(), public_url=get_public_url(),
                            starting=_FT_START_JOB.is_running,
                            deploy_champion=deploy_champion, strategies=_simple_strategy_options(),

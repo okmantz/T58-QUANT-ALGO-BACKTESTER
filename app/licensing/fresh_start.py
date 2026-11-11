@@ -1,8 +1,12 @@
 """Clean slate for the owner (master key).
 
-EVERY time the master key is entered (and the first time it is found saved on a device), the app starts like a brand-new install: saved runs, achievements,
-look-and-feel choices, journal, AI memory and the account vault copy are MOVED (never deleted) into a dated backup folder.
-After that a marker file is written and everything saves normally until the master key is entered again.
+EVERY time the master key is entered, the first time it is found saved on a device, and after every uninstall + reinstall, the app starts like a brand-new
+install: saved runs, achievements, look-and-feel choices, journal, prop desk, AI memory, current strategy and the account vault copy are MOVED (never deleted)
+into a dated backup folder. After that a marker file is written and everything saves normally until the master key is entered again.
+
+REINSTALL DETECTION: the marker lives in the per-user data folder, which survives an uninstall, while the install folder does not. So each install writes a
+random id to `.t58_install_id` next to the app; the marker remembers which install it belongs to. A reinstall has a different id, which makes `needed()`
+true again and the master key starts clean. (Other license keys are untouched by all of this: their progress is filed under key + email in the vault.)
 
 The strategy library goes back to the strategies committed to the repo. Kept on purpose: data/raw (price files), data/config (API keys / broker settings) and the license.
 Delete `fresh_start_done.json` in the user-data folder to get another clean start.
@@ -20,17 +24,45 @@ MARKER_NAME = "fresh_start_done.json"
 # Relative to the app base dir. Everything here is moved to the backup folder.
 _MOVE_DIRS = (
     "reports", "data/evolution", "data/discovery", "data/discovery_engine", "data/journal", "data/ai_memory",
-    "data/projects", "data/forward_test",
+    "data/projects", "data/forward_test", "data/prop_desk", "data/guardian", "data/webhook_relay", "data/retired_strategies",
+    "data/research_labs", "data/buy_challenge",
 )
 _MOVE_FILES = (
-    "account_settings.json", "data/run_history.json", "data/achievements.json", "data/briefing.json",
+    "account_settings.json", "data/run_history.json", "data/job_history.json", "data/achievements.json", "data/briefing.json",
     "data/ui_prefs.json", "data/inbox.json", "data/library/paper_state.json", "data/library/focus_sessions.json",
+    "data/config/current_strategy.json", "data/config/validation_checklist.json", "data/config/ui_theme.json",
 )
+INSTALL_ID_NAME = ".t58_install_id"
 
 
 def _marker() -> Path:
     from app.data.storage import user_data_dir
     return user_data_dir() / MARKER_NAME
+
+
+def install_id() -> str:
+    """A random id written next to the app on first run. An uninstall deletes the install folder (and this file), so a reinstall gets a new id."""
+    try:
+        from app.data.storage import get_app_base_dir
+        f = get_app_base_dir() / INSTALL_ID_NAME
+        try:
+            v = f.read_text(encoding="utf-8").strip()
+            if v:
+                return v
+        except OSError:
+            pass
+        v = uuid.uuid4().hex
+        f.write_text(v, encoding="utf-8")
+        return v
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _marker_install() -> str:
+    try:
+        return str(json.loads(_marker().read_text(encoding="utf-8")).get("install_id", ""))
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def epoch() -> str:
@@ -42,7 +74,11 @@ def epoch() -> str:
 
 
 def needed() -> bool:
-    return not _marker().exists()
+    """True before the first clean slate on this device AND whenever the app was reinstalled since the last one."""
+    if not _marker().exists():
+        return True
+    cur = install_id()
+    return bool(cur) and _marker_install() != cur
 
 
 def _move(src: Path, dest_root: Path, base: Path) -> int:
@@ -103,7 +139,7 @@ def run_if_needed(force: bool = False) -> bool:
         user_data_dir().mkdir(parents=True, exist_ok=True)
         _marker().write_text(json.dumps({
             "epoch": uuid.uuid4().hex[:12], "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "backup": str(backup), "moved": moved,
+            "backup": str(backup), "moved": moved, "install_id": install_id(),
         }), encoding="utf-8")
         return True
     except Exception:  # noqa: BLE001
@@ -136,7 +172,8 @@ def clear_for_account_switch() -> int:
         # the browser clears its own saved look-and-feel once when the epoch changes
         user_data_dir().mkdir(parents=True, exist_ok=True)
         _marker().write_text(json.dumps({"epoch": uuid.uuid4().hex[:12], "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                                         "backup": str(backup), "moved": moved, "reason": "account switch"}), encoding="utf-8")
+                                         "backup": str(backup), "moved": moved, "reason": "account switch",
+                                         "install_id": install_id()}), encoding="utf-8")
         return moved
     except Exception:  # noqa: BLE001
         return 0

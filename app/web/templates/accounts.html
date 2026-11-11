@@ -4,12 +4,32 @@
 <title>Accounts — T58 Quant Algo Backtester</title>
 {% include '_head_common.html' %}
 <link rel="stylesheet" href="/static/t58-suite.css">
+<style>
+  .cal-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .cal-head h2 { margin: 0; font-size: 19px; flex: 1; min-width: 160px; color: var(--text); }
+  .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+  .cal-dow { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--text-muted); padding: 4px 6px; }
+  .cal-day { min-height: 92px; border: 1px solid var(--border); border-radius: 10px; padding: 6px; background: var(--panel-2); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .cal-day.off { opacity: .45; }
+  .cal-day.today { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(var(--teal-rgb), .25); }
+  .cal-day .n { font-size: 12px; font-weight: 700; color: var(--text-muted); }
+  .cal-day.today .n { color: var(--teal); }
+  .cal-ev { font-size: 11px; line-height: 1.3; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cal-ev.eligible { background: rgba(var(--teal-rgb), .18); border-color: var(--teal); }
+  .cal-ev.upcoming { background: rgba(245, 180, 60, .14); border-color: rgba(245, 180, 60, .55); }
+  .cal-ev.received { background: rgba(80, 160, 255, .16); border-color: rgba(80, 160, 255, .6); }
+  .cal-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-muted); margin: 12px 0 0; }
+  .cal-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+  .cal-list { margin-top: 16px; }
+  .emb { width: 100%; border: 0; min-height: 640px; background: transparent; display: block; }
+  @media (max-width: 720px) { .cal-day { min-height: 62px; padding: 4px; } .cal-ev { font-size: 10px; padding: 2px 4px; } }
+</style>
 </head>
 <body>
 <div class="t58-shell">
 {% include '_sidebar.html' %}
 <div class="t58-main">
-<div class="t58-page-header"><h1>Accounts</h1><p>Every evaluation and funded account in one place: status, payouts, the payout calendar, what you have spent, and strategy health.</p></div>
+<div class="t58-page-header"><h1>Accounts</h1><p>Every evaluation and funded account in one place: status, payouts, the payout calendar, the payout planner, the prop firm recommender, what you have spent, and strategy health.</p></div>
 <div class="s-wrap">
   <div id="health"></div>
   <div class="s-bar" id="tabs"></div>
@@ -20,16 +40,19 @@
 <script>
 (function () {
   var el = T58.el, money = T58.money, D = null, tab = 'accounts';
-  var TABS = [['accounts', 'Accounts'], ['calendar', 'Payout calendar'], ['costs', 'Challenge costs'], ['copier', 'Copier']];
+  var TABS = [['accounts', 'Accounts'], ['calendar', 'Payout calendar'], ['planner', 'Payout planner'], ['recommender', 'Prop firm recommender'], ['costs', 'Challenge costs'], ['copier', 'Copier']];
+  var qt = new URLSearchParams(location.search).get('tab'); if (qt && TABS.some(function (x) { return x[0] === qt; })) tab = qt;
+  var calMonth = (function () { var d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); })();
+  var frames = {};
   function load() { return fetch('/api/desk').then(function (r) { return r.json(); }).then(function (d) { D = d; render(); }); }
   function render() {
     var t = document.getElementById('tabs'); t.textContent = '';
-    TABS.forEach(function (x) { var b = el('button', 's-chip' + (tab === x[0] ? ' on' : ''), x[1]); b.type = 'button'; b.addEventListener('click', function () { tab = x[0]; render(); }); t.appendChild(b); });
+    TABS.forEach(function (x) { var b = el('button', 's-chip' + (tab === x[0] ? ' on' : ''), x[1]); b.type = 'button'; b.addEventListener('click', function () { tab = x[0]; try { history.replaceState(null, '', '?tab=' + tab); } catch (e) {} render(); }); t.appendChild(b); });
     var h = document.getElementById('health'); h.textContent = '';
     var bad = D.health_alerts.filter(function (a) { return a.level !== 'ok'; });
     if (bad.length) { var c = el('div', 's-card'); c.style.marginBottom = '14px'; c.appendChild(el('strong', null, 'Strategy health')); bad.forEach(function (a) { var r = el('div', 's-row'); r.appendChild(T58.badge(a.level.toUpperCase(), T58.levelKind(a.level))); r.appendChild(el('span', null, a.title + '. ' + a.detail)); c.appendChild(r); }); h.appendChild(c); }
     var v = document.getElementById('view'); v.textContent = '';
-    ({ accounts: viewAccounts, calendar: viewCalendar, costs: viewCosts, copier: viewCopier })[tab](v);
+    ({ accounts: viewAccounts, calendar: viewCalendar, planner: function (x) { viewFrame(x, 'planner', '/payout-planner?embed=1'); }, recommender: function (x) { viewFrame(x, 'recommender', '/prop-firm-recommender?embed=1'); }, costs: viewCosts, copier: viewCopier })[tab](v);
   }
   function act(label, fn, kind) { var b = el('button', 's-btn sm', label); b.type = 'button'; b.addEventListener('click', fn); return b; }
   function put(id, body) { return T58.api('PUT', '/api/desk/accounts/' + id, body).then(function (r) { if (!r.ok) T58.toast(r.error); return load(); }); }
@@ -64,13 +87,60 @@
   function failed(a) { T58.modal('Mark ' + a.label + ' failed', function (m, close) { var s = causeSelect(); var l = el('label', 's-field', 'What ended it?'); l.appendChild(s); m.appendChild(l); var go = el('button', 's-btn primary', 'Save'); go.type = 'button'; go.addEventListener('click', function () { put(a.id, { status: 'failed', bust_cause: s.value }).then(close); }); m.appendChild(go); }); }
   function reset(a) { T58.modal('Reset ' + a.label, function (m, close) { var s = causeSelect(), f = T58.field('Reset fee paid', 'number', 0); var l = el('label', 's-field', 'What ended the old attempt?'); l.appendChild(s); m.appendChild(l); m.appendChild(f.label); var go = el('button', 's-btn primary', 'Reset'); go.type = 'button'; go.addEventListener('click', function () { T58.api('POST', '/api/desk/accounts/' + a.id + '/reset', { fee: f.input.value, bust_cause: s.value }).then(function (r) { if (!r.ok) T58.toast(r.error); close(); load(); }); }); m.appendChild(go); }); }
   function payout(a) { T58.modal('Log a payout', function (m, close) { var d = T58.field('Date', 'date', new Date().toISOString().slice(0, 10)), n = T58.field('Amount received', 'number', ''); m.appendChild(d.label); m.appendChild(n.label); var go = el('button', 's-btn primary', 'Save'); go.type = 'button'; go.addEventListener('click', function () { T58.api('POST', '/api/desk/accounts/' + a.id + '/payouts', { date: d.input.value, amount: n.input.value }).then(function (r) { if (!r.ok) T58.toast(r.error); close(); load(); }); }); m.appendChild(go); }); }
+  function iso(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
   function viewCalendar(v) {
-    var c = el('div', 's-card'); c.appendChild(el('div', 's-note', 'Dates are estimates from each firm\'s payout frequency, counting trade days as weekdays. Confirm in the firm\'s own payout dashboard.'));
-    if (!D.calendar.length) c.appendChild(el('div', 's-note', 'No funded accounts yet.'));
+    var feed = D.calendar_feed || [], byDay = {};
+    feed.forEach(function (e) { (byDay[e.date] = byDay[e.date] || []).push(e); });
+    var card = el('div', 's-card'), head = el('div', 'cal-head');
+    var prev = el('button', 's-btn sm', '\u2039'), next = el('button', 's-btn sm', '\u203A'), today = el('button', 's-btn sm', 'Today');
+    [prev, next, today].forEach(function (b) { b.type = 'button'; });
+    prev.setAttribute('aria-label', 'Previous month'); next.setAttribute('aria-label', 'Next month');
+    prev.addEventListener('click', function () { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() - 1, 1); render(); });
+    next.addEventListener('click', function () { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 1); render(); });
+    today.addEventListener('click', function () { var d = new Date(); calMonth = new Date(d.getFullYear(), d.getMonth(), 1); render(); });
+    head.appendChild(el('h2', null, calMonth.toLocaleString(undefined, { month: 'long', year: 'numeric' })));
+    head.appendChild(prev); head.appendChild(today); head.appendChild(next); card.appendChild(head);
+    var grid = el('div', 'cal-grid');
+    ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].forEach(function (d) { grid.appendChild(el('div', 'cal-dow', d)); });
+    var first = new Date(calMonth.getFullYear(), calMonth.getMonth(), 1), lead = (first.getDay() + 6) % 7, start = new Date(first); start.setDate(1 - lead);
+    var todayIso = iso(new Date());
+    for (var i = 0; i < 42; i++) {
+      var d = new Date(start); d.setDate(start.getDate() + i);
+      if (i >= 35 && d.getMonth() !== calMonth.getMonth()) break;
+      var cell = el('div', 'cal-day' + (d.getMonth() !== calMonth.getMonth() ? ' off' : '') + (iso(d) === todayIso ? ' today' : ''));
+      cell.appendChild(el('div', 'n', String(d.getDate())));
+      (byDay[iso(d)] || []).forEach(function (e) {
+        var txt = e.kind === 'received' ? '\u2713 ' + e.label + ' ' + money(e.amount) : (e.kind === 'eligible' ? 'Payout open: ' : 'Payout window: ') + e.label;
+        var ev = el('div', 'cal-ev ' + e.kind, txt); ev.title = e.label + ' \u2014 ' + e.note; cell.appendChild(ev);
+      });
+      grid.appendChild(cell);
+    }
+    card.appendChild(grid);
+    var lg = el('div', 'cal-legend');
+    [['eligible', 'var(--teal)', 'Payout open now'], ['upcoming', 'rgba(245,180,60,.8)', 'Upcoming window'], ['received', 'rgba(80,160,255,.9)', 'Payout received']].forEach(function (x) { var s = el('span'); var i = el('i'); i.style.background = x[1]; s.appendChild(i); s.appendChild(document.createTextNode(x[2])); lg.appendChild(s); });
+    card.appendChild(lg);
+    card.appendChild(el('div', 's-note', 'Dates are estimates from each firm\'s payout frequency, counting trade days as weekdays. Confirm in the firm\'s own payout dashboard.')).style.marginTop = '10px';
+    v.appendChild(card);
+    var list = el('div', 's-card cal-list');
+    list.appendChild(el('strong', null, 'Next payout windows'));
+    if (!D.calendar.length) list.appendChild(el('div', 's-note', 'No funded accounts yet. Mark an account funded on the Accounts tab and its payout windows appear here.'));
     D.calendar.forEach(function (e) { var r = el('div', 's-row'); r.style.cssText = 'padding:8px 0;border-top:1px solid var(--border);justify-content:space-between'; var l = el('div'); l.appendChild(el('strong', null, e.label)); l.appendChild(el('div', 's-note', e.note)); r.appendChild(l);
-      r.appendChild(T58.badge(e.date ? (e.kind === 'eligible' ? 'Eligible now (' + e.date + ')' : e.date + ' · in ' + e.days_away + ' days') : 'No date', e.kind === 'eligible' ? 'ok' : '')); c.appendChild(r); });
-    var dl = el('a', 's-btn sm', 'Download .ics'); dl.href = '/api/desk/payout-calendar.ics'; dl.style.marginTop = '10px'; c.appendChild(dl); v.appendChild(c);
+      r.appendChild(T58.badge(e.date ? (e.kind === 'eligible' ? 'Eligible now (' + e.date + ')' : e.date + ' \u00b7 in ' + e.days_away + ' days') : 'No date', e.kind === 'eligible' ? 'ok' : '')); list.appendChild(r); });
+    var dl = el('a', 's-btn sm', 'Add to your calendar app (.ics)'); dl.href = '/api/desk/payout-calendar.ics'; dl.style.marginTop = '10px'; list.appendChild(dl);
+    v.appendChild(list);
   }
+  /* Payout planner / Prop firm recommender live on their own pages; here they are embedded so they stay inside Prop Journey. */
+  function viewFrame(v, key, src) {
+    var f = frames[key];
+    if (!f) {
+      f = el('iframe', 'emb'); f.src = src; f.title = key; f.setAttribute('loading', 'lazy'); frames[key] = f;
+    }
+    v.appendChild(f);
+  }
+  window.addEventListener('message', function (e) {
+    if (!e.data || !e.data.t58h) return;
+    Object.keys(frames).forEach(function (k) { if (frames[k].contentWindow === e.source) frames[k].style.height = Math.max(480, e.data.t58h + 8) + 'px'; });
+  });
   function viewCosts(v) {
     var c = D.costs, top = el('div', 's-card'); top.appendChild(T58.kv([['Total spent', money(c.total_spent)], ['Payouts', money(c.total_payouts)], ['Net', money(c.net, true)], ['To break even', money(c.to_break_even)], ['Subscriptions', money(c.subscriptions_total)]])); v.appendChild(top);
     var bar = el('div', 's-bar'); bar.style.marginTop = '14px'; var add = el('button', 's-btn primary', 'Log a cost'); add.type = 'button'; add.addEventListener('click', function () {

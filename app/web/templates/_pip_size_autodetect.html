@@ -92,7 +92,7 @@
       for (var i = 0; i < fi.files.length; i++) fd.append("csv_file", fi.files[i]);
     }
 
-    statusEl.style.color = "#888";
+    statusEl.style.color = 'var(--text-muted)';
     statusEl.textContent = "Detecting pip size from data\u2026";
     fetch("/data/detect-pip-size", { method: "POST", body: fd })
       .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })

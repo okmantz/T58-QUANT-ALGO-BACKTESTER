@@ -999,12 +999,12 @@ def _rp_update_panels(win, d, i) -> None:
         text = f"{side} from {_px(open_t['entry'])}"
         if open_t["sl"]:
             text += f"\nStop {_px(open_t['sl'])}"
-        colour = mw.TEXT
+        color = mw.TEXT
         if open_t["per_unit"]:
             unreal = (d["c"][i] - open_t["entry"]) * open_t["dir"] * open_t["per_unit"]
             text += f"\nUnrealized (est.): {'+' if unreal >= 0 else ''}{unreal:,.2f}"
-            colour = mw.GREEN if unreal >= 0 else mw.RED  # colour by profit/loss, not by side
-        win._rp_open.config(text=text, fg=colour)
+            color = mw.GREEN if unreal >= 0 else mw.RED  # color by profit/loss, not by side
+        win._rp_open.config(text=text, fg=color)
 
     # prop bars
     cv = win._rp_prop

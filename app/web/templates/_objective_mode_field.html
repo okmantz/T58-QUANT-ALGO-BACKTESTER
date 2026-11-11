@@ -1,18 +1,37 @@
-{# Test mode: PROP FIRM (default) or NET PROFIT (live account). Posted as objective_mode; see app/web/objective_mode.py. #}
+{# Test mode: PROP FIRM (default) or NET PROFIT (live account). Posted as objective_mode; see app/web/objective_mode.py.
+   Styled by the shared kit (.t58-mode in t58-ui.css). Anything marked data-prop-only on the page (the prop-firm picker, its rules)
+   hides while Net profit is chosen, because a live-account test ignores prop rules. #}
 <div class="objective-mode" style="flex:1 1 100%;width:100%;margin:6px 0 10px 0;">
-  <label class="flabel" style="display:block;margin-bottom:4px;">Test mode</label>
-  <div role="radiogroup" aria-label="Test mode" style="display:flex;flex-wrap:wrap;gap:8px;">
-    <label style="display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid var(--lc-border, #2a3340);border-radius:8px;cursor:pointer;">
+  <label class="flabel" style="display:block;margin-bottom:6px;">Test mode</label>
+  <div class="t58-mode" role="radiogroup" aria-label="Test mode">
+    <label>
       <input type="radio" name="objective_mode" value="prop_lifecycle" checked>
-      <span><b>Prop firm</b> <span style="opacity:.7;">(default)</span></span>
+      <span class="m-box"><b>Prop firm</b><span>Default. Scores the full lifecycle: pass the evaluation, survive the funded stage, reach a payout.</span></span>
     </label>
-    <label style="display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid var(--lc-border, #2a3340);border-radius:8px;cursor:pointer;">
+    <label>
       <input type="radio" name="objective_mode" value="net_profit">
-      <span><b>Net profit</b> <span style="opacity:.7;">(live account)</span></span>
+      <span class="m-box"><b>Net profit (live account)</b><span>Ignores prop rules and ranks on what the account earns after costs, shrunk by drawdown.</span></span>
     </label>
-  </div>
-  <div class="why" style="font-size:12px;opacity:.7;margin-top:4px;">
-    Prop firm scores the full account lifecycle: pass the evaluation, survive the funded stage, reach a payout. Net profit ignores
-    prop rules and ranks on what the account earns after costs, shrunk by drawdown &mdash; use it for a live or personal account.
   </div>
 </div>
+<script>
+(function () {
+  if (window.__t58ModeBound) return; window.__t58ModeBound = true;
+  function apply() {
+    var r = document.querySelector('input[name="objective_mode"]:checked'), net = r && r.value === 'net_profit';
+    document.querySelectorAll('[data-prop-only]').forEach(function (e) { e.style.display = net ? 'none' : ''; });
+    document.documentElement.setAttribute('data-objective', net ? 'net_profit' : 'prop_lifecycle');
+    var sel = document.querySelector('#fp_prop_preset_select, #lc-prop-preset, select[name="prop_preset"]');
+    var key = document.getElementById('fp_prop_preset_key');
+    if (net) {
+      if (sel && sel.value && !sel.dataset.keep) { sel.dataset.keep = sel.value; }
+      if (sel && sel.value) { sel.value = ''; sel.dispatchEvent(new Event('change', { bubbles: true })); }
+      if (key) key.value = '';
+    } else if (sel && sel.dataset.keep) {
+      sel.value = sel.dataset.keep; delete sel.dataset.keep; sel.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }
+  document.addEventListener('change', function (e) { if (e.target && e.target.name === 'objective_mode') apply(); });
+  document.addEventListener('DOMContentLoaded', apply);
+})();
+</script>

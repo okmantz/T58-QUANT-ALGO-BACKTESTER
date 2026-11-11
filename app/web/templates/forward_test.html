@@ -65,8 +65,10 @@
 <div class="dv-seg" role="tablist" aria-label="Deploy mode">
   <a href="/forward-test?view=demo" role="tab" id="dv-tab-demo" data-view="demo">T58 Demo account <small>recommended</small></a>
   <a href="/forward-test?view=mt5" role="tab" id="dv-tab-mt5" data-view="mt5">MT5 forward test</a>
+  <a href="/forward-test?view=live" role="tab" id="dv-tab-live" data-view="live">Deploy Live</a>
 </div>
-<div id="dv-pane-demo" {% if view == 'mt5' %}hidden{% endif %}>{% include '_demo_account_panel.html' %}</div>
+<div id="dv-pane-live" {% if view != 'live' %}hidden{% endif %}><iframe id="dv-live-frame" title="Deploy Live" style="width:100%;border:0;min-height:720px;background:transparent;"{% if view == 'live' %} src="/deploy-live?embed=1"{% endif %}></iframe></div>
+<div id="dv-pane-demo" {% if view != 'demo' %}hidden{% endif %}>{% include '_demo_account_panel.html' %}</div>
 <div id="dv-pane-mt5" {% if view != 'mt5' %}hidden{% endif %}>
 <p class="lc-hint" style="margin:0 0 10px;">Deploy is where strategies stop being backtests. Warm up here: run the champion against a real MT5 terminal's live bars (demo account recommended) before any real-money deployment. Needs an MT5 terminal installed and logged in on THIS machine — the server can't reach a terminal on another computer.</p>
 <div class="lc-card" style="margin:10px 0;padding:10px 14px;">
@@ -236,14 +238,12 @@
 <div class="lc-card">
   <h3>More deploy tools</h3>
   <div class="lc-toolgrid">
-    <a class="lc-toolcard" href="/forward-test?view=demo"><div class="tname">T58 Demo account</div><div class="tdesc">A simulated prop-firm account that trades your strategy from TradingView alerts.</div></a>
-    <a class="lc-toolcard" href="/forward-test?view=mt5"><div class="tname">Forward Test (MT5)</div><div class="tdesc">Run a strategy against a real terminal's live bars, demo first.</div></a>
-    <a class="lc-toolcard" href="/pine-indicator/bridge"><div class="tname">TradingView bridge</div><div class="tdesc">Paste a backtest's settings ID into a Pine script and the exact config shows on your chart.</div></a>
-    <a class="lc-toolcard" href="/deploy-live"><div class="tname">Deploy Live</div><div class="tdesc">Real-money deployment — separately guarded and armed on purpose.</div></a>
     <a class="lc-toolcard" href="/live-market"><div class="tname">Monitor (Live Market)</div><div class="tdesc">Watch live prices and open positions.</div></a>
     <a class="lc-toolcard" href="/replay"><div class="tname">Interactive Replay</div><div class="tdesc">Play a session back bar by bar and re-decide it.</div></a>
+    <a class="lc-toolcard" href="/pine-indicator/bridge"><div class="tname">TradingView bridge</div><div class="tdesc">Paste a backtest's settings ID into a Pine script and the exact config shows on your chart.</div></a>
     <a class="lc-toolcard" href="/webhook-relay"><div class="tname">Webhook Relay (TradingView)</div><div class="tdesc">Forward test a Pine Script strategy from TradingView alerts, on a paper or demo account.</div></a>
   </div>
+</div>
 </div>
 
 </div></div>
@@ -252,12 +252,14 @@
 
 <script>
 (function(){
-  var panes = {demo: document.getElementById('dv-pane-demo'), mt5: document.getElementById('dv-pane-mt5')};
+  var panes = {demo: document.getElementById('dv-pane-demo'), mt5: document.getElementById('dv-pane-mt5'), live: document.getElementById('dv-pane-live')};
   function show(v){ if (!panes[v]) v = 'demo';
     Object.keys(panes).forEach(function(k){ panes[k].hidden = (k !== v); document.getElementById('dv-tab-' + k).setAttribute('aria-selected', k === v ? 'true' : 'false'); });
+    if (v === 'live') { var f = document.getElementById('dv-live-frame'); if (f && !f.getAttribute('src')) f.setAttribute('src', '/deploy-live?embed=1'); }
     try { history.replaceState(null, '', '/forward-test?view=' + v); } catch (e) {} }
   document.querySelectorAll('.dv-seg a').forEach(function(a){ a.addEventListener('click', function(e){ e.preventDefault(); show(a.dataset.view); }); });
   show({{ (view or 'demo')|tojson }});
+  window.addEventListener('message', function(e){ if (e.origin !== location.origin || !e.data || !e.data.t58h) return; var f = document.getElementById('dv-live-frame'); if (f && f.contentWindow === e.source) f.style.height = Math.max(640, e.data.t58h + 24) + 'px'; });
 })();
 </script>
 <script>

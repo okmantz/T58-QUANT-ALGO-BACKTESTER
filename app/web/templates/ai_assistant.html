@@ -105,6 +105,12 @@
     Ollama only explains and answers questions against them.
   </p>
 
+  <div class="t58-tabs" role="tablist" id="ai-tabs" style="margin:0 0 14px;">
+    <button type="button" class="t58-tab active" role="tab" data-tab="assistant">Assistant</button>
+    <button type="button" class="t58-tab" role="tab" data-tab="ask" data-frame="/research?mode=ask&embed=1">Research: Ask a question</button>
+    <button type="button" class="t58-tab" role="tab" data-tab="analyze" data-frame="/research?mode=analyze&embed=1">Research: Run analyses</button>
+  </div>
+  <div id="ai-pane-assistant">
   <div class="oai-grid">
     <div class="oai-panel">
       <h2>News <span class="refresh" onclick="loadNews()">refresh</span></h2>
@@ -193,6 +199,29 @@
       </details>
     </div>
   </div>
+  </div>
+  <div id="ai-pane-ask" hidden><iframe class="ai-frame" title="Research: Ask a question"></iframe></div>
+  <div id="ai-pane-analyze" hidden><iframe class="ai-frame" title="Research: Run analyses"></iframe></div>
+<style>.ai-frame{width:100%;border:0;min-height:640px;background:transparent}</style>
+<script>
+(function(){
+  var tabs=document.querySelectorAll('#ai-tabs .t58-tab');
+  function show(name){
+    tabs.forEach(function(t){t.classList.toggle('active',t.dataset.tab===name);});
+    ['assistant','ask','analyze'].forEach(function(n){
+      var p=document.getElementById('ai-pane-'+n); if(p) p.hidden=(n!==name);
+    });
+    var t=document.querySelector('#ai-tabs [data-tab="'+name+'"]');
+    if(t&&t.dataset.frame){var f=document.querySelector('#ai-pane-'+name+' iframe'); if(f&&!f.getAttribute('src')) f.setAttribute('src',t.dataset.frame);}
+  }
+  tabs.forEach(function(t){t.addEventListener('click',function(){show(t.dataset.tab);});});
+  var want=new URLSearchParams(location.search).get('tab'); if(want) show(want);
+  window.addEventListener('message',function(e){
+    if(e.origin!==location.origin||!e.data||!e.data.t58h) return;
+    document.querySelectorAll('.ai-frame').forEach(function(f){ if(f.contentWindow===e.source) f.style.height=Math.max(520,e.data.t58h+24)+'px'; });
+  });
+})();
+</script>
 </div>
 </div>
 <script>

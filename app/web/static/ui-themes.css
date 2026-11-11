@@ -10,7 +10,7 @@ html[data-ui-theme] #t58-theme-toggle { display: none; }
 /* ------------------------------------------------------------------ Obsidian Gold: black stone, warm gold */
 html[data-ui-theme="obsidian-gold"] {
   --bg: #070605; --bg-1: #070605; --panel: rgba(18, 15, 10, .82); --panel-2: rgba(23, 19, 12, .84); --panel-3: #1b160d; --panel-elevated: #1d180e;
-  --border: #2c2412; --border-light: #4a3c1c; --text: #f3ead5; --text-muted: #b2a47f; --text-dim: #7f734f;
+  --border: #2c2412; --border-light: #4a3c1c; --text: #f3ead5; --text-muted: #b2a47f; --text-dim: #958a68;
   --teal: #e2b84d; --teal-dim: #7a5d17; --teal-rgb: 226, 184, 77; --on-teal: #1a1204; --on-teal2: #1a1204; --on-teal3: #1a1204;
   --pop-bg: #16110a; --pop-bg-2: #1d170d; --pop-bd: rgba(226, 184, 77, .32);
   --glass-bg: rgba(18, 15, 10, .74); --glass-border: rgba(226, 184, 77, .14);
@@ -24,7 +24,7 @@ html[data-ui-theme="obsidian-gold"] h1 { background: linear-gradient(100deg, #ff
 /* ------------------------------------------------------------------ Midnight Azure: deep navy, glacier-blue light (pairs with Abyssal Blue, Ocean and Sakura) */
 html[data-ui-theme="midnight-azure"] {
   --bg: #050b18; --bg-1: #050b18; --panel: rgba(10, 22, 44, .82); --panel-2: rgba(13, 28, 54, .84); --panel-3: #0f2140; --panel-elevated: #12284c;
-  --border: #1b3560; --border-light: #2c5088; --text: #e6f1ff; --text-muted: #92b2d8; --text-dim: #6486b0;
+  --border: #1b3560; --border-light: #2c5088; --text: #e6f1ff; --text-muted: #92b2d8; --text-dim: #7896bc;
   --teal: #4cb4ff; --teal-dim: #1d6fb8; --teal-rgb: 76, 180, 255; --on-teal: #04121f; --on-teal2: #04121f; --on-teal3: #04121f;
   --pop-bg: #0b1a33; --pop-bg-2: #102345; --pop-bd: rgba(76, 180, 255, .4);
   --glass-bg: rgba(10, 22, 44, .72); --glass-border: rgba(76, 180, 255, .18);
@@ -41,7 +41,7 @@ html[data-ui-theme="midnight-azure"] h1 { background: linear-gradient(100deg, #e
 /* ------------------------------------------------------------------ Terminal Green: phosphor on black, monospace, square corners */
 html[data-ui-theme="terminal-green"] {
   --bg: #000000; --bg-1: #000000; --panel: rgba(2, 14, 8, .9); --panel-2: rgba(3, 18, 10, .92); --panel-3: #04170c; --panel-elevated: #051c0f;
-  --border: #0d3b20; --border-light: #146236; --text: #b8ffd0; --text-muted: #52c07c; --text-dim: #2f8a52;
+  --border: #0d3b20; --border-light: #146236; --text: #b8ffd0; --text-muted: #52c07c; --text-dim: #419962;
   --teal: #19ff7a; --teal-dim: #0a8a42; --teal-rgb: 25, 255, 122; --on-teal: #00170a; --on-teal2: #00170a; --on-teal3: #00170a;
   --pop-bg: #03140a; --pop-bg-2: #051c0f; --pop-bd: rgba(25, 255, 122, .38);
   --glass-bg: rgba(2, 14, 8, .86); --glass-border: rgba(25, 255, 122, .16);
@@ -58,7 +58,7 @@ html[data-ui-theme="terminal-green"] body::after { content: ""; position: fixed;
 /* ------------------------------------------------------------------ Deep Space: indigo void, violet light */
 html[data-ui-theme="deep-space"] {
   --bg: #04040f; --bg-1: #04040f; --panel: rgba(12, 12, 34, .82); --panel-2: rgba(15, 15, 42, .84); --panel-3: #14143a; --panel-elevated: #181845;
-  --border: #25255a; --border-light: #3a3a82; --text: #e8eaff; --text-muted: #9a9fd4; --text-dim: #6c71a8;
+  --border: #25255a; --border-light: #3a3a82; --text: #e8eaff; --text-muted: #9ba0d4; --text-dim: #8589b9;
   --teal: #8f86ff; --teal-dim: #4a41b8; --teal-rgb: 143, 134, 255; --on-teal: #0b0824; --on-teal2: #0b0824; --on-teal3: #0b0824;
   --pop-bg: #0e0e2c; --pop-bg-2: #151540; --pop-bd: rgba(143, 134, 255, .4);
   --glass-bg: rgba(12, 12, 34, .74); --glass-border: rgba(143, 134, 255, .16);
@@ -71,7 +71,7 @@ html[data-ui-theme="deep-space"] body {
 /* ------------------------------------------------------------------ Crimson Protocol: black-red, sharp, alert */
 html[data-ui-theme="crimson-protocol"] {
   --bg: #080304; --bg-1: #080304; --panel: rgba(22, 8, 11, .86); --panel-2: rgba(27, 10, 14, .88); --panel-3: #1d0b0f; --panel-elevated: #240d12;
-  --border: #3a1219; --border-light: #5c1c27; --text: #f6e7ea; --text-muted: #c08a94; --text-dim: #8c5a64;
+  --border: #3a1219; --border-light: #5c1c27; --text: #f6e7ea; --text-muted: #c39099; --text-dim: #a57c84;
   --teal: #ff3d57; --teal-dim: #8a1424; --teal-rgb: 255, 61, 87; --on-teal: #ffffff; --on-teal2: #ffffff; --on-teal3: #ffffff;
   --pop-bg: #180709; --pop-bg-2: #220c10; --pop-bd: rgba(255, 61, 87, .4);
   --glass-bg: rgba(22, 8, 11, .8); --glass-border: rgba(255, 61, 87, .16);

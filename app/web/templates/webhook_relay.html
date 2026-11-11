@@ -23,6 +23,9 @@
   .wr-pos { color: var(--lc-acc); } .wr-neg { color: var(--lc-red); }
   .wr-msg { font-size: 12.5px; margin-top: 8px; min-height: 18px; }
   .wr-steps li { margin: 6px 0; line-height: 1.6; font-size: 13.5px; }
+  #wr-overview h2 { font-size: 16px; text-transform: none; letter-spacing: 0; margin: 0 0 4px; color: var(--lc-text); }
+  #wr-overview .t58-help { font-size: 13px; margin: 0; color: var(--lc-muted); }
+  #wr-overview a { color: var(--lc-acc); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -38,18 +41,30 @@
 <h1 class="lc-title">TradingView webhook relay</h1>
 <p class="lc-sub">Run your Pine Script strategy on TradingView and let its alerts drive a forward test here. Every alert moves a <b>T58 paper account</b> (the demo account: real-time signals, simulated fills, full P&amp;L stats), and can optionally mirror to a <b>demo/practice broker account</b> you have saved under Deploy. Live accounts are refused.</p>
 
-<div class="lc-card">
-  <h3>How it fits together</h3>
-  <ol class="wr-steps">
-    <li><b>Pine strategy on TradingView</b> places entries/exits on the chart as usual.</li>
-    <li>A TradingView <b>alert</b> on that strategy sends a webhook to the URL below, carrying the order details.</li>
-    <li>T58 turns it into a position change on the paper account, and (if you chose one) on your demo broker account.</li>
-  </ol>
-  <p class="lc-hint">TradingView's own Paper Trading cannot be driven by webhooks, so T58's paper account plays that role: it keeps the position, fills, P&amp;L and win rate for the forward test.</p>
-</div>
+<ol class="t58-steps" id="wr-overview">
+  <li class="t58-step{{ ' done' if url_ready }}"><span class="t58-step-n">1</span><div class="t58-step-b">
+    <h2>Give TradingView an address to call</h2>
+    <p class="t58-help">TradingView lives on the internet, this app lives on your computer. One click opens a safe tunnel between them.
+      {% if url_ready %}<span class="lc-pill green">done</span>{% else %}<a href="#wr-step1">Start here</a>{% endif %}</p>
+  </div></li>
+  <li class="t58-step{{ ' done' if relays }}"><span class="t58-step-n">2</span><div class="t58-step-b">
+    <h2>Create a relay</h2>
+    <p class="t58-help">One relay per strategy. It gives you a webhook URL and the exact alert message to paste.
+      {% if relays %}<span class="lc-pill green">{{ relays|length }} created</span>{% else %}<a href="#wr-step2">Create one</a>{% endif %}</p>
+  </div></li>
+  <li class="t58-step"><span class="t58-step-n">3</span><div class="t58-step-b">
+    <h2>Paste both into a TradingView alert</h2>
+    <p class="t58-help">Webhook URL in the Notifications tab, alert message in the Message box. <a href="#wr-step3">Show me how</a></p>
+  </div></li>
+  <li class="t58-step"><span class="t58-step-n">4</span><div class="t58-step-b">
+    <h2>Test it, then watch it trade</h2>
+    <p class="t58-help">Press <b>Test long</b> on a relay to check the whole chain before a real signal. Alerts then move a T58 paper account (and your demo broker, if you choose one).</p>
+  </div></li>
+</ol>
+<p class="lc-hint">TradingView&rsquo;s own Paper Trading cannot be driven by webhooks, so T58&rsquo;s paper account plays that role: it keeps the position, fills, P&amp;L and win rate for the forward test.</p>
 
-<div class="lc-card">
-  <h3>1 · Public address TradingView can reach {% if url_ready %}<span class="lc-pill green">ready</span>{% else %}<span class="lc-pill grey">needed</span>{% endif %}</h3>
+<div class="lc-card" id="wr-step1">
+  <h3>Step 1 · Public address TradingView can reach {% if url_ready %}<span class="lc-pill green">ready</span>{% else %}<span class="lc-pill grey">needed</span>{% endif %}</h3>
   <p class="lc-hint"><b>Why this step exists:</b> TradingView's servers call your webhook from the internet, and they only accept <b>https on port 443</b> (or http on port 80). This app runs on port <code class="ic">{{ local_port }}</code> on your own computer, so an address like <code class="ic">http://127.0.0.1:{{ local_port }}</code> (or a Tailscale <code class="ic">100.x.x.x:{{ local_port }}</code> one) is rejected with <i>"Only port 80 is allowed for HTTP"</i>. A tunnel fixes that: it gives you a public https address with no port that forwards to this app.</p>
   <div class="lc-side-card" id="wr-tunnel" style="margin:10px 0;">
     <h4 style="margin:0 0 4px;">Easiest: let T58 open the tunnel for you</h4>
@@ -87,9 +102,12 @@
   </div>
 </div>
 
-<div class="lc-card" style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
-  <div><h3 style="margin:0;">2 · Relays</h3><span class="lc-hint">One relay = one webhook URL and its rules. Make one per strategy so each keeps its own track record.</span></div>
-  <button type="button" class="lc-btn big" id="wr-new">+ New relay</button>
+<div class="lc-card" id="wr-step2" style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+  <div><h3 style="margin:0;">Step 2 · Relays</h3><span class="lc-hint">One relay = one webhook URL and its rules. Make one per strategy so each keeps its own track record.</span></div>
+  <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+    <input type="text" id="wr-new-name" value="My Pine strategy" maxlength="60" aria-label="Relay name" style="width:220px; background:var(--lc-panel2); color:var(--lc-text); border:1px solid var(--lc-border2); border-radius:9px; padding:9px 11px; font:inherit; font-size:13px;">
+    <button type="button" class="lc-btn big" id="wr-new">+ New relay</button>
+  </div>
 </div>
 
 {% for r in relays %}
@@ -111,7 +129,7 @@
 
   <div class="wr-grid" style="margin-top:14px;">
     <div class="lc-side-card"><h4>Paper account</h4><div class="wr-paper wr-mono">loading…</div></div>
-    <div class="lc-side-card"><h4>Test it from here</h4>
+    <div class="lc-side-card"><h4>Step 4 · Test it from here</h4>
       <div class="lc-row">
         <div class="lc-col"><label class="flabel">Ticker</label><input type="text" class="wr-t-ticker" value="NQ1!"></div>
         <div class="lc-col"><label class="flabel">Price</label><input type="number" step="any" class="wr-t-price" placeholder="e.g. 18000"></div>
@@ -175,11 +193,11 @@
   <p class="lc-hint">"Where" = <b>paper</b> (T58 paper account, fills at the alert price) or <b>broker</b> (your demo broker account; hover a price to see whether it was a real broker fill or the alert price).</p>
 </div>
 {% else %}
-<div class="lc-card"><p class="lc-hint">No relays yet &mdash; click <b>+ New relay</b>.</p></div>
+<div class="lc-card"><p class="lc-hint">No relays yet. Name one above and click <b>+ New relay</b>.</p></div>
 {% endfor %}
 
-<div class="lc-card">
-  <h3>3 · Set up the alert in TradingView</h3>
+<div class="lc-card" id="wr-step3">
+  <h3>Step 3 · Set up the alert in TradingView</h3>
   <ol class="wr-steps">
     <li>Add your Pine <b>strategy</b> to a chart (the chart's symbol and timeframe are what the alert will trade).</li>
     <li>Click <b>Alerts &rarr; Create alert</b>. Condition: your strategy, with "Order fills only".</li>
@@ -205,6 +223,13 @@
   }
   function money(v) { if (v === null || v === undefined) return '–'; return (v < 0 ? '-$' : '$') + Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 2 }); }
   function cls(v) { return v > 0 ? 'wr-pos' : (v < 0 ? 'wr-neg' : ''); }
+  /* In-page confirmation: browser confirm()/prompt() boxes are blocked in some app webviews. */
+  function twoClick(btn, armedText) {
+    if (btn.getAttribute('data-armed') === '1') { btn.removeAttribute('data-armed'); btn.textContent = btn.getAttribute('data-label'); return true; }
+    btn.setAttribute('data-label', btn.textContent); btn.setAttribute('data-armed', '1'); btn.textContent = armedText;
+    setTimeout(function () { if (btn.getAttribute('data-armed') === '1') { btn.removeAttribute('data-armed'); btn.textContent = btn.getAttribute('data-label'); } }, 4000);
+    return false;
+  }
   function esc(t) { var d = document.createElement('div'); d.textContent = t == null ? '' : String(t); return d.innerHTML; }
 
   document.addEventListener('click', function (e) {
@@ -248,8 +273,8 @@
     fetch('/webhook-relay/tunnel/status').then(function (r) { return r.json(); }).then(function (s) { wasRunning = (s.state === 'running'); paint(s); if (s.state === 'starting') poll(); }).catch(function () {});
   })();
   document.getElementById('wr-new').addEventListener('click', function () {
-    var name = prompt('Name this relay (e.g. the strategy it will follow):', 'My Pine strategy');
-    if (name === null) return;
+    var name = (document.getElementById('wr-new-name').value || '').trim() || 'My Pine strategy';
+    this.disabled = true;
     post('/webhook-relay/relays', { name: name }).then(function () { location.reload(); });
   });
 
@@ -298,13 +323,13 @@
       });
     });
     card.querySelector('[data-act="reset-paper"]').addEventListener('click', function () {
-      if (confirm('Clear this relay\'s paper account and alert history?')) post('/webhook-relay/relays/' + id + '/reset-paper').then(refresh);
+      if (twoClick(this, 'Click again to clear paper account')) post('/webhook-relay/relays/' + id + '/reset-paper').then(refresh);
     });
     card.querySelector('[data-act="rotate"]').addEventListener('click', function () {
-      if (confirm('Make a new webhook URL? The old one stops working, so update your TradingView alerts.')) post('/webhook-relay/relays/' + id + '/rotate').then(function () { location.reload(); });
+      if (twoClick(this, 'Click again: old URL stops working')) post('/webhook-relay/relays/' + id + '/rotate').then(function () { location.reload(); });
     });
     card.querySelector('[data-act="delete"]').addEventListener('click', function () {
-      if (confirm('Delete this relay and its paper history?')) post('/webhook-relay/relays/' + id + '/delete').then(function () { location.reload(); });
+      if (twoClick(this, 'Click again to delete')) post('/webhook-relay/relays/' + id + '/delete').then(function () { location.reload(); });
     });
     card.querySelector('.wr-form').addEventListener('submit', function (e) {
       e.preventDefault();

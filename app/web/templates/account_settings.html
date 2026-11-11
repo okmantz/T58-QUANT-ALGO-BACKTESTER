@@ -105,7 +105,7 @@
   .rp-share { display: flex; flex-wrap: wrap; gap: 8px; }
   .rp-share .secondary-btn { margin-top: 0; }
   @media (max-width: 520px) { .rp-show { grid-template-columns: 1fr; } }
-  /* Workspace presets: six whole-workspace looks (unlockable). The preview card is a miniature of the real dashboard in that preset's colours. */
+  /* Workspace presets: six whole-workspace looks (unlockable). The preview card is a miniature of the real dashboard in that preset's colors. */
   .ws-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; margin: 10px 0 4px; }
   .ws-tile { position: relative; text-align: left; padding: 10px; border-radius: 14px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); cursor: pointer; font: inherit; transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease; }
   .ws-tile:hover { transform: translateY(-2px); border-color: var(--border-light); }
@@ -228,10 +228,13 @@
       <a href="/forward-test?view=demo" style="margin-left:auto;">Open the T58 demo account &rarr;</a>
     </form>
   </div>
-  <!-- ================= PROFILE PICTURE ================= -->
-  <div class="card">
-    <h2>Profile picture</h2>
-    <div style="display:flex;align-items:center;gap:16px;">
+  <!-- ================= PROFILE (the profile picture lives inside this section) ================= -->
+  <details class="card fold" id="sec-profile">
+    <summary><h2>Profile</h2></summary>
+    <div class="fold-body">
+      <div class="fold-sub">
+        <h3>Profile picture</h3>
+        <div style="display:flex;align-items:center;gap:16px;">
       {% if settings.profile_picture_filename %}
       <img src="/settings/account/profile-picture/file?v={{ settings.profile_picture_filename }}" alt="Profile picture"
            style="width:72px;height:72px;border-radius:50%;object-fit:cover;border:1px solid var(--border-light);">
@@ -252,13 +255,9 @@
         {% endif %}
       </div>
     </div>
-  </div>
-
-  <!-- ================= PROFILE ================= -->
-  <form method="POST" action="/settings/account/save">
-    <div class="card">
-      <h2>Profile</h2>
-      <label for="display_name">Name</label>
+      </div>
+      <form method="POST" action="/settings/account/save">
+        <label for="display_name">Name</label>
       <input type="text" id="display_name" name="display_name" value="{{ settings.display_name }}" placeholder="Owen">
 
       <label for="username">Username</label>
@@ -270,15 +269,16 @@
 
       <label for="company">Company (optional)</label>
       <input type="text" id="company" name="company" value="{{ settings.company }}" placeholder="T58 Trading">
+        <button class="submit-btn" type="submit">Save profile</button>
+      </form>
     </div>
-    <button class="submit-btn" type="submit">Save profile</button>
-  </form>
-
+  </details>
 
   <!-- ================= SECURITY ================= -->
   <form method="POST" action="/settings/account/change_password">
-    <div class="card">
-      <h2>Security</h2>
+    <details class="card fold" id="sec-security">
+      <summary><h2>Security</h2></summary>
+      <div class="fold-body">
       <p class="help">
         {% if settings.has_password %}
         A local lock password is currently set -- this app will ask for it before showing
@@ -317,7 +317,8 @@
         </button>
       </div>
       <p class="field-note">"Log out" clears this browser's unlock for the current lock password (if one is set). "Delete account" only clears the Profile + Security fields above -- your strategies, datasets, and reports stay untouched.</p>
-    </div>
+      </div>
+    </details>
   </form>
 
   <!-- ================= RESEARCH PROFILE (rank, titles, collectible badges, showcase) =================
@@ -353,8 +354,10 @@
     <h2>Personalize</h2>
     <p class="help">Saved to your account (it follows your license key through a reinstall). Switch the theme in the sidebar to preview the night and day version of every scene.</p>
 
-    <label>Accent colour</label>
-    <div class="ac-row" id="ac-row" role="radiogroup" aria-label="Accent colour">
+    <details class="pz-fold" id="pz-sec-accent">
+      <summary>Accent color</summary>
+      <div class="pz-fold-body">
+    <div class="ac-row" id="ac-row" role="radiogroup" aria-label="Accent color">
       <button type="button" class="ac-sw" data-accent="teal" style="--c:#35e0b0" role="radio" title="Teal (default)"><span>Teal</span></button>
       <button type="button" class="ac-sw" data-accent="blue" style="--c:#4d90ff" role="radio" title="Electric blue"><span>Blue</span></button>
       <button type="button" class="ac-sw" data-accent="violet" style="--c:#9b8cff" role="radio" title="Violet"><span>Violet</span></button>
@@ -364,8 +367,8 @@
       <button type="button" class="ac-sw" data-accent="custom" style="--c:#888" role="radio" id="ac-custom-sw" title="Custom hex"><span>Custom</span></button>
     </div>
     <div class="ac-hex" id="ac-hex-wrap" hidden>
-      <input type="color" id="ac-color" aria-label="Pick a colour" value="#35e0b0">
-      <input type="text" id="ac-hex" maxlength="7" placeholder="#35e0b0" spellcheck="false" autocomplete="off" aria-label="Custom hex colour">
+      <input type="color" id="ac-color" aria-label="Pick a color" value="#35e0b0">
+      <input type="text" id="ac-hex" maxlength="7" placeholder="#35e0b0" spellcheck="false" autocomplete="off" aria-label="Custom hex color">
     </div>
     <p class="field-note">Applies to buttons, the active navigation item, chart highlights, sliders and status indicators. Pass / fail results keep their own green and red so they always mean the same thing.</p>
     <div class="ac-preview" aria-hidden="true">
@@ -373,21 +376,27 @@
       <input type="range" value="60" tabindex="-1"><span class="ac-p-dot"></span>
     </div>
 
+      </div>
+    </details>
+
+    <details class="pz-fold" id="pz-sec-dashboard">
+      <summary>Dashboard</summary>
+      <div class="pz-fold-body">
     {% if live_pnl_unlocked %}
-    <hr class="divider">
-    <label>Dashboard</label>
     <label class="checkbox-row" style="display:flex;gap:8px;align-items:center;"><input type="checkbox" id="pz-livepnl" style="width:auto;"> Show the live P&amp;L panel above the Dashboard stats</label>
     <p class="field-note">Earned by promoting your first strategy to champion. The panel is collapsed until you open or pin it.</p>
     <script>(function(){var c=document.getElementById('pz-livepnl');if(!c)return;try{c.checked=localStorage.getItem('t58-live-pnl')==='1';}catch(e){}
       c.addEventListener('change',function(){try{localStorage.setItem('t58-live-pnl',c.checked?'1':'0');}catch(e){}});})();</script>
     {% else %}
-    <hr class="divider">
-    <label>Dashboard</label>
     <p class="field-note">&#128274; Live P&amp;L panel &mdash; promote your first strategy to champion to unlock it.</p>
     {% endif %}
 
-    <hr class="divider">
-    <label>Background</label>
+      </div>
+    </details>
+
+    <details class="pz-fold" id="pz-sec-background">
+      <summary>Background</summary>
+      <div class="pz-fold-body">
     <div id="pz-grid" role="radiogroup" aria-label="Background">
       <div class="pz-group">Classic</div>
       <div class="pz-grid">
@@ -423,9 +432,13 @@
     <label class="pz-switch"><input type="checkbox" id="pz-fx"> Gentle background motion (scenes, snow, leaves, petals, fireflies)</label>
     <p class="field-note">Slow, subtle movement behind the app: drifting nebula, rolling waves, rain, fog, fireflies and more. It never moves your content, pauses when the tab is hidden, and switches itself off if your device asks for reduced motion or data saving.</p>
 
-    <hr class="divider">
-    <label>Interface theme</label>
-    <p class="field-note" style="margin-top:0">A whole-interface style (colours, corners, type). Unlocked by milestones; the light/dark switch is replaced while a theme is on.</p>
+      </div>
+    </details>
+
+    <details class="pz-fold" id="pz-sec-theme">
+      <summary>Interface theme</summary>
+      <div class="pz-fold-body">
+    <p class="field-note" style="margin-top:0">A whole-interface style (colors, corners, type). Unlocked by milestones; the light/dark switch is replaced while a theme is on.</p>
     <div class="ut-grid" id="ut-grid" role="radiogroup" aria-label="Interface theme">
       <button type="button" class="ut-tile" data-ut="" role="radio"><span class="sw" style="background:linear-gradient(135deg,#0d1017,#35e0b0)"></span><span class="nm">Standard</span></button>
       <button type="button" class="ut-tile" data-ut="obsidian-gold" role="radio"><span class="sw" style="background:linear-gradient(135deg,#070605 30%,#7a5d17 70%,#e2b84d)"></span><span class="nm">Obsidian Gold</span><i class="lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
@@ -435,9 +448,13 @@
       <button type="button" class="ut-tile" data-ut="crimson-protocol" role="radio"><span class="sw" style="background:linear-gradient(135deg,#080304 40%,#8a1424 75%,#ff3d57)"></span><span class="nm">Crimson Protocol</span><i class="lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
     </div>
 
-    <hr class="divider">
-    <label>Workspace presets</label>
-    <p class="field-note" style="margin-top:0">Five complete looks for the whole workspace &mdash; layout, colour, surfaces, type and motion together. Each one is a reward for a milestone (hover a locked one to see what to do). A preset replaces the interface theme above while it is on; pick Standard to go back.</p>
+      </div>
+    </details>
+
+    <details class="pz-fold" id="pz-sec-workspace">
+      <summary>Workspace presets</summary>
+      <div class="pz-fold-body">
+    <p class="field-note" style="margin-top:0">Five complete looks for the whole workspace &mdash; layout, color, surfaces, type and motion together. Each one is a reward for a milestone (hover a locked one to see what to do). A preset replaces the interface theme above while it is on; pick Standard to go back.</p>
     <div class="ws-grid" id="ws-grid" role="radiogroup" aria-label="Workspace presets">
         <button type="button" class="ws-tile on" data-ws="" role="radio" aria-checked="true"><span class="ws-prev" style="--wb:#05070a;--wp:#0d1017;--wl:#1c2230;--wa:#35e0b0;--wm:#8a93a6;--wt:#e7ebf2"><span class="sb"><i></i><i></i><i></i><i></i></span><span class="mn"><span class="hd"></span><span class="kp"><b></b><b></b><b></b></span><span class="ch"><svg viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true"><polyline fill="none" stroke="#35e0b0" stroke-width="2" points="0,32 14,28 28,30 42,18 56,22 70,10 84,14 100,4"/></svg></span></span></span><span class="nm">Standard</span><span class="tg">The classic T58 look.</span></button>
         <button type="button" class="ws-tile" data-ws="obsidian" role="radio" aria-checked="false"><span class="ws-prev" style="--wb:#050506;--wp:#0f0f12;--wl:#26262c;--wa:#9fb3b0;--wm:#8a8a94;--wt:#d8d8dc;"><span class="sb"><i></i><i></i><i></i><i></i></span><span class="mn"><span class="hd"></span><span class="kp"><b></b><b></b><b></b></span><span class="ch"><svg viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true"><polyline fill="none" stroke="#9fb3b0" stroke-width="2" points="0,32 14,28 28,30 42,18 56,22 70,10 84,14 100,4"/></svg></span></span></span><span class="nm">Obsidian</span><span class="tg">Black surfaces, muted accents, minimal animations.</span><i class="lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
@@ -447,6 +464,8 @@
         <button type="button" class="ws-tile" data-ws="sovereign" role="radio" aria-checked="false"><span class="ws-prev" style="--wb:#040302;--wp:#100d07;--wl:#4a3c16;--wa:#d4af37;--wm:#9c8d5c;--wt:#f5edd9;"><span class="sb"><i></i><i></i><i></i><i></i></span><span class="mn"><span class="hd"></span><span class="kp"><b></b><b></b><b></b></span><span class="ch"><svg viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true"><polyline fill="none" stroke="#d4af37" stroke-width="2" points="0,32 14,28 28,30 42,18 56,22 70,10 84,14 100,4"/></svg></span></span></span><span class="nm">Sovereign</span><span class="tg">Black, gold, refined typography, elegant details.</span><i class="lock" aria-hidden="true"><svg class="lu"><use href="#lu-lock"/></svg></i></button>
     </div>
 
+      </div>
+    </details>
 
     <hr class="divider">
     <label class="pz-switch"><input type="checkbox" id="pz-portfolio" disabled> Show account portfolio cards on the Dashboard</label>
@@ -461,8 +480,9 @@
   <!-- Read-only: every value comes from the license saved on this device (the PLAN column of the license sheet for
        this key). The plan <select> is disabled for the look of a dropdown but is never read by the server. -->
   <form method="POST" action="/settings/account/subscription/refresh">
-    <div class="card">
-      <h2>Subscription</h2>
+    <details class="card fold" id="sec-subscription">
+      <summary><h2>Subscription</h2></summary>
+      <div class="fold-body">
       <p class="help">
         Your plan is set by your license key and can't be changed here. It updates automatically
         when your license changes.
@@ -494,16 +514,18 @@
           <input type="text" id="renewal_date" value="{{ subscription.renewal_date }}" readonly placeholder="No expiry">
         </div>
       </div>
-    </div>
-    <div class="btn-row">
+      </div>
+    </details>
+    <div class="btn-row" style="margin-top:-4px;margin-bottom:14px;">
       <button class="secondary-btn" type="submit">Refresh from license</button>
     </div>
   </form>
 
   <!-- ================= SAVED RUNS (vault) ================= -->
-  <div class="card" id="saved-runs" style="margin-top:14px;">
-    <h2>Saved runs &amp; account</h2>
-    <p class="help">Everything is filed under your license key. Your reports, pipeline and validation runs, strategy graveyard, journal and saved strategies, <b>plus your profile (name, username, picture, lock password), achievements, background, theme and colour, and your API keys</b>, are copied to a folder an uninstall doesn't touch &mdash; and put back automatically the moment you sign in again after a reinstall. API keys and broker passwords are stored <b>encrypted with your license key</b>, never as plain files, and only fill fields that are still empty. The license key itself is never copied. Works with the master key too.</p>
+  <details class="card fold" id="saved-runs" style="margin-top:14px;">
+    <summary><h2>Saved runs &amp; account</h2></summary>
+    <div class="fold-body">
+    <p class="help">Everything is filed under your license key. Your reports, pipeline and validation runs, strategy graveyard, journal and saved strategies, <b>plus your profile (name, username, picture, lock password), achievements, background, theme and color, and your API keys</b>, are copied to a folder an uninstall doesn't touch &mdash; and put back automatically the moment you sign in again after a reinstall. API keys and broker passwords are stored <b>encrypted with your license key</b>, never as plain files, and only fill fields that are still empty. The license key itself is never copied. Works with the master key too.</p>
     <p class="field-note" id="vault-line">Checking&hellip;</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 4px;">
       <button type="button" class="submit-btn" id="vault-backup">Save now</button>
@@ -515,7 +537,8 @@
     <label class="pz-switch"><input type="checkbox" id="vault-cloud"> Also keep a copy on my account (email + license key)</label>
     <p class="field-note" id="vault-cloud-note">Uploads a snapshot to your license server about every 15 minutes (on by default), so your account also survives a new computer or a wiped disk. Switching it on uploads right away.</p>
     <p class="field-note" id="vault-msg" role="status" aria-live="polite"></p>
-  </div>
+    </div>
+  </details>
   <script>
   (function () {
     var tok = {{ csrf_token()|tojson }};

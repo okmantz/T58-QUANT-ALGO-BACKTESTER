@@ -7,7 +7,7 @@
   * { box-sizing: border-box; }
   .j-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
   .j-tab { padding: 9px 14px; border-radius: 9px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text-muted); font-size: 13px; font-weight: 600; cursor: pointer; }
-  .j-tab.active { background: var(--teal); color: var(--on-teal, #04120e); border-color: var(--teal); }  /* follows Personalize -> accent colour */
+  .j-tab.active { background: var(--teal); color: var(--on-teal, #04120e); border-color: var(--teal); }  /* follows Personalize -> accent color */
   .j-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
   .j-card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin: 0 0 10px; }
   .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
@@ -21,7 +21,7 @@
   .j-input, .j-sel, .j-area { width: 100%; padding: 10px 11px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-size: 14px; }
   .j-area { min-height: 70px; resize: vertical; }
   .j-btn { padding: 10px 14px; border-radius: 9px; border: 1px solid var(--border-light); background: var(--panel-3); color: var(--text); font-weight: 600; font-size: 13px; cursor: pointer; }
-  .j-btn.primary { background: var(--teal); color: var(--on-teal, #04120e); border-color: var(--teal); }  /* follows Personalize -> accent colour */
+  .j-btn.primary { background: var(--teal); color: var(--on-teal, #04120e); border-color: var(--teal); }  /* follows Personalize -> accent color */
   .j-btn.primary:hover { filter: brightness(1.08); }
   .j-btn.danger { color: var(--coral); }
   .j-btn.sm { padding: 5px 9px; font-size: 12px; }
@@ -158,13 +158,13 @@
   function lineChart(curve) {
     var ns = 'http://www.w3.org/2000/svg', w = 640, h = 220, p = 28;
     var svg = document.createElementNS(ns, 'svg'); svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h); svg.setAttribute('width', '100%');
-    if (!curve.length) { var t = document.createElementNS(ns, 'text'); t.setAttribute('x', 20); t.setAttribute('y', 40); t.setAttribute('fill', '#8a93a6'); t.textContent = 'Log trades to see your equity curve.'; svg.appendChild(t); return svg; }
+    if (!curve.length) { var t = document.createElementNS(ns, 'text'); t.setAttribute('x', 20); t.setAttribute('y', 40); t.style.fill = 'var(--text-muted)'; t.textContent = 'Log trades to see your equity curve.'; svg.appendChild(t); return svg; }
     var vals = [0].concat(curve.map(function (c) { return c.cum_pnl; })), mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals), rg = (mx - mn) || 1;
     var pts = vals.map(function (v, i) { return (p + i / Math.max(1, vals.length - 1) * (w - 2 * p)).toFixed(1) + ',' + (h - p - (v - mn) / rg * (h - 2 * p)).toFixed(1); }).join(' ');
     var zero = h - p - (0 - mn) / rg * (h - 2 * p);
     var z = document.createElementNS(ns, 'line'); z.setAttribute('x1', p); z.setAttribute('x2', w - p); z.setAttribute('y1', zero); z.setAttribute('y2', zero); z.setAttribute('stroke', '#2a3242'); z.setAttribute('stroke-dasharray', '4 4'); svg.appendChild(z);
     var pl = document.createElementNS(ns, 'polyline'); pl.setAttribute('points', pts); pl.setAttribute('fill', 'none'); pl.setAttribute('stroke', '#E8A33D'); pl.setAttribute('stroke-width', '2.5'); pl.setAttribute('stroke-linejoin', 'round'); svg.appendChild(pl);
-    [[mx, p + 4], [mn, h - p]].forEach(function (a) { var t2 = document.createElementNS(ns, 'text'); t2.setAttribute('x', 2); t2.setAttribute('y', a[1] + 4); t2.setAttribute('fill', '#8a93a6'); t2.setAttribute('font-size', '10'); t2.textContent = money(a[0]); svg.appendChild(t2); });
+    [[mx, p + 4], [mn, h - p]].forEach(function (a) { var t2 = document.createElementNS(ns, 'text'); t2.setAttribute('x', 2); t2.setAttribute('y', a[1] + 4); t2.style.fill = 'var(--text-muted)'; t2.setAttribute('font-size', '10'); t2.textContent = money(a[0]); svg.appendChild(t2); });
     return svg;
   }
   function donut(s) {

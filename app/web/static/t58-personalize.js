@@ -1,4 +1,4 @@
-/* Personalize: seasonal page backdrop (+ quiet falling motion), accent colour, optional Bible verse bar.
+/* Personalize: seasonal page backdrop (+ quiet falling motion), accent color, optional Bible verse bar.
  * Per-browser preferences live in localStorage (t58-bg, t58-fx, t58-accent, t58-accent-hex, t58-accent-vars, t58-verse);
  * everything degrades to the default mountains / teal / no verse bar if storage is unavailable.
  *
@@ -76,7 +76,7 @@
     swapTimer = setTimeout(function () { el.classList.remove('t58-bg-swap'); }, 1000);
   }
 
-  /* ------------------------------------------------------------------ accent colour */
+  /* ------------------------------------------------------------------ accent color */
   var ACCENTS = {
     teal:    { label: 'Teal',          dark: '#35e0b0', light: '#0a6f54' },
     blue:    { label: 'Electric blue', dark: '#4d90ff', light: '#1d5fd6' },
@@ -117,7 +117,7 @@
   function ink(c) { return contrast(c, [4, 18, 14]) >= contrast(c, [255, 255, 255]) ? '#04120e' : '#ffffff'; }
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
-  // One picked colour -> the two tuned variants (bright on the dark theme, deep on the light theme).
+  // One picked color -> the two tuned variants (bright on the dark theme, deep on the light theme).
   function variantsFor(hex) {
     var hsl = rgbToHsl(hexToRgb(hex));
     var dark = rgbToHex(hslToRgb([hsl[0], clamp(hsl[1], 0.45, 0.95), clamp(hsl[2], 0.56, 0.70)]));

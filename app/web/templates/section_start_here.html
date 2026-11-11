@@ -52,39 +52,28 @@
 {% include '_lifecycle_stepper.html' %}
 <div class="lc-crumb">Lifecycle · 1 · <b>Create</b></div>
 <h1 class="lc-title">Bring a strategy, or let the engine find one</h1>
-<p class="lc-sub">Where strategies enter. Already have one? Paste it below. Don&rsquo;t have one yet? The Strategy Discovery Engine finds candidates for you. Either way, the next stop is <b>Test</b>.</p>
+<p class="lc-sub">Where strategies enter. Save one to your library, then the next stop is <b>Test</b>.</p>
 
 <div class="cr-paths">
-  <a class="cr-path" href="#cr-start">
+  <button type="button" class="cr-path" id="cr-have" aria-expanded="false" aria-controls="cr-start">
     <span class="cr-ico" aria-hidden="true"><svg class="lu"><use href="#lu-pencil-line"/></svg></span>
     <b>I have a strategy</b>
-    <span>Paste Python, PineScript or MQL5 code &mdash; or describe the idea in plain English.</span>
-    <em>Paste or describe it &darr;</em>
-  </a>
+    <span>Paste it or upload the file, then save it to your library.</span>
+    <em>Add my strategy &darr;</em>
+  </button>
   <a class="cr-path cr-engine" href="/discovery-engine">
     <span class="cr-ico" aria-hidden="true"><svg class="lu"><use href="#lu-sparkles"/></svg></span>
-    <b>I don&rsquo;t have one yet</b>
+    <b>I don&rsquo;t have a strategy</b>
     <span>Open the Strategy Discovery Engine: pick a market and a prop firm, press Start, and it searches for you.</span>
     <em>Open the Discovery Engine &rarr;</em>
   </a>
 </div>
-<div class="cr-flow" aria-label="What happens next">
-  <span><b>1</b> Create or find a strategy</span><i>&rarr;</i><span><b>2</b> Test it properly</span><i>&rarr;</i><span><b>3</b> Optimize &amp; Validate</span><i>&rarr;</i><span><b>4</b> Champion &amp; Deploy</span>
-</div>
 <style>
-  .cr-flow { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:0 0 14px; font-size:12.5px; color:var(--text-muted); }
-  .cr-flow span { padding:5px 11px; border-radius:999px; border:1px solid var(--border-light); background:var(--panel-2); }
-  .cr-flow b { color:var(--teal); margin-right:4px; }
-  .cr-flow i { font-style:normal; opacity:.6; }
-  .cr-chips { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:6px 0 4px; }
-  .cr-chip { font:inherit; font-size:12.5px; padding:5px 12px; border-radius:999px; cursor:pointer; color:var(--text); background:var(--panel-2); border:1px solid var(--border-light); }
-  .cr-chip:hover, .cr-chip:focus-visible { border-color:var(--teal); color:var(--teal); outline:none; }
-  .cr-adv { margin-top:12px; border:1px solid var(--border-light); border-radius:10px; padding:8px 14px; background:var(--panel-2); }
-  .cr-adv summary { cursor:pointer; font-weight:600; font-size:13px; }
   .cr-paths { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0 0 16px; }
-  .cr-path { display: flex; flex-direction: column; gap: 6px; padding: 16px 18px; border-radius: 14px; text-decoration: none; color: var(--text);
-    background: var(--panel-2); border: 1px solid var(--border-light); transition: border-color .15s, transform .15s; }
+  .cr-path { display: flex; flex-direction: column; gap: 6px; padding: 18px 20px; border-radius: 14px; text-decoration: none; color: var(--text); text-align: left; font: inherit; cursor: pointer;
+    background: var(--panel-2); border: 1px solid var(--border-light); transition: border-color .15s, transform .15s, box-shadow .15s; }
   .cr-path:hover, .cr-path:focus-visible { border-color: var(--teal); transform: translateY(-1px); outline: none; }
+  .cr-path[aria-expanded="true"] { border-color: var(--teal); box-shadow: 0 0 0 1px var(--teal), 0 8px 28px rgba(var(--teal-rgb), .18); }
   .cr-path b { font-size: 16px; }
   .cr-path span { font-size: 13px; color: var(--text-muted); line-height: 1.5; }
   .cr-path em { font-style: normal; font-weight: 700; font-size: 13.5px; color: var(--teal); margin-top: 4px; }
@@ -92,113 +81,68 @@
     background: rgba(var(--teal-rgb), .14); border: 1px solid rgba(var(--teal-rgb), .28); color: var(--teal); }
   .cr-path .cr-ico .lu { width: 20px; height: 20px; }
   .cr-engine { border-color: rgba(var(--teal-rgb), .55); background: linear-gradient(160deg, rgba(var(--teal-rgb), .10), var(--panel-2) 60%); }
+  #cr-start[hidden] { display: none; }
+  .cr-drop { border: 1.5px dashed var(--border-light); border-radius: 12px; padding: 14px 16px; background: var(--panel-3); display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:10px; }
+  .cr-drop .flabel { margin:0; }
+  .cr-frame { width: 100%; border: 0; min-height: 640px; border-radius: 10px; background: transparent; }
+  .cr-next { display:flex; align-items:center; gap:14px; flex-wrap:wrap; padding:16px 18px; border-radius:14px; margin-top:14px;
+    border:1px solid rgba(var(--teal-rgb), .45); background: linear-gradient(160deg, rgba(var(--teal-rgb), .10), var(--panel-2) 70%); }
+  .cr-next .cr-next-t { flex:1 1 240px; }
+  .cr-next b { display:block; font-size:15px; margin-bottom:2px; }
   @media (max-width: 640px) { .cr-paths { grid-template-columns: 1fr; } }
   @media (prefers-reduced-motion: reduce) { .cr-path { transition: none; } .cr-path:hover { transform: none; } }
 </style>
 
-<div class="lc-card" id="cr-start">
-  <div class="lc-tabs" style="margin-bottom:14px;">
-    <button type="button" class="lc-tab-btn active" onclick="lcCreateTab(this,'manual')">Manual (plain English)</button>
-    <button type="button" class="lc-tab-btn" onclick="lcCreateTab(this,'python')">Python</button>
-    <button type="button" class="lc-tab-btn" onclick="lcCreateTab(this,'pinescript')">PineScript</button>
-    <button type="button" class="lc-tab-btn" onclick="lcCreateTab(this,'mql5')">MQL5</button>
+<div class="lc-card" id="cr-start" hidden>
+  <div class="lc-tabs" style="margin-bottom:14px;" role="tablist">
+    <button type="button" class="lc-tab-btn active" role="tab" onclick="lcCreateTab(this,'manual')">Manual</button>
+    <button type="button" class="lc-tab-btn" role="tab" onclick="lcCreateTab(this,'python')">Python</button>
+    <button type="button" class="lc-tab-btn" role="tab" onclick="lcCreateTab(this,'pinescript')">PineScript</button>
+    <button type="button" class="lc-tab-btn" role="tab" onclick="lcCreateTab(this,'mql5')">MQL5</button>
+    <button type="button" class="lc-tab-btn" role="tab" onclick="lcCreateTab(this,'generate')" data-frame="/generate-strategies?embed=1">Generate Strategies</button>
+    <button type="button" class="lc-tab-btn" role="tab" onclick="lcCreateTab(this,'pine')" data-frame="/pine-indicator/?embed=1">Pine Indicator Creator</button>
   </div>
 
-  <form method="post" action="/discover/run" data-panel="manual">
-    <input type="hidden" name="_csrf_token" value="{{ create_csrf or '' }}">
-    <label class="flabel">Describe the strategy in plain English</label>
-    <textarea name="idea" id="cr-idea" placeholder="Strategies that go long after price sweeps below the Asian low and reclaims it on ES 15m…"></textarea>
-    <div class="cr-chips" aria-label="Example ideas">
-      <span class="lc-hint">Not sure what to write? Click an example:</span>
-      <button type="button" class="cr-chip" data-idea="Opening-range breakout: trade the first 30-minute high or low break on NQ, stop at the opposite side of the range.">Opening-range breakout</button>
-      <button type="button" class="cr-chip" data-idea="Mean reversion: fade moves more than 2 standard deviations from the 20-bar average on ES 15m, exit at the average.">Mean reversion</button>
-      <button type="button" class="cr-chip" data-idea="Trend pullback: in an uptrend (price above the 200-bar average) buy pullbacks to the 20-bar average on gold 1h.">Trend pullback</button>
-      <button type="button" class="cr-chip" data-idea="Liquidity sweep: go long after price sweeps below the Asian low and closes back above it, target the prior session high.">Liquidity sweep</button>
-    </div>
-    <label class="flabel" style="margin-top:10px;">Market data to test it on</label>
-    {% if create_dataset_groups %}
-    <select id="create_datasets_pick" name="datasets" multiple size="8">
-      {% for g in create_dataset_groups %}
-      <optgroup label="{{ g.instrument }}">
-        {% for f in g.files %}
-        <option value="{{ f.full_name }}">{{ f.name }}</option>
-        {% endfor %}
-      </optgroup>
-      {% endfor %}
-    </select>
-    <div class="lc-hint" style="margin:2px 0 4px;">One dropdown for all market data, grouped by instrument. Ctrl/Cmd-click (or Shift-click) to pick every dataset the idea makes sense on — the search runs it across each one picked.</div>
-    {% else %}
-    <p class="lc-hint">No stored datasets yet — import one from the Data section first, then come back here.</p>
-    {% endif %}
-    <div class="lc-row" style="margin-top:10px;">
-      <div class="lc-col">
-        <label class="flabel">Timeframes to test</label>
-        <select id="create_timeframes_pick" multiple size="5">
-          {% for tf in timeframe_choices %}
-          <option value="{{ tf }}"{% if tf in ['5m', '15m', '30m', '1h'] %} selected{% endif %}>{{ tf }}</option>
-          {% endfor %}
-        </select>
-        <div class="lc-hint" style="margin:2px 0 4px;">The idea is tested at each of these bar sizes instead of running one silently at 1m. 5m / 15m / 30m / 1h start selected — Ctrl/Cmd-click to change.</div>
-        <input type="hidden" name="timeframes" id="create_timeframes_hidden" value="5m, 15m, 30m, 1h">
-      </div>
-    </div>
-    <details class="cr-adv">
-      <summary>Advanced (defaults are fine) <span class="lc-hint">search size and strictness</span></summary>
-      <div class="lc-row" style="margin-top:8px;">
-        <div class="lc-col"><label class="flabel">Max bars per dataset</label><input type="number" name="max_bars" value="60000"><div class="lc-hint">Newest bars used per file. More = slower, steadier.</div></div>
-        <div class="lc-col"><label class="flabel">Shuffled-data comparisons</label><input type="number" name="n_null" value="200"><div class="lc-hint">Your idea is also run on this many scrambled copies of the market; it must beat nearly all of them to count as real.</div></div>
-      </div>
-    </details>
-    <script>
-      (function () {
-        var pick = document.getElementById('create_timeframes_pick');
-        var hidden = document.getElementById('create_timeframes_hidden');
-        if (!pick || !hidden) return;
-        function sync() {
-          var picked = Array.prototype.map.call(pick.selectedOptions, function (o) { return o.value; });
-          if (picked.length) hidden.value = picked.join(', ');
-        }
-        pick.addEventListener('change', sync);
-        sync();
-      })();
-    </script>
-    <button class="lc-btn big" type="submit" style="margin-top:14px;">See if it survives &rarr;</button>
-    <p class="lc-hint" style="margin-top:8px;">Runs the real discovery pipeline — data checked, idea compiled against shuffled nulls, results deflated for the number of things you tried.</p>
-  </form>
-
-  {% for t, label, ph in [('python','Python','Paste your Python strategy here'), ('pinescript','PineScript','Paste your PineScript strategy here'), ('mql5','MQL5','Paste your MQL5 strategy here')] %}
-  <div data-panel="{{ t }}" style="display:none;">
+  {% for t, label, ph, ext, hint in [
+    ('manual','Manual','Describe or paste your strategy rules here','my_strategy.txt','Write the rules in plain English, or paste notes, then save them to the library.'),
+    ('python','Python','Paste your Python strategy here','my_strategy.py','Paste your Python strategy or upload the .py file.'),
+    ('pinescript','PineScript','Paste your PineScript strategy here','my_strategy.pine','Paste your PineScript strategy or upload the .pine file.'),
+    ('mql5','MQL5','Paste your MQL5 strategy here','my_strategy.mq5','Paste your MQL5 strategy or upload the .mq5 file.')] %}
+  <div data-panel="{{ t }}"{% if t != 'manual' %} style="display:none;"{% endif %}>
+    <p class="lc-hint" style="margin:0 0 6px;">{{ hint }}</p>
     <div class="lc-row">
-      <div class="lc-col"><label class="flabel">Filename</label><input type="text" class="lc-code-name" placeholder="my_strategy.{{ 'py' if t == 'python' else ('pine' if t == 'pinescript' else 'mq5') }}"></div>
-      <div class="lc-col"><label class="flabel">…or load from a file</label><input type="file" class="lc-code-file"></div>
+      <div class="lc-col"><label class="flabel">Strategy name</label><input type="text" class="lc-code-name" placeholder="{{ ext }}"></div>
     </div>
     <label class="flabel" style="margin-top:10px;">{{ ph }}</label>
-    <textarea class="code lc-code-text" placeholder="{{ ph }}"></textarea>
-    <div style="display:flex; gap:10px; align-items:center; margin-top:12px; flex-wrap:wrap;">
-      <button class="lc-btn big" type="button" onclick="lcSaveCode(this,'{{ t }}')">Save &amp; continue</button>
-      <a class="lc-btn ghost lc-test-link" style="display:none;" href="#">Test it &rarr;</a>
+    <textarea class="code lc-code-text" rows="12" placeholder="{{ ph }}"></textarea>
+    <div class="cr-drop"><label class="flabel">Or upload a file</label><input type="file" class="lc-code-file"></div>
+    <div style="display:flex; gap:10px; align-items:center; margin-top:14px; flex-wrap:wrap;">
+      <button class="lc-btn big" type="button" onclick="lcSaveCode(this,'{{ t }}')">Save to library</button>
     </div>
-    <p class="lc-hint lc-save-status" style="margin-top:8px;"></p>
+    <p class="lc-hint lc-save-status" style="margin-top:8px;" role="status"></p>
   </div>
   {% endfor %}
+
+  <div data-panel="generate" style="display:none;"><iframe class="cr-frame" title="Generate Strategies" loading="lazy"></iframe></div>
+  <div data-panel="pine" style="display:none;"><iframe class="cr-frame" title="Pine Indicator Creator" loading="lazy"></iframe></div>
 </div>
 
-<div style="margin-top:14px;">
+<div class="cr-next">
+  <div class="cr-next-t"><b>Next step: Test it</b><span class="lc-hint">Saved a strategy? Carry it into the Test page, already selected.</span></div>
   {% if recent_strategies %}
-  <a class="lc-btn big" href="/full-pipeline?load_strategy_type={{ recent_strategies[0].strategy_type }}&load_strategy_name={{ recent_strategies[0].name | urlencode }}">Next step: Test “{{ recent_strategies[0].name }}” →</a>
+  <a class="lc-btn big" id="cr-next-btn" href="/full-pipeline?load_strategy_type={{ recent_strategies[0].strategy_type }}&load_strategy_name={{ recent_strategies[0].name | urlencode }}">Test &ldquo;{{ recent_strategies[0].name }}&rdquo; &rarr;</a>
   {% else %}
-  <a class="lc-btn big" href="/full-pipeline">Next step: Test →</a>
+  <a class="lc-btn big" id="cr-next-btn" href="/full-pipeline">Go to Test &rarr;</a>
   {% endif %}
-  <p class="lc-hint" style="margin-top:6px;">Carries the newest saved strategy into the Test page, already selected. Nothing saved yet? Use one of the two paths above first.</p>
 </div>
 
 {% if recent_strategies %}
-<div class="lc-card">
+<div class="lc-card" style="margin-top:14px;">
   <h3>Recently created</h3>
   {% for s in recent_strategies %}
   <div class="lc-prev-row">
     <span>{{ s.name }} <span class="lc-hint">{{ s.strategy_type }}</span></span>
-    <span style="display:flex; gap:8px; align-items:center;"><span class="lc-pill grey">{{ s.status }}</span><a class="lc-btn ghost small" href="/full-pipeline?load_strategy_type={{ s.strategy_type }}&load_strategy_name={{ s.name | urlencode }}">Test it</a></span>
+    <span class="lc-pill grey">{{ s.status }}</span>
   </div>
   {% endfor %}
 </div>
@@ -206,19 +150,34 @@
 </div>
 </div>
 <script>
-  document.querySelectorAll('.cr-chip').forEach(function (c) {
-    c.addEventListener('click', function () {
-      var t = document.getElementById('cr-idea');
-      if (t) { t.value = c.getAttribute('data-idea'); t.focus(); }
+  (function () {
+    var have = document.getElementById('cr-have'), panel = document.getElementById('cr-start');
+    if (have && panel) have.addEventListener('click', function () {
+      var open = panel.hasAttribute('hidden');
+      if (open) panel.removeAttribute('hidden'); else panel.setAttribute('hidden', '');
+      have.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+    if (location.hash === '#cr-start' && have) have.click();
+  })();
+  function lcCreateTab(btn, name) {
+    document.querySelectorAll('#cr-start .lc-tab-btn').forEach(function (b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    document.querySelectorAll('#cr-start [data-panel]').forEach(function (p) {
+      p.style.display = (p.getAttribute('data-panel') === name) ? '' : 'none';
+    });
+    var src = btn.getAttribute('data-frame');
+    if (src) {
+      var f = document.querySelector('#cr-start [data-panel="' + name + '"] iframe');
+      if (f && !f.getAttribute('src')) f.setAttribute('src', src);
+    }
+  }
+  window.addEventListener('message', function (e) {
+    if (e.origin !== location.origin || !e.data || !e.data.t58h) return;
+    document.querySelectorAll('#cr-start iframe').forEach(function (f) {
+      if (f.contentWindow === e.source) f.style.height = Math.max(520, e.data.t58h + 24) + 'px';
     });
   });
-  function lcCreateTab(btn, panel) {
-    document.querySelectorAll('.lc-tab-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    document.querySelectorAll('[data-panel]').forEach(p => {
-      p.style.display = (p.getAttribute('data-panel') === panel) ? '' : 'none';
-    });
-  }
   document.querySelectorAll('.lc-code-file').forEach(function (fi) {
     fi.addEventListener('change', function () {
       var file = fi.files && fi.files[0];
@@ -236,9 +195,8 @@
     var name = (panel.querySelector('.lc-code-name').value || '').trim();
     var code = panel.querySelector('.lc-code-text').value;
     var status = panel.querySelector('.lc-save-status');
-    var link = panel.querySelector('.lc-test-link');
-    if (!name) { status.textContent = 'Give the strategy a filename first (e.g. my_strategy.py).'; return; }
-    if (!code.trim()) { status.textContent = 'Paste some code first.'; return; }
+    if (!name) { status.textContent = 'Give the strategy a name first.'; return; }
+    if (!code.trim()) { status.textContent = 'Paste or upload your strategy first.'; return; }
     status.textContent = 'Saving…';
     var fd = new FormData();
     fd.append('strategy_type', type);
@@ -248,16 +206,20 @@
       .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
       .then(function (res) {
         if (!res.ok || !res.d.ok) { status.textContent = 'Could not save: ' + (res.d.error || 'unknown error'); return; }
-        status.textContent = 'Saved to the ' + type + ' library.';
-        link.href = '/full-pipeline?load_strategy_type=' + encodeURIComponent(type) + '&load_strategy_name=' + encodeURIComponent(name);
-        link.style.display = '';
+        status.textContent = 'Saved to your strategy library. Next step: Test it below.';
+        var nb = document.getElementById('cr-next-btn');
+        if (nb) {
+          nb.href = '/full-pipeline?load_strategy_type=' + encodeURIComponent(type) + '&load_strategy_name=' + encodeURIComponent(name);
+          nb.textContent = 'Test “' + name + '” →';
+          nb.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
       })
       .catch(function (e) { status.textContent = 'Could not save: ' + e; });
   }
 </script>
 {% endif %}
 
-{# Create has no "Start Here" overview card -- the form above is the page. #}
+{# Create is just the two paths above -- no overview card and no tool grid. #}
 {% if section != 'create' %}
 <div class="card">
   <h2 class="sec-h"><svg class="lu"><use href="#lu-lightbulb"/></svg>What this section is for</h2>
@@ -277,7 +239,6 @@
   </div>
   {% endif %}
 </div>
-{% endif %}
 
 <div class="card" style="max-width: none;">
   <h2 class="sec-h"><svg class="lu"><use href="#lu-search"/></svg>Everything in {{ section_title }}</h2>
@@ -292,7 +253,7 @@
 </div>
 
 {% if more_tools %}
-<details class="card more-tools" style="max-width: none;"{% if section == 'create' %} open{% endif %}>
+<details class="card more-tools" style="max-width: none;">
   <summary><span>More tools</span></summary>
   <p class="more-tools-sub">Power tools that also create strategies. They live here as well as under Optimize.</p>
   <div class="tool-grid">
@@ -304,6 +265,7 @@
     {% endfor %}
   </div>
 </details>
+{% endif %}
 {% endif %}
 
 </div>

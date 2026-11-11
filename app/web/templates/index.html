@@ -493,14 +493,8 @@
       <button type="button" onclick="detectPipSize()" style="margin-top:6px;background:none;border:1px solid var(--border-light);color:var(--teal);padding:9px 12px;border-radius:8px;font-size:13px;width:100%;">Detect pip size from data</button>
       <p id="pip_detect_status" style="font-size:12px;margin-top:6px;"></p>
     <div class="row" style="margin-top:8px;">
-      <div><label>Or pick a known instrument (auto-fills pip size + $/point)</label>
-        <select id="instrument_select" onchange="t58ApplyInstrumentSpec({selectEl:this, pipFieldId:'pip_size_field', contractFieldId:'contract_size_field', commissionFieldId:'commission_field', statusId:'pip_detect_status'})">
-          <option value="">(none -- set manually)</option>
-        </select>
-      </div>
       <div><label>Contract $/point (blank = not lot-rounded)</label><input type="number" step="0.01" name="contract_size" id="contract_size_field" value=""></div>
     </div>
-    <script>document.addEventListener('DOMContentLoaded', function () { t58PopulateInstrumentPicker('instrument_select'); });</script>
       <label class="checkbox-row" style="display:flex;align-items:center;gap:8px;background:rgba(255,200,80,0.08);border:1px solid rgba(255,200,80,0.35);border-radius:8px;padding:8px 10px;margin-top:10px;"><input type="checkbox" name="adaptive_risk_enabled" style="width:auto;" checked>Enable adaptive, limit-aware position sizing (throttles risk as the account nears its daily-loss/max-drawdown limits)</label>
     <div class="adaptive-modes" style="margin-top:8px;"><label style="font-weight:600;">Adaptive risk mode</label>
       <select name="adaptive_risk_mode">
@@ -582,7 +576,7 @@
       statusEl.textContent = 'Select a market data CSV or a stored dataset in Step 1 first.';
       return;
     }
-    statusEl.style.color = '#888';
+    statusEl.style.color = 'var(--text-muted)';
     statusEl.textContent = 'Detecting...';
     fetch('/data/detect-pip-size', { method: 'POST', body: fd })
       .then(r => r.json().then(data => ({ ok: r.ok, data })))
@@ -687,7 +681,7 @@
   function populateBulkChecklist(mode, items) {
     const container = document.getElementById('bulk-checklist');
     if (!items.length) {
-      container.innerHTML = '<p style="color:#888;font-size:12px;">No strategies to show for the current filters.</p>';
+      container.innerHTML = '<p style="color:var(--text-muted);font-size:12px;">No strategies to show for the current filters.</p>';
       return;
     }
     container.innerHTML = items.map(s => `

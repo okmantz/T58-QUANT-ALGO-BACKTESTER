@@ -129,7 +129,7 @@
     }
 
     const meta = document.createElement('p');
-    meta.style.cssText = 'font-size:12px;color:#999;';
+    meta.style.cssText = 'font-size:12px;color:var(--text-muted);';
     let metaTxt = `Generation ${inst.generation} — leaderboard: ${inst.leaderboard_size}`;
     const lb0 = (inst.leaderboard || [])[0];
     if (lb0 && lb0.fitness && lb0.fitness.final_score !== undefined && lb0.fitness.final_score !== null) {
@@ -142,7 +142,7 @@
     if (d) {
       const pct = (v) => (v === null || v === undefined || isNaN(v)) ? '—' : `${v.toFixed(1)}%`;
       const ds = document.createElement('div');
-      ds.style.cssText = 'font-size:12px;color:#999;background:#161b22;border:1px solid #2a323d;border-radius:6px;padding:8px 10px;margin-bottom:8px;';
+      ds.style.cssText = 'font-size:12px;color:var(--text-muted);background:#161b22;border:1px solid #2a323d;border-radius:6px;padding:8px 10px;margin-bottom:8px;';
       ds.textContent =
         `~${d.candidates_tested} tested, ${d.candidates_with_trades} with trades — ` +
         `Eval pass median/best: ${pct(d.eval_pass_probability.median)} / ${pct(d.eval_pass_probability.best)}, ` +

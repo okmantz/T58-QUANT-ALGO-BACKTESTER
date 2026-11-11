@@ -1,7 +1,8 @@
 {% include '_lucide_sprite.html' %}
+{% if not request.args.get('embed') %}
 <script src="/static/t58-journey.js" defer></script>
 <style>
-  /* Main sidebar icons (the section headers and the top-level pages) glow in the UI colour; the pages INSIDE an opened
+  /* Main sidebar icons (the section headers and the top-level pages) glow in the UI color; the pages INSIDE an opened
      dropdown stay grey and monotone so the header icon stays the one that pops. */
   .t58-nav-item.top-level > .t58-nav-icon,
   .t58-nav-group > summary > .t58-nav-icon {
@@ -286,10 +287,12 @@
   </button>
 </div>
 
+{% endif %}
 <script src="/static/t58-chrome.js" defer></script>
 <script src="/static/t58-pwa.js" defer></script>
 <script src="/static/csv-export.js" defer></script>
 <script src="/static/api-source.js" defer></script>
+{% if not request.args.get('embed') %}
 <script src="/static/t58-livepnl.js" defer></script>
 <link rel="stylesheet" href="/static/t58-headerpnl.css">
 <script src="/static/t58-headerpnl.js" defer></script>
@@ -299,3 +302,4 @@
 
 {% include '_project_chat_widget.html' %}
 <script src="/static/project_chat.js" defer></script>
+{% endif %}

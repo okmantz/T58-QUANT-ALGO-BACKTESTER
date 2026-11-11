@@ -9,7 +9,7 @@ html[data-ws] #t58-theme-toggle { display: none; }
 /* ------------------------------------------------------------------ Obsidian: black surfaces, muted accents, minimal animation */
 html[data-ws="obsidian"] {
   --bg: #050506; --bg-1: #050506; --panel: rgba(13, 13, 15, .94); --panel-2: rgba(17, 17, 20, .95); --panel-3: #16161a; --panel-elevated: #1a1a1f;
-  --border: #212126; --border-light: #34343c; --text: #e9e9ec; --text-muted: #9a9aa4; --text-dim: #6a6a74;
+  --border: #212126; --border-light: #34343c; --text: #e9e9ec; --text-muted: #a1a1aa; --text-dim: #8a8a92;
   --teal: #9fb3b0; --teal-dim: #5c6b69; --teal-rgb: 159, 179, 176; --on-teal: #0a0c0c; --on-teal2: #0a0c0c; --on-teal3: #0a0c0c;
   --pop-bg: #101013; --pop-bg-2: #15151a; --pop-bd: rgba(159, 179, 176, .28);
   --glass-bg: rgba(13, 13, 15, .92); --glass-border: rgba(255, 255, 255, .06);
@@ -25,7 +25,7 @@ html[data-ws="obsidian"] h1, html[data-ws="obsidian"] h2 { letter-spacing: -.005
 /* ------------------------------------------------------------------ Cyberpunk: neon accents, glowing borders, futuristic details */
 html[data-ws="cyberpunk"] {
   --bg: #06030f; --bg-1: #06030f; --panel: rgba(14, 8, 34, .84); --panel-2: rgba(19, 10, 44, .86); --panel-3: #1a0f3a; --panel-elevated: #1f1245;
-  --border: #2e1a62; --border-light: #4b2a98; --text: #efe9ff; --text-muted: #a99bd6; --text-dim: #7a6cae;
+  --border: #2e1a62; --border-light: #4b2a98; --text: #efe9ff; --text-muted: #a99bd6; --text-dim: #8f82bd;
   --teal: #19f3ff; --teal-dim: #0a8d98; --teal-rgb: 25, 243, 255; --violet: #ff2bd6; --on-teal: #02161a; --on-teal2: #02161a; --on-teal3: #02161a;
   --pop-bg: #0d0620; --pop-bg-2: #150a33; --pop-bd: rgba(25, 243, 255, .42);
   --glass-bg: rgba(14, 8, 34, .78); --glass-border: rgba(25, 243, 255, .22);
@@ -47,7 +47,7 @@ html[data-ws="cyberpunk"] ::selection { background: rgba(255, 43, 214, .45); col
 /* ------------------------------------------------------------------ Nordic: warm neutrals, soft shadows, spacious layouts -- rustic and elite (parchment, walnut, pine) */
 html[data-ws="nordic"] {
   --bg: #ebe4d6; --bg-1: #ebe4d6; --panel: #f6f1e6; --panel-2: #f1eadb; --panel-3: #e9e0cd; --panel-elevated: #fbf7ee;
-  --border: #d6cab2; --border-light: #c3b59a; --text: #2a251d; --text-muted: #5e5546; --text-dim: #7a705f;
+  --border: #d6cab2; --border-light: #c3b59a; --text: #2a251d; --text-muted: #4e473a; --text-dim: #625a4b;
   --teal: #7a4e26; --teal-dim: #a77a4c; --teal-rgb: 122, 78, 38; --violet: #3d5a4b; --blue: #3f5f7a; --coral: #a8432f; --amber: #8c6112; --ok: #3d6b4a;
   --on-teal: #fbf5e8; --on-teal2: #fbf5e8; --on-teal3: #fbf5e8;
   --pop-bg: #fbf7ee; --pop-bg-2: #f1eadb; --pop-bd: rgba(122, 78, 38, .32);
@@ -71,7 +71,7 @@ html[data-ws="nordic"] ::selection { background: rgba(122, 78, 38, .25); }
 /* ------------------------------------------------------------------ Evergreen: deep greens, natural accents, subtle ambient effects */
 html[data-ws="evergreen"] {
   --bg: #04100b; --bg-1: #04100b; --panel: rgba(8, 27, 19, .86); --panel-2: rgba(10, 33, 23, .88); --panel-3: #0e2a1e; --panel-elevated: #11321f;
-  --border: #174030; --border-light: #25624a; --text: #e2f3e8; --text-muted: #8fb9a0; --text-dim: #5f8a73;
+  --border: #174030; --border-light: #25624a; --text: #e2f3e8; --text-muted: #8fb9a0; --text-dim: #799f8a;
   --teal: #3ddc97; --teal-dim: #1b8a5c; --teal-rgb: 61, 220, 151; --violet: #a6d66b; --on-teal: #02140b; --on-teal2: #02140b; --on-teal3: #02140b;
   --pop-bg: #081c13; --pop-bg-2: #0d2a1c; --pop-bd: rgba(61, 220, 151, .34);
   --glass-bg: rgba(8, 27, 19, .78); --glass-border: rgba(61, 220, 151, .16);
@@ -91,7 +91,7 @@ html[data-ws="evergreen"] h1 { background: linear-gradient(100deg, #e9fff1, #3dd
 /* ------------------------------------------------------------------ Sovereign: black, gold, refined typography, elegant details */
 html[data-ws="sovereign"] {
   --bg: #040302; --bg-1: #040302; --panel: rgba(12, 10, 6, .92); --panel-2: rgba(16, 13, 8, .93); --panel-3: #1a150b; --panel-elevated: #1e180c;
-  --border: #33290f; --border-light: #5a4a1c; --text: #f5edd9; --text-muted: #b8aa83; --text-dim: #83774f;
+  --border: #33290f; --border-light: #5a4a1c; --text: #f5edd9; --text-muted: #b8aa83; --text-dim: #958a65;
   --teal: #d4af37; --teal-dim: #8a6f1c; --teal-rgb: 212, 175, 55; --violet: #c9a35a; --on-teal: #130e02; --on-teal2: #130e02; --on-teal3: #130e02;
   --pop-bg: #120e06; --pop-bg-2: #1a140a; --pop-bd: rgba(212, 175, 55, .4);
   --glass-bg: rgba(12, 10, 6, .88); --glass-border: rgba(212, 175, 55, .2);

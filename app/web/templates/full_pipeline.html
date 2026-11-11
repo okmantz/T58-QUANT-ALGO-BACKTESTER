@@ -43,23 +43,30 @@
 <div class="lc-run-grid">
 <div class="lc-run-main">
 
-  <div class="lc-card">
-    <div class="lc-row">
-      <div class="lc-col" style="min-width:280px;">
-        <label class="flabel" for="lc-strategy-pick">Step 1 &middot; Pick a strategy</label>
+  <div class="t58-steps">
+    <section class="t58-step">
+      <div class="t58-step-n">1</div>
+      <div class="t58-step-b">
+        <h3>Pick a strategy</h3>
+        <p class="sub">Choose one from your Strategy Library. Nothing saved yet? <a href="/start-here/create" style="color:var(--lc-acc);">Create one</a> first &mdash; it takes a minute.</p>
+        <label class="flabel" for="lc-strategy-pick" style="display:none;">Strategy</label>
         <select class="inp" id="lc-strategy-pick">
           <option value="">— pick a saved strategy —</option>
         </select>
         <input type="hidden" name="strategy_mode" id="strategy_mode" value="manual">
         <input type="hidden" id="lc-existing-strategy" name="existing_strategy_manual" value="">
-        <div style="margin-top:6px; display:flex; gap:12px; align-items:baseline; flex-wrap:wrap;">
+        <div style="margin-top:8px; display:flex; gap:12px; align-items:baseline; flex-wrap:wrap;">
           <a href="#" id="lc-view-code" style="font-size:12px;color:var(--lc-acc);">View its code</a>
           <span class="lc-hint" id="lc-strategy-note">No saved strategy picked — the quick builder / paste box in Advanced is used instead.</span>
         </div>
       </div>
-      <div class="lc-col" style="min-width:220px;">
-        <label class="flabel">Step 2 &middot; Pick market data</label>
-        
+    </section>
+
+    <section class="t58-step">
+      <div class="t58-step-n">2</div>
+      <div class="t58-step-b">
+        <h3>Pick your market data</h3>
+        <p class="sub">Choose stored data or upload a file. Pip size, $ per point and commission are read from the data automatically &mdash; nothing to set.</p>
         <select name="existing_dataset" id="lc-dataset-pick">
           <option value="">— none, I'm uploading new file(s) below —</option>
           {% for g in dataset_groups %}
@@ -70,40 +77,43 @@
           </optgroup>
           {% endfor %}
         </select>
-        
-        <label class="flabel" style="margin-top:10px;">Or upload new CSV file(s)</label>
+        <label class="flabel" style="margin-top:12px;">Or upload new CSV file(s)</label>
         <input type="file" name="csv_file" accept=".csv,.tsv,.txt,.parquet,.zip,.7z" multiple>
         <div class="lc-hint" style="margin-top:5px;">timestamp, open, high, low, close, volume</div>
+        <div class="lc-row" style="margin-top:12px;">
+          <div class="lc-col" style="min-width:220px;">
+            <label class="flabel" for="lc-timeframe">Timeframe <span class="lc-hint" style="text-transform:none;letter-spacing:0;">(optional)</span></label>
+            <select class="inp" name="timeframe" id="lc-timeframe" data-native="1">
+              <option value="">Dataset's native timeframe (default)</option>
+              {% for tf in timeframe_choices %}
+              <option value="{{ tf }}"{% if prefill and prefill.timeframe == tf %} selected{% endif %}>{{ tf }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        <div class="lc-hint" style="margin-top:6px;">The data is resampled to this bar size before the pipeline runs &mdash; never a silent 1m. A timeframe declared inside the strategy itself still wins.</div>
       </div>
-      <div class="lc-col" style="min-width:220px;">
-        <label class="flabel">Prop firm to test against</label>
-        <select id="fp_prop_preset_select" onchange="fpApplyPropPreset(this.value)">
-          <option value="">-- or enter rules manually in Advanced --</option>
-        </select>
-        <!-- AUDIT FIX: the picked firm's KEY is submitted so the server applies the firm's FULL rule set
-             (EOD trailing DD, consistency, payout gates), not just the four numbers below. -->
-        <input type="hidden" name="prop_preset" id="fp_prop_preset_key" value="">
-        <div class="lc-hint" style="margin-top:5px;">Picking one fills the rule fields in Advanced and shows the firm's actual rules in the rail &rarr;</div>
-        <label class="flabel" style="margin-top:12px;">Or pick a known instrument (auto-fills pip size + $/point)</label>
-        <select id="fp_instrument_select" onchange="t58ApplyInstrumentSpec({selectEl:this, pipFieldId:'fp_pip_size_field', contractFieldId:'fp_contract_size_field', commissionFieldId:'fp_commission_field', statusId:'fp_pip_detect_status'})">
-          <option value="">(none -- set manually)</option>
-        </select>
-        <script>document.addEventListener('DOMContentLoaded', function () { t58PopulateInstrumentPicker('fp_instrument_select'); });</script>
+    </section>
+
+    <section class="t58-step">
+      <div class="t58-step-n">3</div>
+      <div class="t58-step-b">
+        <h3>What are you testing for?</h3>
+        <p class="sub">Prop firm is the default. Switch to Net profit to test for a live or personal account.</p>
+        {% include "_objective_mode_field.html" %}
+        <div data-prop-only>
+          <label class="flabel" style="margin-top:6px;">Prop firm to test against</label>
+          <select id="fp_prop_preset_select" onchange="fpApplyPropPreset(this.value)">
+            <option value="">-- or enter rules manually in Advanced --</option>
+          </select>
+          <!-- AUDIT FIX: the picked firm's KEY is submitted so the server applies the firm's FULL rule set
+               (EOD trailing DD, consistency, payout gates), not just the four numbers below. -->
+          <input type="hidden" name="prop_preset" id="fp_prop_preset_key" value="">
+          <div class="lc-hint" style="margin-top:5px;">Picking one fills the rule fields in Advanced and shows the firm's actual rules in the rail &rarr;</div>
+          <div class="lc-rules-line" id="lc-rules-line"></div>
+        </div>
       </div>
-    </div>
-    <div class="lc-row" style="margin-top:14px;">
-      <div class="lc-col" style="min-width:220px;">
-        <label class="flabel" for="lc-timeframe">Step 3 &middot; Pick a timeframe</label>
-        <select class="inp" name="timeframe" id="lc-timeframe">
-          <option value="">Dataset's native timeframe (default)</option>
-          {% for tf in timeframe_choices %}
-          <option value="{{ tf }}"{% if prefill and prefill.timeframe == tf %} selected{% endif %}>{{ tf }}</option>
-          {% endfor %}
-        </select>
-        <div class="lc-hint" style="margin-top:5px;">The data is resampled to this bar size before the pipeline runs — never a silent 1m. Pick 1m only with 1-minute data (fetch 1m bars from an API under Market data). A timeframe declared inside the strategy itself still wins. (Advanced can additionally run the whole pipeline on several timeframes.)</div>
-      </div>
-    </div>
-    <div class="lc-rules-line" id="lc-rules-line"></div>
+    </section>
   </div>
 
   <div class="lc-summary-band">
@@ -194,9 +204,8 @@
         <div class="adv-h"><div class="adv-ic">&#128270;</div><div><div class="adv-t">Search</div>
           <div class="adv-d">How the optimiser looks for better settings. Every candidate is scored on out-of-sample data chained across folds, so a bigger search finds more &mdash; and is penalised for it in the final verdict.</div></div></div>
         <div class="adv-b">
-          <div class="adv-grp">What to optimise</div>
+          <div class="adv-grp">What to optimize</div>
           <div class="lc-adv-grid">
-            {% include "_objective_mode_field.html" %}
 <div class="lc-adv-field"><label class="flabel">Fitness metric</label>
               <select name="fitness_metric">
                 {% for key, label in fitness_metrics.items() %}
@@ -319,40 +328,12 @@
     </div>
   </details>
 
-  <details class="lc-adv">
-    <summary>Previous runs <span class="lc-hint">most recent first, from every tool in this app</span></summary>
-    <div class="adv-body">
-      {% if recent_runs %}
-      {% for run in recent_runs %}
-      <div class="lc-prev-row">
-        <span>{{ run.timestamp[:10] }} · {{ run.strategy_name }} <span class="lc-hint">{{ run.instrument }} · {{ run.timeframe }}</span></span>
-        <span style="display:flex; gap:8px; align-items:center;">
-          <span class="lc-pill {{ 'green' if run.net_profit >= 0 else 'red' }}">{{ run.trades }} trades · ${{ '{:,.0f}'.format(run.net_profit) }}</span>
-          {% if run.report_url %}<a class="lc-btn ghost small" href="{{ run.report_url }}" target="_blank">Open</a>{% endif %}
-        </span>
-      </div>
-      {% endfor %}
-      {% else %}
-      <p class="lc-hint" style="padding-top:8px;">No runs recorded yet — your first Full Pipeline will start this list.</p>
-      {% endif %}
-    </div>
-  </details>
 
   <div class="lc-card">
     <h3>Run log — live</h3>
     <div class="lc-logbox"><div><span class="lt">--:--:--</span>  Press RUN FULL PIPELINE and the log streams live on the job page. No silent screens.</div></div>
   </div>
 
-  <details class="lc-adv">
-    <summary>Individual tools <span class="lc-hint">the rest of the Test section keeps its own pages</span></summary>
-    <div class="adv-body">
-      <div class="lc-toolgrid" style="margin-top:12px;">
-        <a class="lc-toolcard" href="/payout-probability"><div class="tname">Payout Probability</div><div class="tdesc">Monte Carlo pass/payout odds for a finished backtest.</div></a>
-        <a class="lc-toolcard" href="/prop-firm-recommender"><div class="tname">Prop-Firm Recommender</div><div class="tdesc">Which firm's rules fit this strategy best?</div></a>
-        <a class="lc-toolcard" href="/payout-planner"><div class="tname">Payout Planner</div><div class="tdesc">Evaluations, fees and days to a first payout.</div></a>
-      </div>
-    </div>
-  </details>
 
 </div>
 <div class="lc-run-side">

@@ -20,11 +20,8 @@
     box-shadow: 0 0 22px rgba(var(--teal-rgb), 0.35);
   }
   .error { background: var(--err-bg); border: 1px solid var(--err-bd); color: var(--err-fg); padding: 12px; border-radius: 10px; margin-bottom: 14px; font-size: 14px; }
-  .strategy-tab-btn {
-    flex: 1; padding: 10px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--panel-3);
-    color: var(--t-soft); font-size: 13px; font-weight: 600; cursor: pointer;
-  }
-  .strategy-tab-btn.active { background: var(--teal); color: var(--on-teal); border-color: var(--teal); }
+  .t58-steps h2 { font-size: 16px; text-transform: none; letter-spacing: 0; color: var(--text); margin: 0 0 4px; }
+  .t58-help { font-size: 12.5px; color: var(--text-muted); margin: 0 0 8px; }
   .rp-tabs { display: flex; gap: 8px; margin: 0 0 14px; flex-wrap: wrap; }
   .rp-tab { padding: 9px 16px; border-radius: 9px; border: 1px solid var(--border-light); background: none; color: var(--text); cursor: pointer; font-size: 13.5px; }
   .rp-tab.on { border-color: var(--teal); color: var(--teal); font-weight: 700; }
@@ -61,92 +58,64 @@
 
 <div class="rp-panel" id="rp-panel-replay" role="tabpanel">
 <form method="post" action="/replay/prepare" enctype="multipart/form-data">
-  <div class="card">
-    <h2>1. Market Data</h2>
-    <label>Use a previously stored dataset</label>
-    <select name="existing_dataset">
-      <option value="">— none, I'm uploading a file below —</option>
-      {% for g in dataset_groups %}
-      <optgroup label="{{ g.instrument }}">
-        {% for file in g.files %}
-        <option value="{{ file.full_name }}">{{ file.name }} ({{ (file.size_bytes / 1024) | round(1) }} KB)</option>
-        {% endfor %}
-      </optgroup>
-      {% endfor %}
-    </select>
-    <label>Or upload a CSV file (timestamp, open, high, low, close, volume)</label>
-    <input type="file" name="csv_file" accept=".csv,.tsv,.txt,.parquet">
-    <label>Max bars to replay (a long dataset is trimmed to the most recent N bars for a smooth player)</label>
-    <input type="number" name="max_bars" value="2000">
-  </div>
+  <input type="hidden" name="strategy_mode" id="strategy_mode_field" value="manual">
+  <input type="hidden" name="library_strategy_type" id="library_strategy_type_field">
+  <input type="hidden" name="library_strategy_name" id="library_strategy_name_field">
+  <input type="hidden" name="sma_fast" value="20"><input type="hidden" name="sma_slow" value="50">
+  <input type="hidden" name="sl_pips" value="20"><input type="hidden" name="tp_pips" value="40">
+  <input type="hidden" name="initial_balance" id="initial_balance_field" value="100000">
+  <input type="hidden" name="risk_mode" value="percent"><input type="hidden" name="risk_value" value="1.0">
+  <input type="hidden" name="pip_size" id="pip_size_field" value="0.0001"><input type="hidden" name="commission" value="3">
+  <input type="hidden" name="max_bars" value="2000">
+  <input type="hidden" name="account_size" id="account_size_field" value="100000">
+  <input type="hidden" name="profit_target" id="profit_target_field" value="8">
+  <input type="hidden" name="daily_loss" id="daily_loss_field" value="5">
+  <input type="hidden" name="max_dd" id="max_dd_field" value="10">
 
-  <div class="card">
-    <h2>2. Strategy</h2>
-    <div class="row" style="margin-bottom:10px;">
-      <button type="button" id="tab-quick" class="strategy-tab-btn active" onclick="setStrategyTab('quick')">Quick strategy</button>
-      <button type="button" id="tab-library" class="strategy-tab-btn" onclick="setStrategyTab('library')">Load from library</button>
-    </div>
-    <input type="hidden" name="strategy_mode" id="strategy_mode_field" value="manual">
-
-    <div id="quick-strategy-fields">
-      <p style="font-size:12.5px;color:var(--t-faint);margin-bottom:10px;">A simple SMA-crossover Manual Strategy Builder config for a first pass -- same scope note as Multi-Market Search and Forward Test.</p>
-      <div class="row">
-        <div><label>SMA fast</label><input type="number" name="sma_fast" value="20"></div>
-        <div><label>SMA slow</label><input type="number" name="sma_slow" value="50"></div>
+  <ol class="t58-steps">
+    <li class="t58-step">
+      <span class="t58-step-n">1</span>
+      <div class="t58-step-b">
+        <h2>Select strategy</h2>
+        <p class="t58-help">Replay shows exactly where this strategy enters and exits.</p>
+        <select id="library_strategy_select"><option value="">— pick a saved strategy —</option></select>
+        <p class="t58-help" id="library-empty-note"></p>
       </div>
-      <div class="row">
-        <div><label>Stop loss (pips)</label><input type="number" name="sl_pips" value="20"></div>
-        <div><label>Take profit (pips)</label><input type="number" name="tp_pips" value="40"></div>
+    </li>
+    <li class="t58-step">
+      <span class="t58-step-n">2</span>
+      <div class="t58-step-b">
+        <h2>Select market data</h2>
+        <p class="t58-help">Pick stored data or upload a file. Pip size and commission are detected for you.</p>
+        <select name="existing_dataset">
+          <option value="">— none, I'm uploading a file below —</option>
+          {% for g in dataset_groups %}
+          <optgroup label="{{ g.instrument }}">
+            {% for file in g.files %}
+            <option value="{{ file.full_name }}">{{ file.name }} ({{ (file.size_bytes / 1024) | round(1) }} KB)</option>
+            {% endfor %}
+          </optgroup>
+          {% endfor %}
+        </select>
+        <input type="file" name="csv_file" accept=".csv,.tsv,.txt,.parquet" style="margin-top:8px;">
       </div>
-    </div>
-
-    <div id="library-strategy-fields" style="display:none;">
-      <p style="font-size:12.5px;color:var(--t-faint);margin-bottom:10px;">Pick any saved strategy -- Replay shows exactly where IT actually enters and exits on this dataset, not a generic quick strategy.</p>
-      <label>Saved strategy</label>
-      <select id="library_strategy_select">
-        <option value="">— pick a saved strategy —</option>
-      </select>
-      <input type="hidden" name="library_strategy_type" id="library_strategy_type_field">
-      <input type="hidden" name="library_strategy_name" id="library_strategy_name_field">
-      <p style="font-size:12px;color:var(--t-faint);margin-top:6px;" id="library-empty-note"></p>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>3. Prop Account (optional)</h2>
-    <p style="font-size:12.5px;color:var(--t-faint);margin-bottom:10px;">Only sets the starting balance shown on the replay's running-balance panel -- Replay is a visualization of one plain backtest's own trade sequence, not a prop-firm evaluation/payout simulation.</p>
-    <label>Prop firm preset</label>
-    <select id="prop_preset_select"><option value="">— none, set account size manually —</option></select>
-    <div class="row">
-      <div><label>Account size</label><input type="number" name="account_size" id="account_size_field" value="100000"></div>
-      <div><label>Profit target %</label><input type="number" step="0.1" name="profit_target" id="profit_target_field" value="8"></div>
-    </div>
-    <div class="row">
-      <div><label>Daily loss limit %</label><input type="number" step="0.1" name="daily_loss" id="daily_loss_field" value="5"></div>
-      <div><label>Max drawdown %</label><input type="number" step="0.1" name="max_dd" id="max_dd_field" value="10"></div>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>4. Risk</h2>
-    <div class="row">
-      <div><label>Initial balance</label><input type="number" name="initial_balance" id="initial_balance_field" value="100000"></div>
-      <div><label>Risk value</label><input type="number" step="0.1" name="risk_value" value="1.0"></div>
-    </div>
-    <div class="row">
-      <div><label>Risk mode</label>
-        <select name="risk_mode"><option value="percent">% of balance</option><option value="fixed">Fixed lot</option></select>
+    </li>
+    <li class="t58-step">
+      <span class="t58-step-n">3</span>
+      <div class="t58-step-b">
+        <h2>Select prop firm</h2>
+        <p class="t58-help">Optional. Sets the account size and rules shown next to the replay.</p>
+        <select id="prop_preset_select"><option value="">— none —</option></select>
       </div>
-      <div><label>Pip size</label><input type="number" step="0.0001" name="pip_size" id="pip_size_field" value="0.0001"></div>
-    </div>
-    <div class="row">
-      <div><label>Commission per trade ($)</label><input type="number" step="0.01" name="commission" value="3"></div>
-    </div>
-    <button type="button" onclick="detectPipSize()" style="margin-top:6px;background:none;border:1px solid var(--border-light);color:var(--teal);padding:9px 12px;border-radius:8px;font-size:13px;width:100%;">Detect pip size from data</button>
-    <p id="pip_detect_status" style="font-size:12px;color:var(--t-faint);margin-top:6px;"></p>
-  </div>
-
-  <button class="submit-btn" type="submit">Prepare Replay</button>
+    </li>
+    <li class="t58-step">
+      <span class="t58-step-n">4</span>
+      <div class="t58-step-b">
+        <h2>Start</h2>
+        <button class="submit-btn" type="submit">Start replay</button>
+      </div>
+    </li>
+  </ol>
 {% include "_timeframe_fields.html" %}
 </form>
 </div><!-- /rp-panel-replay -->
@@ -173,14 +142,6 @@
 <script>
   const SAVED_STRATEGIES = {{ saved_strategies_json | default('{}') | safe }};
 
-  function setStrategyTab(tab) {
-    document.getElementById('tab-quick').classList.toggle('active', tab === 'quick');
-    document.getElementById('tab-library').classList.toggle('active', tab === 'library');
-    document.getElementById('quick-strategy-fields').style.display = tab === 'quick' ? 'block' : 'none';
-    document.getElementById('library-strategy-fields').style.display = tab === 'library' ? 'block' : 'none';
-    document.getElementById('strategy_mode_field').value = tab === 'quick' ? 'manual' : 'library';
-  }
-
   function populateLibraryDropdown() {
     const select = document.getElementById('library_strategy_select');
     let count = 0;
@@ -194,54 +155,16 @@
       });
     });
     document.getElementById('library-empty-note').textContent =
-      count ? `${count} saved strategies available.` : 'No saved strategies yet -- build one in the Strategy Library first, or use Quick strategy.';
+      count ? `${count} saved strategies available.` : 'No saved strategies yet. Save one in Create first. Until then a simple starter strategy is used.';
   }
   document.getElementById('library_strategy_select').addEventListener('change', (e) => {
     if (!e.target.value) return;
     const picked = JSON.parse(e.target.value);
     document.getElementById('library_strategy_type_field').value = picked.type;
     document.getElementById('library_strategy_name_field').value = picked.name;
+    document.getElementById('strategy_mode_field').value = 'library';
   });
   populateLibraryDropdown();
-
-  function detectPipSize() {
-    const statusEl = document.getElementById('pip_detect_status');
-    const fileInput = document.querySelector('input[name="csv_file"]');
-    const datasetSelect = document.querySelector('select[name="existing_dataset"]');
-    const fd = new FormData();
-    let haveSource = false;
-    if (fileInput && fileInput.files && fileInput.files.length) {
-      fd.append('csv_file', fileInput.files[0]);
-      haveSource = true;
-    }
-    if (datasetSelect && datasetSelect.value) {
-      fd.append('existing_dataset', datasetSelect.value);
-      haveSource = true;
-    }
-    if (!haveSource) {
-      statusEl.style.color = '#ffcf7a';
-      statusEl.textContent = 'Select a market data CSV or a stored dataset in Section 1 first.';
-      return;
-    }
-    statusEl.style.color = '#888';
-    statusEl.textContent = 'Detecting...';
-    fetch('/data/detect-pip-size', { method: 'POST', body: fd })
-      .then(r => r.json().then(data => ({ ok: r.ok, data })))
-      .then(({ ok, data }) => {
-        if (!ok || data.error) {
-          statusEl.style.color = '#ff9d9d';
-          statusEl.textContent = data.error || "Couldn't detect pip size.";
-          return;
-        }
-        document.getElementById('pip_size_field').value = data.pip_size;
-        statusEl.style.color = '#b4ffcb';
-        statusEl.textContent = data.message;
-      })
-      .catch(err => {
-        statusEl.style.color = '#ff9d9d';
-        statusEl.textContent = "Couldn't detect: " + err;
-      });
-  }
 
   initPropFirmPresetDropdown('prop_preset_select', {
     account_size: 'account_size', profit_target: 'profit_target',

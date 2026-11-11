@@ -6,8 +6,10 @@ Where the data comes from, and what is never invented:
   * price / reset / profit split -- ``app.prop.presets.FIRM_FEES`` (each with its own check date and source)
   * firm website -- ``FIRM_SITES`` below. Only addresses the app's own firm data cites, or that were confirmed against a public listing, are
     filled in; the rest stay empty so the button asks you for the link instead of sending you somewhere that might be wrong.
-  * DISCOUNT CODES -- never shipped. A code only exists once you enter it (Offers editor) and then carries the date you checked it.
-    Nothing here can verify a code works: confirm it at the firm's own checkout.
+  * DISCOUNT CODES -- two sources, always labelled. (1) ``GORILLA_LISTED`` below: the codes PropFirmGorilla.com publishes on its own
+    pages, copied with the date they were read. They are shown as "up to X% off" and are NEVER subtracted from a price (the real
+    discount depends on the plan and the day). (2) Codes you enter yourself (Offers editor) win over the listed ones and carry the
+    date you checked them. Nothing here can verify a code works: confirm it at the firm's own checkout.
 Purchases happen at the firm's official checkout. T58 never takes payment.
 """
 from __future__ import annotations
@@ -36,6 +38,31 @@ FIRM_SITES = {
     "FunderPro": {"site": "", "asset": "Forex / Futures", "platforms": ""},
     "Atlas Funded": {"site": "", "asset": "Forex", "platforms": "TradeLocker"},
 }
+
+LISTED_SOURCE = "PropFirmGorilla"
+LISTED_CHECKED_ON = "2026-11-10"
+LISTED_SOURCE_URL = "https://propfirmgorilla.com/"
+# firm (as named in app.prop.presets) -> code PropFirmGorilla lists for it, and the "up to" discount it shows.
+GORILLA_LISTED = {
+    "FTMO": {"code": "GORILLA", "up_to_pct": 20},
+    "Apex Trader Funding": {"code": "GORILLA", "up_to_pct": 90},
+    "Lucid Trading": {"code": "GORILLA", "up_to_pct": 30},
+    "FundedNext": {"code": "GORILLA", "up_to_pct": 30, "note": "Up to 30% off (up to 50% on FundedNext Futures)"},
+    "The5%ers": {"code": "GORILLA", "up_to_pct": 10},
+    "E8 Markets": {"code": "GORILLA", "up_to_pct": 25},
+}
+# Firms PropFirmGorilla lists a code for that T58 has no rule presets for yet (so no plan table), shown as a plain list.
+MORE_LISTED = [
+    {"firm": "Tradeify", "code": "GORILLA", "up_to_pct": 40, "asset": "Futures"},
+    {"firm": "Take Profit Trader", "code": "GORILLA", "up_to_pct": 40, "asset": "Futures"},
+    {"firm": "Funded Futures Network", "code": "GORILLA", "up_to_pct": 50, "asset": "Futures"},
+    {"firm": "My Funded Futures", "code": "DAN", "up_to_pct": 40, "asset": "Futures"},
+    {"firm": "FundingPips", "code": "GORILLA", "up_to_pct": 10, "asset": "Forex"},
+    {"firm": "FXify", "code": "GORILLA", "up_to_pct": 26, "asset": "Forex"},
+    {"firm": "EquityEdge", "code": "GORILLA", "up_to_pct": 50, "asset": "Forex"},
+    {"firm": "Ment Funding", "code": "GORILLA", "up_to_pct": 5, "asset": "Forex"},
+    {"firm": "Alpha Capital", "code": "VCMZR", "up_to_pct": 20, "asset": "Forex"},
+]
 
 OFFER_FIELDS = ("code", "discount_pct", "discount_note", "checkout_url", "site_url", "checked_on", "expires")
 
@@ -97,9 +124,14 @@ def save_offer(firm: str, offer: dict) -> dict:
     return data.get(firm, {})
 
 
-def _offer_state(offer: dict | None, today: date | None = None) -> dict:
+def _offer_state(offer: dict | None, today: date | None = None, firm: str = "") -> dict:
     o = offer or {}
     today = today or date.today()
+    if not o.get("code") and firm in GORILLA_LISTED:
+        g = GORILLA_LISTED[firm]
+        return {"code": g["code"], "discount_pct": None, "discount_note": g.get("note") or f"Up to {g['up_to_pct']}% off",
+                "checked_on": LISTED_CHECKED_ON, "expires": "", "expired": False, "active": True,
+                "listed": True, "up_to_pct": g["up_to_pct"], "source": LISTED_SOURCE, "source_url": LISTED_SOURCE_URL}
     expired = False
     if o.get("expires"):
         try:
@@ -108,7 +140,7 @@ def _offer_state(offer: dict | None, today: date | None = None) -> dict:
             expired = False
     return {"code": o.get("code", ""), "discount_pct": o.get("discount_pct"), "discount_note": o.get("discount_note", ""),
             "checked_on": o.get("checked_on", ""), "expires": o.get("expires", ""), "expired": expired,
-            "active": bool(o.get("code")) and not expired}
+            "active": bool(o.get("code")) and not expired, "listed": False, "up_to_pct": None, "source": "You", "source_url": ""}
 
 
 def _money(x):
@@ -124,7 +156,7 @@ def plans(*, today: date | None = None) -> list[dict]:
         fee = P.get_fee_info(p.key)
         site = FIRM_SITES.get(p.firm, {})
         o = offers.get(p.firm, {})
-        st = _offer_state(o, today)
+        st = _offer_state(o, today, p.firm)
         price = fee.challenge_price if fee else None
         disc = price * (1 - st["discount_pct"] / 100.0) if (price is not None and st["active"] and st["discount_pct"]) else None
         a = p.account_size
@@ -181,7 +213,7 @@ def firms(rows: list[dict] | None = None) -> list[dict]:
             "algo_all": all(r["algo_allowed"] for r in ps), "best_split": max((r["split_pct"] or 0) for r in ps) or None,
             "from_price": (cheapest["price_with_code"] or cheapest["price"]) if cheapest else None,
             "from_label": cheapest["label"] if cheapest else "",
-            "offer": _offer_state(o), "site_url": site, "checkout_url": _safe_url(o.get("checkout_url")) or site,
+            "offer": _offer_state(o, None, name), "site_url": site, "checkout_url": _safe_url(o.get("checkout_url")) or site,
             "link_confirmed": bool(site),
         })
     return out
@@ -189,10 +221,11 @@ def firms(rows: list[dict] | None = None) -> list[dict]:
 
 def catalog() -> dict:
     rows = plans()
-    return {"firms": firms(rows), "plans": rows,
+    return {"firms": firms(rows), "plans": rows, "more_codes": MORE_LISTED,
+            "codes_source": {"name": LISTED_SOURCE, "url": LISTED_SOURCE_URL, "checked_on": LISTED_CHECKED_ON},
             "disclaimer": ("Prices and rules are copied from each firm's published pages on the dates shown and firms change them often. "
                            "Always confirm the price, rules and any code at the firm's own checkout before paying. T58 does not sell "
-                           "challenges and does not take payment. Discount codes appear only after you enter and date them."),
+                           "challenges and does not take payment. Listed codes come from PropFirmGorilla.com and show the date they were read; the percentage is the most it shows, not a promise."),
             "today": date.today().isoformat()}
 
 

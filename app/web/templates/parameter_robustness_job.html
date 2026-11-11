@@ -91,7 +91,7 @@
     title.innerHTML = `<strong>${hm.gene_a_label}</strong> &times; <strong>${hm.gene_b_label}</strong> — grid pass rate ${fmt(pair.fraction_of_grid_passing, 0)}% — ${tag}`;
     wrap.appendChild(title);
     const verdict = document.createElement('div');
-    verdict.style.cssText = 'font-size:12.5px;color:#aaa;margin-bottom:8px;max-width:640px';
+    verdict.style.cssText = 'font-size:12.5px;color:var(--text-muted);margin-bottom:8px;max-width:640px';
     verdict.textContent = pair.is_cliff
       ? 'Spike: the starred winner works, but a neighbouring setting fails. That usually means it was fitted to this exact history. Prefer a setting in the middle of a green area.'
       : (pair.is_plateau

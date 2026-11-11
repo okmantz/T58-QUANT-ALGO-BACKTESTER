@@ -138,7 +138,7 @@ def desk_overview():
     cfg = jstate.settings()
     alerts = health_alerts.from_journal(trades, backtest_max_dd=cfg.get("backtest_max_drawdown"))
     return jsonify({"ok": True, "accounts": data["accounts"], "economics": attempt_ledger.economics(data), "costs": attempt_ledger.cost_tracker(data),
-                    "calendar": payout_calendar.events(data), "health_alerts": alerts, "health_level": health_alerts.worst(alerts),
+                    "calendar": payout_calendar.events(data), "calendar_feed": payout_calendar.feed(data), "health_alerts": alerts, "health_level": health_alerts.worst(alerts),
                     "bust_causes": ds.BUST_CAUSES})
 
 

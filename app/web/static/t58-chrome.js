@@ -474,7 +474,7 @@ function t58DetectPipSize(opts) {
     return;
   }
 
-  statusEl.style.color = '#888';
+  statusEl.style.color = 'var(--text-muted)';
   statusEl.textContent = 'Detecting...';
   fetch('/data/detect-pip-size', { method: 'POST', body: fd })
     .then(function (r) { return r.json().then(function (data) { return { ok: r.ok, data: data }; }); })

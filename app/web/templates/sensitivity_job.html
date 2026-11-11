@@ -81,7 +81,7 @@
       html += '</tr>';
     });
     html += '</tbody></table></div>';
-    html += `<p style="font-size:11px;color:#9aa0aa;margin-top:8px;">Rows: ${hm.gene_a_label}. Columns: ${hm.gene_b_label}. Green = better ${hm.metric}, red = worse.</p>`;
+    html += `<p style="font-size:11px;color:var(--text-muted);margin-top:8px;">Rows: ${hm.gene_a_label}. Columns: ${hm.gene_b_label}. Green = better ${hm.metric}, red = worse.</p>`;
     document.getElementById('hm-result').innerHTML = html;
   }
 

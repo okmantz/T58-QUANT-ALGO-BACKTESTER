@@ -29,10 +29,12 @@
 <div class="lc-run-grid">
 <div class="lc-run-main">
 
-  <div class="lc-card">
-    <div class="lc-row">
-      <div class="lc-col">
-        <label class="flabel" for="lc-strategy-pick">Step 1 &middot; Pick a strategy</label>
+  <div class="t58-steps">
+    <section class="t58-step">
+      <div class="t58-step-n">1</div>
+      <div class="t58-step-b">
+        <h3>Pick a strategy</h3>
+        <p class="sub">The strategy to improve. Its previous version is always archived, never deleted.</p>
         <select class="inp" name="strategy_pick" id="lc-strategy-pick">
           {# v9.15: grouped by strategy type (Manual / Python / PineScript /
              MQL5) -- the same optgroup structure the Test page and
@@ -48,8 +50,13 @@
           {% endfor %}
         </select>
       </div>
-      <div class="lc-col">
-        <label class="flabel" for="lc-dataset-pick">Step 2 &middot; Pick market data</label>
+    </section>
+
+    <section class="t58-step">
+      <div class="t58-step-n">2</div>
+      <div class="t58-step-b">
+        <h3>Pick your market data</h3>
+        <p class="sub">Stored data or an upload. Pip size, $ per point and commission are detected from it automatically.</p>
         <select class="inp" name="existing_dataset" id="lc-dataset-pick">
           <option value="">— upload a CSV instead —</option>
           {% for g in dataset_groups %}
@@ -60,37 +67,48 @@
           </optgroup>
           {% endfor %}
         </select>
-        <label class="flabel" style="margin-top:10px;" for="lc-csv-file">…or upload market data (CSV)</label>
+        <label class="flabel" style="margin-top:12px;" for="lc-csv-file">&hellip;or upload market data (CSV)</label>
         <input type="file" name="csv_file" id="lc-csv-file" accept=".csv">
+        <div class="lc-row" style="margin-top:12px;">
+          <div class="lc-col">
+            <label class="flabel" for="lc-timeframe">Timeframe <span class="lc-hint" style="text-transform:none;letter-spacing:0;">(optional)</span></label>
+            <select class="inp" name="timeframe" id="lc-timeframe" data-native="1">
+              <option value="">Dataset's native timeframe (default)</option>
+              {% for tf in timeframe_choices %}
+              <option value="{{ tf }}"{% if prefill.timeframe == tf %} selected{% endif %}>{{ tf }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
       </div>
-      <div class="lc-col">
-        <label class="flabel" for="lc-prop-preset">Prop firm to test against</label>
-        <select class="inp" name="prop_preset" id="lc-prop-preset">
-          <option value="">— type the rules in Advanced —</option>
-          {% for p in prop_presets %}
-          <option value="{{ p.key }}"{% if prefill.prop_preset == p.key %} selected{% endif %}>{{ p.label }}</option>
-          {% endfor %}
-        </select>
-        <div class="lc-hint" style="margin-top:5px;">Its rules show in the rail &rarr; and harden this run.</div>
-      </div>
-      <div class="lc-col">
-        <label class="flabel" for="lc-timeframe">Step 3 &middot; Pick a timeframe</label>
-        <select class="inp" name="timeframe" id="lc-timeframe">
-          <option value="">Dataset's native timeframe (default)</option>
-          {% for tf in timeframe_choices %}
-          <option value="{{ tf }}"{% if prefill.timeframe == tf %} selected{% endif %}>{{ tf }}</option>
-          {% endfor %}
-        </select>
-        <div class="lc-hint" style="margin-top:5px;">The data is resampled to this bar size before anything runs — never a silent 1m. Pick 1m only with 1-minute data (fetch 1m bars from an API under Market data). A timeframe declared inside the strategy itself still wins.</div>
-      </div>
-    </div>
-    <div class="lc-rules-line" id="lc-rules-line"></div>
-  </div>
+    </section>
 
-  <div class="lc-card">
-    <h3>What do you want to improve?</h3>
-    <p class="lc-hint" style="margin-bottom:10px;">Pick a goal. T58 chooses the right engine for it: one tunes the strategy&rsquo;s own <b>settings</b>, the other tunes <b>risk per trade</b>.</p>
-    <div class="lc-checkcards" role="radiogroup" aria-label="Optimization goal">
+    <section class="t58-step">
+      <div class="t58-step-n">3</div>
+      <div class="t58-step-b">
+        <h3>What are you optimizing for?</h3>
+        <p class="sub">Prop firm is the default. Switch to Net profit to optimize for a live or personal account.</p>
+        {% include "_objective_mode_field.html" %}
+        <div data-prop-only>
+          <label class="flabel" for="lc-prop-preset" style="margin-top:6px;">Prop firm to test against</label>
+          <select class="inp" name="prop_preset" id="lc-prop-preset">
+            <option value="">&mdash; type the rules in Advanced &mdash;</option>
+            {% for p in prop_presets %}
+            <option value="{{ p.key }}"{% if prefill.prop_preset == p.key %} selected{% endif %}>{{ p.label }}</option>
+            {% endfor %}
+          </select>
+          <div class="lc-hint" style="margin-top:5px;">Its rules show in the rail &rarr; and harden this run.</div>
+          <div class="lc-rules-line" id="lc-rules-line"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="t58-step">
+      <div class="t58-step-n">4</div>
+      <div class="t58-step-b">
+        <h3>What do you want to improve?</h3>
+        <p class="sub">Pick a goal. T58 chooses the right engine: one tunes the strategy&rsquo;s own <b>settings</b>, another tunes <b>risk per trade</b>, another cuts the <b>worst days and times</b>.</p>
+        <div class="lc-checkcards" role="radiogroup" aria-label="Optimization goal">
       {% for key, g in goals.items() %}
       <label class="lc-checkcard">
         <input class="lc-check-input" type="radio" name="goal" value="{{ key }}" {{ 'checked' if want_goal == key else '' }}>
@@ -102,15 +120,7 @@
     </div>
     <label class="checkbox-row" style="display:block; margin-top:14px;"><input type="checkbox" name="save_as_copy"> Save the result as a <b>separate copy</b> instead of updating the strategy</label>
     <div class="lc-hint" style="margin-top:4px;">Off by default: the strategy you picked is updated in place (its previous version is archived, never deleted). If nothing better is found, it is left untouched.</div>
-  </div>
-
-  <div class="lc-card">
-    <h3>Don&rsquo;t trade at these times <span class="lc-hint">optional</span></h3>
-    <p class="lc-hint" style="margin-bottom:8px;">One per line: <code>THU 11</code> (Thursday, 11:00&ndash;11:59), <code>MON 9-10</code>, <code>FRI *</code> (all Friday), <code>* 15</code> (3pm every day).
-      Uses the same clock as the Full Pipeline heatmap, so you can copy its worst slots straight in. Applied to every test this run does.
-      With the &ldquo;Cut the worst days/times&rdquo; goal, leave it blank and the optimizer picks the slots for you.</p>
-    <textarea name="blocked_slots" rows="3" style="width:100%;font-family:monospace;" placeholder="THU 11&#10;FRI 09">{{ request.values.get('blocked_slots', '') }}</textarea>
-    <label class="checkbox-row" style="display:block; margin-top:8px;"><input type="checkbox" name="save_blocked_slots" checked> Save these on the library strategy so it never enters then (any run, any page)</label>
+    </section>
   </div>
 
   <details class="lc-adv" id="adv-details">
@@ -172,7 +182,6 @@
             <div class="lc-adv-field"><label class="flabel">Population (Refine)</label><input type="number" name="population_size" value="10"></div>
             <div class="lc-adv-field"><label class="flabel">Generations (Refine)</label><input type="number" name="generations" value="5"></div>
             <div class="lc-adv-field"><label class="flabel">Monte-Carlo sims</label><input type="number" name="mc_sims" value="500"></div>
-            {% include "_objective_mode_field.html" %}
 <div class="lc-adv-field"><label class="flabel">Fitness metric</label><input type="text" name="fitness_metric" value="lifecycle_gradient"></div>
             <div class="lc-adv-field"><label class="flabel">Max bars to search (0 = all)</label><input type="number" name="max_bars" value="150000" min="0" step="5000" title="Searches the most recent bars so the run finishes quickly. Raise it, or set 0, to search all of your history."></div>
           </div>
@@ -204,23 +213,6 @@
     <h3>Run log — live</h3>
     <div class="lc-logbox"><div><span class="lt">--:--:--</span>  Press OPTIMIZE and the run streams live on the job page — every engine ticked, in order. No silent screens.</div></div>
   </div>
-
-  <details class="lc-adv">
-    <summary>Individual tools <span class="lc-hint">every engine keeps its own full page — nothing was removed</span></summary>
-    <div class="adv-body">
-      <div class="lc-toolgrid" style="margin-top:12px;">
-        <a class="lc-toolcard" href="/optimize"><div class="tname">Optimize — Start Here</div><div class="tdesc">Which optimizer should you use? The guided picker.</div></a>
-        <a class="lc-toolcard" href="/quick-optimize"><div class="tname">Quick Optimize</div><div class="tdesc">GA over tunable parameters, full page.</div></a>
-        <a class="lc-toolcard" href="/refine"><div class="tname">Iterative Refinement</div><div class="tdesc">Multi-round Monte-Carlo refinement.</div></a>
-        <a class="lc-toolcard" href="/risk-sweep"><div class="tname">Risk Sweep</div><div class="tdesc">Risk-per-trade levels against the prop rules.</div></a>
-        <a class="lc-toolcard" href="/multi-objective"><div class="tname">Multi-Objective</div><div class="tdesc">Pareto optimization across competing objectives.</div></a>
-        <a class="lc-toolcard" href="/search/multi-instrument"><div class="tname">Multi-Instrument Search</div><div class="tdesc">Search Lab across several instruments at once.</div></a>
-        <a class="lc-toolcard" href="/evolution/multi-instrument"><div class="tname">Multi-Instrument Evolution</div><div class="tdesc">Evolution Lab across several instruments at once.</div></a>
-        <a class="lc-toolcard" href="/cross-instrument"><div class="tname">Cross-Instrument Search</div><div class="tdesc">One rule set, judged on multiple instruments.</div></a>
-        <a class="lc-toolcard" href="/multi-market"><div class="tname">Multi-Market Search</div><div class="tdesc">Search aggregated across markets.</div></a>
-      </div>
-    </div>
-  </details>
 
 </div>
 <div class="lc-run-side">

@@ -1,0 +1,31 @@
+{# Embed mode (?embed=1): a page opened inside another page's tab (Accounts > Payout planner, Create > Generate Strategies, AI Assistant > Research ...)
+   drops the sidebar and page header, keeps every form and link inside the frame, and tells the parent how tall it is.
+   Included once from _head_common.html, so every full page supports it. _sidebar.html renders nothing in embed mode. #}
+<style>
+  html,body{background:transparent !important}
+  body::before,body::after,.t58-scene-fx,.t58-scene-canvas,#t58-journey,.t58-topbar,.t58-header-pnl,#t58-chat-dock,.t58-chat-dock,.t58-fab,.t58-bell,.t58-nextstep-bar{display:none !important}
+  .t58-shell{display:block !important;padding:0 !important;margin:0 !important}
+  .t58-main{margin:0 !important;padding:4px 2px 18px !important;max-width:none !important;width:auto !important}
+  .t58-main > .t58-page-header:first-child{display:none !important}
+</style>
+<script>
+(function () {
+  'use strict';
+  var Q = 'embed=1';
+  function tag(u) { try { var x = new URL(u, location.href); if (x.origin !== location.origin || x.searchParams.has('embed')) return u; x.searchParams.set('embed', '1'); return x.pathname + x.search + x.hash; } catch (e) { return u; } }
+  function fix(root) {
+    (root || document).querySelectorAll('form').forEach(function (f) { var a = f.getAttribute('action') || location.pathname; f.setAttribute('action', tag(a)); });
+    (root || document).querySelectorAll('a[href]').forEach(function (a) {
+      var h = a.getAttribute('href'); if (!h || h.charAt(0) === '#' || /^(javascript|mailto|tel):/i.test(h) || a.target === '_blank') return;
+      a.setAttribute('href', tag(h));
+    });
+  }
+  function send() { try { parent.postMessage({ t58h: document.documentElement.scrollHeight }, location.origin); } catch (e) {} }
+  document.addEventListener('DOMContentLoaded', function () { fix(); send(); });
+  window.addEventListener('load', function () { fix(); send(); });
+  window.addEventListener('resize', send);
+  if (window.ResizeObserver) new ResizeObserver(send).observe(document.documentElement);
+  if (window.MutationObserver) new MutationObserver(function () { fix(); }).observe(document.documentElement, { childList: true, subtree: true });
+  setInterval(send, 1500);
+})();
+</script>

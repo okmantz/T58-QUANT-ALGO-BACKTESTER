@@ -236,7 +236,7 @@
       statusEl.textContent = 'Select a market data CSV or a stored dataset in Step 1 first.';
       return;
     }
-    statusEl.style.color = '#888';
+    statusEl.style.color = 'var(--text-muted)';
     statusEl.textContent = 'Detecting...';
     fetch('/data/detect-pip-size', { method: 'POST', body: fd })
       .then(r => r.json().then(data => ({ ok: r.ok, data })))

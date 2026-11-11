@@ -79,14 +79,6 @@
   {% else %}<p class="lc-hint">Once 15 trades have closed, this shows an estimate of your pass chance and time to pass.</p>{% endif %}
 </div>
 
-<div class="lc-card">
-  <h3 style="margin:0 0 8px;">Trade log <small class="lc-hint">every win and loss, newest first</small></h3>
-  <table class="da-t"><thead><tr><th>#</th><th>Closed</th><th>Instrument</th><th>Side</th><th class="r">Qty</th><th class="r">P&amp;L</th><th class="r">Balance</th><th>Result</th></tr></thead><tbody id="da-trades">
-  {% for t in acct.recent_trades %}<tr><td>{{ t.n }}</td><td>{{ t.closed_at }}</td><td>{{ t.root }}</td><td>{{ t.side }}</td><td class="r">{{ t.qty }}</td>
-    <td class="r {{ 'up' if t.pnl > 0 else 'down' if t.pnl < 0 else '' }}">{{ '{:+,.2f}'.format(t.pnl) }}</td><td class="r">${{ '{:,.2f}'.format(t.balance) }}</td><td>{{ t.result|upper }}</td></tr>
-  {% else %}<tr><td colspan="8" class="lc-hint">No trades yet. Pick a strategy above and the first closed trade will show up here.</td></tr>{% endfor %}
-  </tbody></table>
-</div>
 </div>
 <script>
 (function(){

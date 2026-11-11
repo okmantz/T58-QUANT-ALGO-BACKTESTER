@@ -3,8 +3,8 @@ First Payout Mission state.
 
 Seven stages, each with the specific requirements that must be met before moving on:
 
-    1 Find a viable strategy   2 Complete forward testing   3 Select a prop firm   4 Purchase the evaluation
-    5 Pass the evaluation      6 Reach funded               7 Receive the first payout
+    1 Test a strategy          2 Optimize or validate a strategy   3 Promote the strategy to champion
+    4 Complete forward testing 5 Purchase the evaluation           6 Pass the evaluation   7 Receive the first payout
 
 Everything is derived from what the app already records (current strategy + its validation checklist, the forward-test and journal
 trades, the Prop Desk accounts, the latest live Guardian report). A requirement the app cannot measure is reported as ``met: None``
@@ -19,14 +19,15 @@ from app.prop import desk_store as ds
 from app.prop import presets as P
 
 STAGES = [
-    ("strategy", "Find a viable strategy", "/library"),
+    ("test", "Test a strategy", "/full-pipeline"),
+    ("refine", "Optimize or validate a strategy", "/validate-simple"),
+    ("champion", "Promote strategy to champion", "/champion-simple"),
     ("forward", "Complete forward testing", "/forward-test"),
-    ("firm", "Select a prop firm", "/buy-challenge"),
-    ("purchase", "Purchase the evaluation", "/buy-challenge"),
+    ("purchase", "Purchase evaluation", "/buy-challenge"),
     ("pass", "Pass the evaluation", "/guardian"),
-    ("funded", "Reach funded", "/accounts"),
     ("payout", "Receive the first payout", "/accounts"),
 ]
+CHAMPION_STAGES = ("champion_candidate", "forward_testing", "production_ready")
 
 DEFAULT_SETTINGS = {"preset_key": "", "strategy": "", "forward_trades_required": 30, "forward_days_required": 14,
                     "backtest_max_drawdown": None}
@@ -84,6 +85,24 @@ def _strategy_inputs(cfg: dict) -> dict:
             r = ss.robustness_score(cur["strategy_name"], cur.get("instrument", ""), library_type=cur.get("library_type", ""),
                                     library_filename=cur.get("library_filename", ""))
             out.update(ran=r["ran_count"], passed=r["passed_count"], decided=r["decided_count"], failed=r["decided_count"] - r["passed_count"])
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _champion_inputs(st: dict) -> dict:
+    """Where the current strategy sits on the Champion board: has it been tested at all, and has it been promoted to champion."""
+    out = {"found": False, "tested": bool(st.get("ran")), "promoted": False, "stage_title": ""}
+    try:
+        from app.reports import strategy_state as ss
+        from app.scoring import champion_board as cb
+        cur = ss.get_current_strategy()
+        if cur:
+            row = cb.match_current_to_row(cur, cb.list_board())
+            if row:
+                promo = row.get("promotion") or {}
+                out.update(found=True, tested=out["tested"] or bool(row.get("verdict")), stage_title=promo.get("stage_title", ""),
+                           promoted=promo.get("stage") in CHAMPION_STAGES)
     except Exception:  # noqa: BLE001
         pass
     return out
@@ -160,20 +179,23 @@ def compute(today: date | None = None) -> dict:
     span = _span_days(fw["first"], fw["last"])
     stages: dict[str, dict] = {}
 
-    stages["strategy"] = {"requirements": [
+    ch = _champion_inputs(st)
+    stages["test"] = {"requirements": [
         _req("A strategy is selected", st["set"], st["name"] or "Open a strategy from the Library and set it as current."),
-        _req(f"At least {MIN_ROBUSTNESS_RUN} of 5 robustness checks run", st["ran"] >= MIN_ROBUSTNESS_RUN, f"{st['ran']} of 5 run (walk-forward, CPCV, sensitivity, WFGA, regime matrix)."),
+        _req("A full test has been run on it", ch["tested"] if st["set"] else None, "Run the Full Pipeline on the Test page." if not ch["tested"] else "A result is on file."),
+    ]}
+    stages["refine"] = {"requirements": [
+        _req(f"At least {MIN_ROBUSTNESS_RUN} of 5 robustness checks run", st["ran"] >= MIN_ROBUSTNESS_RUN, f"{st['ran']} of 5 run (walk-forward, CPCV, sensitivity, WFGA, regime matrix). Run them on the Validate page, or tune the strategy on Optimize."),
         _req("No robustness check failed", (st["failed"] == 0) if st["ran"] else None, f"{st['failed']} failed of {st['decided']} decided." if st["ran"] else "Run the checks first."),
+    ]}
+    stages["champion"] = {"requirements": [
+        _req("Strategy promoted to champion", ch["promoted"] if ch["found"] else (False if st["set"] else None),
+             f"Currently: {ch['stage_title']}. Promote it on the Champion page." if ch["found"] and not ch["promoted"] else ("Promoted." if ch["promoted"] else "Save the strategy to the library, then promote it on the Champion page.")),
     ]}
     stages["forward"] = {"requirements": [
         _req(f"{need_trades} qualifying forward trades", fw["qualifying"] >= need_trades, f"{fw['qualifying']} of {need_trades} (trades without a rule violation)."),
         _req(f"Forward tested for {need_days}+ days", span >= need_days, f"{span} day(s) so far."),
         _req("Forward results are not losing", fw["net"] >= 0 if fw["trades"] else None, f"Net {_money(fw['net'])} over {fw['trades']} trades." if fw["trades"] else "No forward trades yet."),
-    ]}
-    stages["firm"] = {"requirements": [
-        _req("A plan is chosen", bool(preset), preset.label if preset else "Compare firms on Buy Challenge and pick a plan."),
-        _req("The firm allows algorithmic trading", preset.algo_trading_allowed if preset else None, (preset.algo_policy_note[:160] + "...") if preset and preset.algo_policy_note else "Choose a plan to check its policy."),
-        _req("Plan rules were verified recently", P.is_ready_eligible(preset) if preset else None, "Rules checked " + preset.verified_on if preset and preset.verified_on else "Not verified against the firm's own page yet."),
     ]}
     offer_active = False
     try:
@@ -182,6 +204,8 @@ def compute(today: date | None = None) -> dict:
     except Exception:  # noqa: BLE001
         pass
     stages["purchase"] = {"requirements": [
+        _req("A plan is chosen", bool(preset), preset.label if preset else "Compare firms on Buy Challenge and pick a plan."),
+        _req("The firm allows algorithmic trading", preset.algo_trading_allowed if preset else None, (preset.algo_policy_note[:160] + "...") if preset and preset.algo_policy_note else "Choose a plan to check its policy."),
         _req("Evaluation purchased at the firm's checkout", bool(acct), f"{acct['label']} bought {acct['purchased_on']}." if acct else "Buy at the firm's official checkout, then press 'I bought this'."),
         _req(OPTIONAL_REQ, offer_active if firm else None, "A dated code is on file for this firm." if offer_active else "No active code on file; add one on Buy Challenge if you have it."),
         _req("Fee logged in My Attempts", bool(acct) and acct["fee"] > 0 if acct else False, _money(acct["fee"]) if acct and acct["fee"] else ""),
@@ -197,13 +221,8 @@ def compute(today: date | None = None) -> dict:
         reqs.append(_req("Choose a plan first", False, ""))
     stages["pass"] = {"requirements": reqs}
     funded = bool(acct and acct["stage"] == "funded")
-    stages["funded"] = {"requirements": [
-        _req("Evaluation passed", bool(acct and (acct["stage"] == "funded" or acct["status"] == "passed")), ""),
-        _req("Activation completed with the firm", funded, "Mark the account funded on the Accounts page once the firm activates it."),
-        _req("Funded account connected to deployment", bool(acct and acct.get("live_account_id")) if funded else None, ""),
-    ]}
     n_pay = len((acct or {}).get("payouts", []))
-    prow = []
+    prow = [_req("Account funded (activation completed with the firm)", funded, "Mark the account funded on the Accounts page once the firm activates it.")]
     if preset:
         prow.append(_req(f"Minimum {preset.winning_days_for_payout} winning day(s)" if preset.winning_days_for_payout else "Firm's payout conditions met", None, "Not tracked live yet; confirm in the firm's payout dashboard."))
         if preset.consistency_rule_pct or preset.funded_consistency_rule_pct:
@@ -241,31 +260,36 @@ def compute(today: date | None = None) -> dict:
 
 def _messages(cur, stages, fw, need_trades, st, preset, acct, live, cfg) -> dict:
     nxt, alerts = [], []
-    if cur == "strategy":
+    if cur == "test":
         if not st["set"]:
-            nxt.append("Open a strategy in the Library and set it as your current strategy.")
-        elif st["ran"] < MIN_ROBUSTNESS_RUN:
-            nxt.append(f"Run {MIN_ROBUSTNESS_RUN - st['ran']} more robustness check(s) on {st['name']}.")
+            nxt.append("Pick a strategy and run the full test on it (Test page).")
+        else:
+            nxt.append(f"Run the full test on {st['name']} (Test page) to see where it stands.")
+    elif cur == "refine":
+        if st["ran"] < MIN_ROBUSTNESS_RUN:
+            nxt.append(f"Run {MIN_ROBUSTNESS_RUN - st['ran']} more robustness check(s) on {st['name']} (Validate page), or tune it on Optimize first.")
         elif st["failed"]:
-            nxt.append(f"{st['failed']} robustness check(s) failed. Fix or replace the strategy before forward testing.")
+            nxt.append(f"{st['failed']} robustness check(s) failed. Optimize the strategy or replace it before promoting it.")
+    elif cur == "champion":
+        nxt.append("Promote the strategy on the Champion page once its checks are in.")
     elif cur == "forward":
         left = max(0, need_trades - fw["qualifying"])
         if left:
             nxt.append(f"You need {left} more qualifying trades.")
-        span_left = [r for r in stages[1]["requirements"] if r["label"].startswith("Forward tested") and r["met"] is False]
+        span_left = [r for r in next(x for x in stages if x["key"] == "forward")["requirements"] if r["label"].startswith("Forward tested") and r["met"] is False]
         if span_left:
             nxt.append("Keep forward testing: the minimum number of days is not reached yet.")
         if fw["trades"] and fw["net"] < 0:
             nxt.append("Forward results are negative. Review the Journal's Behavior tab to see whether the strategy or the execution is the cause.")
-    elif cur == "firm":
-        nxt.append("Compare plans on Buy Challenge and pick one that allows algorithmic trading.")
     elif cur == "purchase":
+        if not preset:
+            nxt.append("Compare plans on Buy Challenge and pick one that allows algorithmic trading.")
         nxt.append("Buy the evaluation at the firm's official checkout (use a code you have checked), then press 'I bought this'.")
     elif cur == "pass":
         nxt.append("Deploy with the Guardian on and let the strategy work toward the profit target.")
-    elif cur == "funded":
-        nxt.append("Mark the evaluation passed on the Accounts page and complete activation with the firm.")
     else:
+        if not (acct and acct["stage"] == "funded"):
+            nxt.append("Mark the evaluation passed on the Accounts page and complete activation with the firm.")
         nxt.append("Keep risk small and the cushion intact until the payout conditions are met, then log the payout.")
     bd = cfg.get("backtest_max_drawdown")
     if bd and fw["max_dd"] > bd:

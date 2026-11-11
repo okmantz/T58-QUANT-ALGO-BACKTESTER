@@ -6,8 +6,9 @@
 <p class="field-note" style="margin:0 0 10px;max-width:560px;">Get an email, Discord or Telegram message the moment a long-running job (Evolution Lab, Discovery Engine, Full Pipeline) finishes. Separate from the per-run webhook field on each job's start page.</p>
 {% if request.args.get('notif_saved') %}<div class="card saved-banner">Notification settings saved.</div>{% endif %}
   <form method="POST" action="/settings/notifications/save" id="notifications">
-    <div class="card">
-      <h2>Where to send it</h2>
+    <details class="card fold">
+      <summary><h2>Where to Send Updates</h2></summary>
+      <div class="fold-body">
       <label for="notify_email">Notification email</label>
       <input type="email" id="notify_email" name="notify_email" value="{{ notif.notify_email }}" placeholder="you@example.com">
       <p class="field-note">This is the address that receives the "job finished" email -- it doesn't need to match the SMTP account below.</p>
@@ -16,10 +17,12 @@
         <input type="checkbox" id="email_enabled" name="email_enabled" {% if notif.email_enabled %}checked{% endif %}>
         <label for="email_enabled" style="margin:0;">Email notifications enabled</label>
       </div>
-    </div>
+      </div>
+    </details>
 
-    <div class="card">
-      <h2>Outgoing mail server (SMTP)</h2>
+    <details class="card fold">
+      <summary><h2>Outgoing mail server (SMTP)</h2></summary>
+      <div class="fold-body">
       <p class="help">
         Any SMTP-capable mail account works, including a free Gmail/Outlook account --
         for Gmail specifically, use an
@@ -46,10 +49,12 @@
 
       <label for="smtp_from">"From" address</label>
       <input type="text" id="smtp_from" name="smtp_from" value="{{ notif.smtp_from }}" placeholder="usually the same as SMTP username">
-    </div>
+      </div>
+    </details>
 
-    <div class="card">
-      <h2>Discord</h2>
+    <details class="card fold">
+      <summary><h2>Discord</h2></summary>
+      <div class="fold-body">
       <p class="help">Fires the same message a job's own "notify me" webhook field already sends, but automatically on every job completion once saved here -- no need to re-paste the URL into each job's form.</p>
       <label for="discord_webhook_url">Discord webhook URL</label>
       <input type="text" id="discord_webhook_url" name="discord_webhook_url" value="{{ notif.discord_webhook_url }}" placeholder="https://discord.com/api/webhooks/...">
@@ -58,10 +63,12 @@
       </p>
       <button type="button" class="test-btn" onclick="testChannel('discord', this)">Test Connection</button>
       <p class="test-result" id="test-result-discord"></p>
-    </div>
+      </div>
+    </details>
 
-    <div class="card">
-      <h2>Telegram</h2>
+    <details class="card fold">
+      <summary><h2>Telegram</h2></summary>
+      <div class="fold-body">
       <p class="help">Create a bot via <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a> to get a bot token, then message your bot once and check <code>https://api.telegram.org/bot&lt;token&gt;/getUpdates</code> to find your chat ID.</p>
       <label for="telegram_bot_token">Bot token</label>
       <input type="password" id="telegram_bot_token" name="telegram_bot_token" value="" placeholder="{% if notif.telegram_bot_token %}(unchanged -- leave blank to keep it){% else %}123456:ABC-DEF...{% endif %}">
@@ -72,7 +79,8 @@
       </p>
       <button type="button" class="test-btn" onclick="testChannel('telegram', this)">Test Connection</button>
       <p class="test-result" id="test-result-telegram"></p>
-    </div>
+      </div>
+    </details>
 
     <button class="submit-btn" type="submit">Save notification settings</button>
   </form>

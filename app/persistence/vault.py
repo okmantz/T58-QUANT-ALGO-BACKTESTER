@@ -5,10 +5,14 @@ the app deleted every report, the trial ledger, the graveyard and the pipeline s
 somewhere an uninstall does not touch, and can also push it to your account on the license server so it follows you across
 reinstalls (and machines).
 
-IDENTITY (v10): everything is filed under your LICENSE KEY (the key is the stable identity; the master key included). The
-email you signed in with is a second lookup, so vaults written by older builds (filed by email only) are still found. Nothing
-is restored until you sign in, and a sign-in with ANY kind of key (master, sheet, allowlist, server) now triggers the restore --
-previously only a license-server sign-in did, which is why a master-key reinstall came back empty.
+IDENTITY (v10): everything is filed under your LICENSE KEY (the key is the stable identity) together with the email you signed in
+with (a second lookup, so vaults written by older builds, filed by email only, are still found). Nothing is restored until you
+sign in, and a sign-in with any ordinary key (sheet, allowlist, server) triggers the restore, so a customer's progress, profile and
+settings are never lost.
+
+THE MASTER KEY IS DIFFERENT ON PURPOSE (Nov 2026): the owner's master key never saves to, and never restores from, the vault. An
+uninstall + reinstall (or typing the master key again) is always a clean slate (see app.licensing.fresh_start); a leftover vault
+copy would otherwise bring back some of the old state and leave the rest blank.
 
 Layers, all additive (nothing here ever deletes your data):
 
@@ -113,6 +117,16 @@ def account_email() -> str:
         except Exception:  # noqa: BLE001
             email = ""
     return email.lower()
+
+
+def is_master_identity() -> bool:
+    """True when the signed-in key is the owner's master key. The master key keeps nothing in the vault (see the module docstring)."""
+    try:
+        from app.licensing import client
+        key = _credentials()[1]
+        return bool(key) and client._is_master_key(key)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _key_id(license_key: str) -> str:
@@ -504,6 +518,8 @@ def backup_local(profile_only: bool = False) -> dict:
     with _LOCK:
         if not has_identity():
             return {"copied": 0, "unchanged": 0, "bytes": 0, "files": 0, "skipped": "not_signed_in"}
+        if is_master_identity():
+            return {"copied": 0, "unchanged": 0, "bytes": 0, "files": 0, "skipped": "master_key"}
         base = _base()
         dest_root = files_dir()
         copied = unchanged = nbytes = 0
@@ -545,6 +561,8 @@ def restore_local(email: str | None = None) -> dict:
     """Copy missing/smaller files from the local vault back into the app folder, then re-apply the sealed secrets.
     Safe to call any time; needs a signed-in identity (a license key or email) to know which vault is yours."""
     with _LOCK:
+        if not email and is_master_identity():
+            return {"restored": 0, "skipped": 0, "secrets": [], "master_key": True}
         base = _base()
         restored = skipped = 0
         ids = [account_id(email)] if email else candidate_ids()

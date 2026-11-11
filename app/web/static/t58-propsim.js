@@ -126,7 +126,7 @@
       '.ps .odds{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-top:10px}.ps .odd{background:var(--panel-3);border:1px solid var(--border);border-radius:10px;padding:9px 10px}.ps .odd span{display:block;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-muted)}.ps .odd b{font-size:22px}' +
       '.ps .btns{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.ps button{padding:9px 13px;border-radius:9px;border:1px solid var(--border-light);background:var(--panel-3);color:var(--text);font-weight:600;font-size:13px;cursor:pointer}.ps button.p{background:var(--teal);color:var(--on-teal,#04130e);border-color:var(--teal)}' +
       '.ps .status{padding:9px 12px;border-radius:9px;font-weight:700;margin:6px 0;border:1px solid var(--border-light)}.ps .status.passed{color:var(--ok,#35e0b0);border-color:var(--ok,#35e0b0)}.ps .status.failed{color:var(--coral);border-color:var(--coral)}.ps .status.timeout{color:var(--amber);border-color:var(--amber)}' +
-      '.ps .row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ps .pos{color:var(--teal)}.ps .neg{color:var(--coral)}.ps .muted{color:var(--text-muted);font-size:12px}';
+      '.psstep{display:flex;gap:12px;padding:14px 0;border-top:1px solid var(--border)}.psstep:first-child{border-top:0;padding-top:0}.psn{flex:0 0 28px;height:28px;border-radius:50%;display:grid;place-items:center;font-weight:800;font-size:13px;color:var(--teal);border:1px solid var(--teal);box-shadow:0 0 12px rgba(var(--teal-rgb),.55),inset 0 0 8px rgba(var(--teal-rgb),.25)}.psb{flex:1;min-width:0}.psh{font-weight:700;font-size:14.5px;margin-bottom:2px}.psfold{margin-top:8px;border:1px solid var(--border-light);border-radius:10px;padding:6px 10px;background:var(--panel-3)}.psfold summary{cursor:pointer;font-size:12.5px;font-weight:600;color:var(--t-soft)}.ps .row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}.ps .pos{color:var(--teal)}.ps .neg{color:var(--coral)}.ps .muted{color:var(--text-muted);font-size:12px}';
     document.head.appendChild(css);
     host.textContent = '';
     var wrap = el('div', 'ps'), left = el('div'), right = el('div'); wrap.appendChild(left); wrap.appendChild(right); host.appendChild(wrap);
@@ -135,8 +135,21 @@
       var w = el('div'); w.appendChild(el('label', null, label)); var i = el('input'); i.type = 'number'; i.step = step; i.min = min; i.max = max; i.value = P[key];
       i.addEventListener('input', function () { var v = parseFloat(i.value); if (isFinite(v)) { P[key] = v; recompute(true); } }); w.appendChild(i); return w;
     }
+    function stepBlock(n, title, sub) {
+      var s = el('div', 'psstep'), num = el('span', 'psn', String(n)), b = el('div', 'psb'); s.appendChild(num); s.appendChild(b);
+      b.appendChild(el('div', 'psh', title)); if (sub) b.appendChild(el('div', 'muted', sub)); left.appendChild(s); return b;
+    }
+    var step1 = stepBlock(1, 'Prop firm', 'Pick the firm whose rules you will trade under.');
     var firmSel = el('select'); firmSel.appendChild(Object.assign(el('option', null, 'Custom rules'), { value: '' }));
-    left.appendChild(el('label', null, 'Prop-firm rules')); left.appendChild(firmSel);
+    step1.appendChild(firmSel);
+    var rulesFold = el('details', 'psfold'); rulesFold.appendChild(el('summary', null, 'Rules (filled in from the firm — edit only if you need to)'));
+    var rulesBox = el('div'); rulesFold.appendChild(rulesBox); step1.appendChild(rulesFold);
+    var step2 = stepBlock(2, 'Strategy', 'Pick a saved strategy and its edge is measured for you.');
+    var step3 = stepBlock(3, 'Market data', 'The data the strategy is measured on.');
+    var edgeFold = el('details', 'psfold'); edgeFold.appendChild(el('summary', null, 'Strategy edge (filled in automatically)'));
+    var edgeBox = el('div'); edgeFold.appendChild(edgeBox); step2.appendChild(edgeFold);
+    var stratBox = el('div'); step2.insertBefore(stratBox, edgeFold);
+    var dataBox = el('div'); step3.appendChild(dataBox);
     firmSel.addEventListener('change', function () {
       var p = presets.filter(function (x) { return x.key === firmSel.value; })[0]; if (!p) return;
       P.account = p.account_size; P.targetPct = p.target_pct; P.dailyLossPct = p.daily_loss_pct; P.maxDdPct = p.max_dd_pct; P.ddType = p.drawdown_type === 'static' ? 'static' : (p.dd_basis === 'eod' ? 'eod' : 'trailing'); P.dailyAction = p.daily_loss_action === 'lock_day' ? 'lock_day' : 'fail';
@@ -144,9 +157,9 @@
       API._firmNote = (p.algo_allowed ? '' : 'Heads up: this firm does not explicitly allow automated trading. ') + (p.fee && p.fee.price ? 'Challenge fee $' + Math.round(p.fee.price) + (p.fee.monthly ? ' per month' : '') + ', profit split ' + P.splitPct + '%.' : 'No fee data for this firm.');
       P.consistencyPct = p.consistency_pct; P.minDays = p.min_days || 1; if (p.payout_threshold_pct) P.payoutPct = p.payout_threshold_pct; buildInputs(); recompute(true);
     });
-    var inputsBox = el('div'); left.appendChild(inputsBox);
+    var inputsBox = rulesBox;
     function buildInputs() {
-      inputsBox.textContent = '';
+      rulesBox.textContent = ''; stratBox.textContent = ''; dataBox.textContent = ''; edgeBox.textContent = ''; inputsBox = rulesBox;
       [['Account size ($)', 'account', 1000], ['Profit target (%)', 'targetPct', 0.5], ['Daily loss limit (%)', 'dailyLossPct', 0.5], ['Max drawdown (%)', 'maxDdPct', 0.5], ['Min trading days', 'minDays', 1], ['Consistency rule: best day ≤ (%)', 'consistencyPct', 5]]
         .forEach(function (r) { inputsBox.appendChild(num(r[0], r[1], r[2], 0, 10000000)); });
       var dl = el('label', null, 'Drawdown type'); var ds = el('select'); [['trailing', 'Trailing, intraday (floor rises with peak)'], ['eod', 'Trailing, end-of-day (floor moves at the close)'], ['static', 'Static (fixed floor)']].forEach(function (o) { var op = el('option', null, o[1]); op.value = o[0]; ds.appendChild(op); }); ds.value = P.ddType;
@@ -156,7 +169,7 @@
       as.addEventListener('change', function () { P.dailyAction = as.value; recompute(true); }); inputsBox.appendChild(al); inputsBox.appendChild(as);
       if (API._firmNote) { var fnote = el('div', 'muted', API._firmNote); fnote.style.marginTop = '6px'; inputsBox.appendChild(fnote); }
       inputsBox.appendChild(num('Evaluation time limit (trading days)', 'maxDays', 5, 5, 400));
-      inputsBox.appendChild(el('h4', null, 'Strategy edge')).style.margin = '14px 0 0';
+      inputsBox = stratBox;
       /* Load edge from ANY saved strategy (manual JSON, Python, PineScript, MQL5). Rows with recorded results apply
          instantly; everything else (e.g. the preloaded, never-backtested strategies) is measured on the fly on a
          dataset the person can choose -- the server backtests it with the same engine every other tool uses. */
@@ -178,7 +191,7 @@
         g.files.forEach(function (f) { var o = el('option', null, f.name); o.value = f.full_name; og.appendChild(o); }); dsSel.appendChild(og);
       });
       dsSel.value = API._dsPick || '';
-      var dsLab = el('label', null, 'Dataset used to measure the strategy'); inputsBox.appendChild(dsLab); inputsBox.appendChild(dsSel);
+      var dsLab = el('label', null, 'Dataset used to measure the strategy'); dataBox.appendChild(dsLab); dataBox.appendChild(dsSel);
       var stat = el('div', 'muted'); stat.style.margin = '6px 0 0'; stat.textContent = API._status || ((API._rows || []).length ? (API._rows.length + ' saved strategies available.') : 'No saved strategies found — build one in the Strategy Library first.'); inputsBox.appendChild(stat);
       function measure(row, refresh) {
         stat.textContent = 'Backtesting ' + row.name + ' to measure its edge… (first run can take up to a minute)';
@@ -209,13 +222,14 @@
       var remeasure = el('button', null, 'Re-measure on this dataset'); remeasure.type = 'button'; remeasure.style.marginTop = '6px';
       remeasure.addEventListener('click', function () { var r = pickedRow(); if (r) measure(r, true); else stat.textContent = 'Pick a saved strategy first.'; });
       inputsBox.appendChild(remeasure);
+      inputsBox = edgeBox;
       inputsBox.appendChild(num('Win rate (0–1)', 'winRate', 0.01, 0.01, 0.99)); inputsBox.appendChild(num('Avg win in R (loss = 1R)', 'payoffR', 0.1, 0.1, 20)); inputsBox.appendChild(num('Trades per day', 'tradesPerDay', 1, 1, 30));
       inputsBox.appendChild(num('Payout milestone: extra profit (%)', 'payoutPct', 0.5, 0.5, 50));
     }
     buildInputs();
 
     var riskLab = el('div', 'big'); var risk = el('input'); risk.type = 'range'; risk.min = 0.05; risk.max = 3; risk.step = 0.05; risk.value = P.riskPct;
-    var rbox = el('div'); rbox.style.marginTop = '14px'; rbox.appendChild(el('label', null, 'Risk per trade (% of account) — drag me')); rbox.appendChild(riskLab); rbox.appendChild(risk); left.appendChild(rbox);
+    var rbox = stepBlock(4, 'Risk per trade', 'Drag it and every number on the right updates.'); rbox.appendChild(riskLab); rbox.appendChild(risk);
     risk.addEventListener('input', function () { P.riskPct = parseFloat(risk.value); recompute(true); });
 
     var statusBox = el('div'), gauges = el('div'), odds = el('div', 'odds'), btns = el('div', 'btns'), info = el('div', 'muted'), chart = el('div', 'pschart'), sweep = el('div', 'pssweep');

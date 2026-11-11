@@ -17,28 +17,23 @@ SECTION_GUIDES = {
         "title": "Create", "accent_color": "#a78bfa",
         "tagline": "Everything that produces a new strategy, from a blank page to a candidate worth testing.",
         "description": (
-            "Create is where a strategy comes from in the first place -- either generated broadly by the "
-            "system (the Strategy Discovery Engine, AI Research, Research Loop, Generate Strategies) when you don't yet "
-            "have a specific idea, or built directly (Strategy Library) when you do. Nothing here is validated "
-            "yet -- a strategy that comes out of Create still needs to go through Test and Optimize before "
-            "it's trustworthy."
+            "Create is where a strategy enters. Already have one? Paste it or upload the file (Manual, Python, "
+            "PineScript or MQL5) and save it to the Strategy Library. No strategy yet? The Strategy Discovery "
+            "Engine finds candidates for you. Nothing here is validated yet -- the next stop is Test."
         ),
         "roadmap": [
             "No idea yet? Open the Strategy Discovery Engine -- pick a market and a prop firm, press Start, and it "
-            "searches, tests and rejects on its own. One tool instead of separate Search / Evolution / Forge / Speed Run labs (those pages are retired; their searches are presets here).",
-            "Have a specific idea already? Paste its code (Python, PineScript, MQL5), describe it in plain English, or "
-            "build it directly in the Strategy Library.",
-            "Want an LLM to reason about market structure and propose ideas? Try AI Research, or the background Research Loop.",
-            "Once you have a survivor you like, send it to Full Pipeline for a validated verdict.",
+            "searches, tests and rejects on its own.",
+            "Have a strategy already? Paste its code (Manual, Python, PineScript, MQL5) or upload the file, then save it to the library.",
+            "Want help writing one? Use the Generate Strategies or Pine Indicator Creator tabs.",
+            "Once it is saved, go to Test.",
         ],
-        "primary_buttons": [{"label": "Strategy Discovery Engine", "href": "/discovery-engine"}, {"label": "Strategy Library", "href": "/library"}],
+        "primary_buttons": [{"label": "Strategy Discovery Engine", "href": "/discovery-engine"}],
         "tools": [
             {"name": "Strategy Discovery Engine", "href": "/discovery-engine",
              "desc": "No strategy yet? Pick a market + prop firm and let the engine find candidates for you."},
             {"name": "Generate Strategies (AI)", "href": "/generate-strategies", "desc": "LLM-assisted strategy code generation."},
-            {"name": "AI Research", "href": "/research", "desc": "LLM reasons over market structure and directs a deeper, multi-step research pass."},
             {"name": "Research Loop (background)", "href": "/research-loop", "desc": "Keeps researching unattended, on a schedule."},
-            {"name": "Strategy Library", "href": "/library", "desc": "Build, edit, or browse strategies directly."},
             {"name": "Pine Indicator Creator", "href": "/pine-indicator",
              "desc": "TradingView (Pine v5) indicators from an idea or pasted code, checked before you copy them."},
         ],
@@ -56,15 +51,11 @@ SECTION_GUIDES = {
             "Pick a strategy (from the Strategy Library, or configure one directly) and a dataset.",
             "Set your prop-firm rules and risk/execution settings.",
             "Run & Report gives you the full backtest report for that exact configuration.",
-            "Payout Probability adds Monte Carlo-based odds of actually reaching a funded payout.",
-            "Not sure which prop firm's rules to test against? Prop-Firm Recommender narrows it down.",
+            "Not sure which prop firm's rules to test against? Prop-Firm Recommender (Account > Prop Journey) narrows it down.",
         ],
         "primary_buttons": [{"label": "Run & Report", "href": "/"}],
         "tools": [
             {"name": "Run & Report", "href": "/", "desc": "One strategy, one dataset, one full backtest report."},
-            {"name": "Payout Probability", "href": "/payout-probability", "desc": "Monte Carlo odds of reaching a funded payout."},
-            {"name": "Prop-Firm Recommender", "href": "/prop-firm-recommender", "desc": "Find which prop firm's rules fit a strategy best."},
-            {"name": "Payout Planner", "href": "/payout-planner", "desc": "Evaluations, fees and days to a first payout, Lucid 50k vs 100k, and two evals at once."},
         ],
     },
     "champion": {

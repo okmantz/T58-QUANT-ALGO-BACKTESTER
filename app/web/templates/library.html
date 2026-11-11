@@ -35,7 +35,7 @@
   .stage-labels span:first-child { text-align: left; }
   .stage-labels span:last-child { text-align: right; }
   .badge { display: inline-block; padding: 2px 7px; border-radius: 5px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; margin-right: 4px; }
-  .badge.type { background: var(--panel-3); color: #aaa; }
+  .badge.type { background: var(--panel-3); color:var(--text-muted); }
   .badge.status { background: rgba(var(--teal-rgb), 0.15); color: var(--teal); }
   .tag { display: inline-block; background: var(--panel-3); color: var(--t-soft); padding: 1px 6px; border-radius: 4px; font-size: 10.5px; margin: 4px 4px 0 0; }
   /* ---- Control Center cards (2026-10-17) ---- */
@@ -338,7 +338,7 @@ function STAGE(v){ return ({'FORWARD-TEST CANDIDATE':'FORWARD-TEST CANDIDATE','L
   const CONTROL = {};
   function fmtNum(v, d, suffix) { return v === null || v === undefined ? '--' : (Number(v).toFixed(d === undefined ? 2 : d) + (suffix || '')); }
   function sparkSvg(vals) {
-    if (!vals || vals.length < 2) return '<svg class="cc-spark" viewBox="0 0 100 34"><text x="2" y="20" fill="#5b6478" font-size="9">no equity curve yet</text></svg>';
+    if (!vals || vals.length < 2) return '<svg class="cc-spark" viewBox="0 0 100 34"><text x="2" y="20" style="fill:var(--text-muted)" font-size="9">no equity curve yet</text></svg>';
     const mn = Math.min(...vals), mx = Math.max(...vals), rg = (mx - mn) || 1;
     const pts = vals.map((v, i) => (i / (vals.length - 1) * 100).toFixed(1) + ',' + (32 - (v - mn) / rg * 30).toFixed(1)).join(' ');
     const up = vals[vals.length - 1] >= vals[0];

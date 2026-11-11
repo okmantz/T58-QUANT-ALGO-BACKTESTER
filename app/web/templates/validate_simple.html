@@ -30,10 +30,12 @@
 <div class="lc-run-grid">
 <div class="lc-run-main">
 
-  <div class="lc-card">
-    <div class="lc-row">
-      <div class="lc-col">
-        <label class="flabel" for="lc-strategy-pick">Step 1 &middot; Pick a strategy</label>
+  <div class="t58-steps">
+    <section class="t58-step">
+      <div class="t58-step-n">1</div>
+      <div class="t58-step-b">
+        <h3>Pick a strategy</h3>
+        <p class="sub">The strategy to stress-test. Nothing gets tuned or changed here.</p>
         <select class="inp" name="strategy_pick" id="lc-strategy-pick">
           {# v9.15: grouped by strategy type (Manual / Python / PineScript /
              MQL5) -- the same optgroup structure the Test page and
@@ -49,8 +51,13 @@
           {% endfor %}
         </select>
       </div>
-      <div class="lc-col">
-        <label class="flabel" for="lc-dataset-pick">Step 2 &middot; Pick market data</label>
+    </section>
+
+    <section class="t58-step">
+      <div class="t58-step-n">2</div>
+      <div class="t58-step-b">
+        <h3>Pick your market data</h3>
+        <p class="sub">Stored data or an upload. Pip size, $ per point and commission are detected from it automatically.</p>
         <select class="inp" name="existing_dataset" id="lc-dataset-pick">
           <option value="">— upload a CSV instead —</option>
           {% for g in dataset_groups %}
@@ -61,35 +68,46 @@
           </optgroup>
           {% endfor %}
         </select>
-        <label class="flabel" style="margin-top:10px;" for="lc-csv-file">…or upload market data (CSV)</label>
+        <label class="flabel" style="margin-top:12px;" for="lc-csv-file">&hellip;or upload market data (CSV)</label>
         <input type="file" name="csv_file" id="lc-csv-file" accept=".csv">
+        <div class="lc-row" style="margin-top:12px;">
+          <div class="lc-col">
+            <label class="flabel" for="lc-timeframe">Timeframe <span class="lc-hint" style="text-transform:none;letter-spacing:0;">(optional)</span></label>
+            <select class="inp" name="timeframe" id="lc-timeframe" data-native="1">
+              <option value="">Dataset's native timeframe (default)</option>
+              {% for tf in timeframe_choices %}
+              <option value="{{ tf }}"{% if prefill.timeframe == tf %} selected{% endif %}>{{ tf }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
       </div>
-      <div class="lc-col">
-        <label class="flabel" for="lc-prop-preset">Prop firm to test against</label>
-        <select class="inp" name="prop_preset" id="lc-prop-preset">
-          <option value="">— type the rules in Advanced —</option>
-          {% for p in prop_presets %}
-          <option value="{{ p.key }}"{% if prefill.prop_preset == p.key %} selected{% endif %}>{{ p.label }}</option>
-          {% endfor %}
-        </select>
-        <div class="lc-hint" style="margin-top:5px;">Its rules show in the rail &rarr; and harden this run.</div>
-      </div>
-      <div class="lc-col">
-        <label class="flabel" for="lc-timeframe">Step 3 &middot; Pick a timeframe</label>
-        <select class="inp" name="timeframe" id="lc-timeframe">
-          <option value="">Dataset's native timeframe (default)</option>
-          {% for tf in timeframe_choices %}
-          <option value="{{ tf }}"{% if prefill.timeframe == tf %} selected{% endif %}>{{ tf }}</option>
-          {% endfor %}
-        </select>
-        <div class="lc-hint" style="margin-top:5px;">The data is resampled to this bar size before anything runs — never a silent 1m. Pick 1m only with 1-minute data (fetch 1m bars from an API under Market data). A timeframe declared inside the strategy itself still wins.</div>
-      </div>
-    </div>
-    <div class="lc-rules-line" id="lc-rules-line"></div>
-  </div>
+    </section>
 
-  <div class="lc-card">
-    <h3>Which checks?</h3>
+    <section class="t58-step">
+      <div class="t58-step-n">3</div>
+      <div class="t58-step-b">
+        <h3>What are you validating for?</h3>
+        <p class="sub">Prop firm is the default. Switch to Net profit to validate for a live or personal account.</p>
+        {% include "_objective_mode_field.html" %}
+        <div data-prop-only>
+          <label class="flabel" for="lc-prop-preset" style="margin-top:6px;">Prop firm to test against</label>
+          <select class="inp" name="prop_preset" id="lc-prop-preset">
+            <option value="">&mdash; type the rules in Advanced &mdash;</option>
+            {% for p in prop_presets %}
+            <option value="{{ p.key }}"{% if prefill.prop_preset == p.key %} selected{% endif %}>{{ p.label }}</option>
+            {% endfor %}
+          </select>
+          <div class="lc-hint" style="margin-top:5px;">Its rules show in the rail &rarr; and harden this run.</div>
+          <div class="lc-rules-line" id="lc-rules-line"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="t58-step">
+      <div class="t58-step-n">4</div>
+      <div class="t58-step-b">
+        <h3>Which checks?</h3>
     <div class="lc-checkcards">
       <label class="lc-checkcard">
         <input class="lc-check-input" type="checkbox" name="check_monte_carlo" id="c_mc"{% if preselect is none or 'monte_carlo' in preselect %} checked{% endif %}>
@@ -134,6 +152,8 @@
     </div>
     <div class="lc-hint" style="margin-top:10px;" id="lc-check-count"></div>
     <div class="lc-hint" style="margin-top:6px;">To promote a strategy to <b>Validated</b> on the Champion page, five core checks must be on record for it: CPCV, Walk-Forward, Walk-Forward GA, Sensitivity and Regime Matrix. You can run them in one go or over several runs &mdash; each result stays saved.</div>
+      </div>
+    </section>
   </div>
 
   <details class="lc-adv">
@@ -200,7 +220,6 @@
     </div>
   </details>
 
-  {% include "_objective_mode_field.html" %}
   <div style="margin-bottom:14px;"><button class="lc-btn big" type="submit" id="lc-run-btn">&#9654; RUN CHECKS</button></div>
 
   <div class="lc-card">

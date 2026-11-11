@@ -25,6 +25,17 @@
 <div class="lc-notice{{ '' if notice_ok == '1' else ' bad' }}">{{ notice }}</div>
 {% endif %}
 
+<style>
+  /* Champion polish: calmer hierarchy, one accent, roomy cards. */
+  .lc-scope .ch-podium{gap:14px;}
+  .lc-scope .ch-slot{border-radius:16px; padding:18px; transition:border-color .15s, transform .15s, box-shadow .15s;}
+  .lc-scope .ch-slot.p1{box-shadow:0 10px 30px rgba(201,162,39,.14);}
+  .lc-scope .ch-card{border-radius:16px; padding:16px; transition:border-color .15s, transform .15s, box-shadow .15s;}
+  .lc-scope .ch-card:hover{transform:translateY(-1px); box-shadow:0 8px 24px rgba(0,0,0,.18);}
+  .lc-scope .ch-card.sel{box-shadow:0 0 0 1px var(--lc-acc) inset, 0 10px 28px rgba(var(--teal-rgb,0,212,170),.16);}
+  .lc-scope .ch-assess{border-radius:18px; box-shadow:0 10px 32px rgba(0,0,0,.14);}
+  @media (prefers-reduced-motion: reduce){ .lc-scope .ch-card, .lc-scope .ch-slot{transition:none;} .lc-scope .ch-card:hover{transform:none;} }
+</style>
 <div class="lc-run-grid">
 <div class="lc-run-main">
 
@@ -159,21 +170,6 @@
   {% endif %}
 </div>
 </form>
-
-<details class="lc-adv">
-  <summary>Other tools</summary>
-  <div class="adv-body">
-    <div class="lc-toolgrid" style="margin-top:12px;">
-      <a class="lc-toolcard" href="/dashboard"><div class="tname">Leaderboard</div><div class="tdesc">The dashboard scoreboard across every run.</div></a>
-      <a class="lc-toolcard" href="/compare"><div class="tname">Compare Strategies</div><div class="tdesc">Two or more, side by side.</div></a>
-      <a class="lc-toolcard" href="/quant-lab/strategy-health"><div class="tname">Strategy Health</div><div class="tdesc">Decay checks and re-tune proposals.</div></a>
-      <a class="lc-toolcard" href="/family-diversity"><div class="tname">Family Diversity</div><div class="tdesc">How distinct the survivors are.</div></a>
-      <a class="lc-toolcard" href="/portfolio"><div class="tname">Portfolio</div><div class="tdesc">Combine strategies.</div></a>
-      <a class="lc-toolcard" href="/universe"><div class="tname">Universe Map</div><div class="tdesc">Every strategy as a dot, by family.</div></a>
-      <a class="lc-toolcard" href="/ensemble"><div class="tname">Ensemble</div><div class="tdesc">Blend or vote across strategies.</div></a>
-    </div>
-  </div>
-</details>
 
 </div>
 <div class="lc-run-side">
