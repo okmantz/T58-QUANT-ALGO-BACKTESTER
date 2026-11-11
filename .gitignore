@@ -81,3 +81,6 @@ scripts/audit_2026_10/.cache/
 
 # Per-user account profile (holds a password hash) -- written to the app folder at runtime
 account_settings.json
+
+# per-install id used to detect an uninstall + reinstall (master-key clean slate)
+.t58_install_id
