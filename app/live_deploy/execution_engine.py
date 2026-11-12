@@ -102,6 +102,7 @@ class LiveExecutionStatus:
     running: bool = False
     connected: bool = False
     platform: str = ""
+    supervised_only: bool = False   # 2026-11-12 audit P2-16: broker adapter has no broker-side stop
     last_bar_time: Optional[pd.Timestamp] = None
     last_signal: int = 0
     open_position_ticket: Optional[str] = None
@@ -217,6 +218,58 @@ class LiveExecutionSession:
             from app.guardian.engine import GuardianTracker
             self._guardian = GuardianTracker(config.guardian, config.guardian_preset)
 
+    # -- 2026-11-12 audit P2-16: peak persistence + order-time max-loss check -----------------------
+    def _peak_path(self, conn=None):
+        from pathlib import Path
+        from app.data.storage import user_data_dir
+        login = (getattr(conn, "account_login", None) if conn is not None else None) or self.cfg.journal_login or "acct"
+        safe = "".join(c if c.isalnum() else "_" for c in f"{self.broker.platform_name}_{login}_{self.cfg.symbol}")
+        return Path(user_data_dir()) / "live_deploy" / f"peak_{safe}.json"
+
+    def _load_persisted_peak(self, conn=None) -> Optional[float]:
+        try:
+            import json
+            p = self._peak_path(conn)
+            if p.is_file():
+                return float(json.loads(p.read_text(encoding="utf-8")).get("peak"))
+        except Exception:  # noqa: BLE001 -- persistence is best-effort
+            pass
+        return None
+
+    def _persist_peak(self) -> None:
+        try:
+            import json
+            p = self._peak_path()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps({"peak": self._dd_peak}), encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _max_loss_per_trade_dollars(self) -> float:
+        """Hard per-trade loss ceiling: the smaller of 1% of the account and the configured risk amount."""
+        acct = float(getattr(self.cfg.prop_rules, "account_size", None) or self.cfg.risk.initial_balance or 0.0)
+        cap = acct * 0.01 if acct > 0 else float("inf")
+        try:
+            cap = min(cap, float(self.cfg.risk.risk_amount(acct))) if acct > 0 else cap
+        except Exception:  # noqa: BLE001
+            pass
+        return cap
+
+    def _enforce_order_max_loss(self, broker_qty: float, stop_distance: float) -> float:
+        """Shrinks (never grows) ``broker_qty`` so qty x stop x units-per-contract <= the per-trade ceiling; 0.0 = refuse the order."""
+        per_unit = float(self.cfg.units_per_lot or self.cfg.contract_size or 0.0)
+        if per_unit <= 0 or stop_distance <= 0:
+            return broker_qty
+        loss = broker_qty * per_unit * stop_distance
+        cap = self._max_loss_per_trade_dollars()
+        if loss <= cap * 1.0001:
+            return broker_qty
+        import math
+        fit = math.floor(cap / (per_unit * stop_distance) + 1e-9)
+        self._log("warn", f"ORDER MAX-LOSS CHECK: {broker_qty:g} x ${per_unit * stop_distance:,.2f} stop risk = ${loss:,.2f} exceeds the "
+                          f"${cap:,.2f} per-trade ceiling -- " + (f"reduced to {fit} unit(s)." if fit >= 1 else "refused (even one unit is over)."))
+        return float(max(fit, 0))
+
     # -- public controls ------------------------------------------------
 
     def start(self) -> tuple[bool, str]:
@@ -238,6 +291,15 @@ class LiveExecutionSession:
         self.status.baseline_win_rate = self.cfg.baseline_win_rate
         # v7 P0-2: anchor the trailing max-drawdown peak at session start.
         self._dd_peak = conn.equity or conn.balance or self.cfg.risk.initial_balance
+        # 2026-11-12 audit P2-16: the peak survives restarts (a restart must not reset a trailing drawdown that already trailed up).
+        _saved_peak = self._load_persisted_peak(conn)
+        if _saved_peak is not None and (self._dd_peak is None or _saved_peak > self._dd_peak):
+            self._log("info", f"Restored the persisted equity peak ${_saved_peak:,.2f} (session start equity was ${self._dd_peak:,.2f}).")
+            self._dd_peak = _saved_peak
+        if getattr(self.broker, "supports_broker_stops", True) is False:
+            self._log("warn", f"SUPERVISED ONLY: {self.broker.platform_name} orders here carry NO broker-side stop. If this app or the "
+                              "connection dies, an open position is unprotected -- run only while you are watching it.")
+            self.status.supervised_only = True
         self._reconcile_existing_position()
 
         if self.copier is not None:
@@ -491,6 +553,7 @@ class LiveExecutionSession:
             return False  # no equity data this poll -- can't check, don't halt on missing data
         if self._dd_peak is None or equity > self._dd_peak:
             self._dd_peak = equity
+            self._persist_peak()
         if equity <= floor:
             dd_pct = getattr(self.cfg.prop_rules, "max_drawdown_pct", 0)
             dd_type = getattr(self.cfg.prop_rules, "drawdown_type", "trailing")
@@ -726,6 +789,9 @@ class LiveExecutionSession:
             broker_qty = capped
         if broker_qty <= 0:
             self._log("warn", "Computed position size was zero after the max-lot cap -- skipping entry.")
+            return
+        broker_qty = self._enforce_order_max_loss(broker_qty, stop_distance)
+        if broker_qty <= 0:
             return
 
         sl_price = price - signal * stop_distance

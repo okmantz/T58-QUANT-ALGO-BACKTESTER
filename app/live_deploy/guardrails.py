@@ -180,3 +180,24 @@ def enforced_guardrails_summary(rules: PropRules) -> str:
         f"max-drawdown halt at {getattr(rules, 'max_drawdown_pct', '?')}% "
         f"({getattr(rules, 'drawdown_type', '?')}) -- breach flattens everything and stops the session."
     )
+
+
+# 2026-11-12 audit P0-5: deploy forms REFUSE (never silently fix) a risk above the 1%-of-account cap.
+DEPLOY_MAX_RISK_PCT = 1.0
+
+
+def deploy_risk_violation(risk_mode: str, risk_value: float, account_size: float) -> str | None:
+    """None when the per-trade risk is within the cap; otherwise the refusal message shown to the person."""
+    try:
+        rv, acct = float(risk_value), float(account_size or 0.0)
+    except (TypeError, ValueError):
+        return "Risk per trade is not a number."
+    if rv <= 0:
+        return "Risk per trade must be greater than zero."
+    if str(risk_mode) == "fixed":
+        if acct > 0 and rv > acct * DEPLOY_MAX_RISK_PCT / 100.0 + 1e-9:
+            return (f"Refused: ${rv:,.2f} per trade is above the {DEPLOY_MAX_RISK_PCT:g}% cap "
+                    f"(${acct * DEPLOY_MAX_RISK_PCT / 100.0:,.2f} on a ${acct:,.0f} account). Lower it; the app will not change it for you.")
+    elif rv > DEPLOY_MAX_RISK_PCT + 1e-12:
+        return f"Refused: {rv:g}% risk per trade is above the {DEPLOY_MAX_RISK_PCT:g}% cap. Lower it; the app will not change it for you."
+    return None
