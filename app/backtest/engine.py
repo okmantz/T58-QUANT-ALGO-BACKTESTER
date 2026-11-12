@@ -68,8 +68,9 @@ def _lookahead_cache_put(key, value) -> None:
 
 
 def _structure_only(obj):
-    """Config with every number blanked: two genomes that differ only in
-    parameter values share a structure."""
+    """Config with every number blanked (kept for diagnostics/grouping ONLY).
+    NOT used as a lookahead cache key any more: parameter values change what a
+    strategy sees, so a verdict is only valid for the exact config."""
     if isinstance(obj, bool) or obj is None or isinstance(obj, str):
         return obj
     if isinstance(obj, (int, float)):
@@ -87,12 +88,14 @@ def _lookahead_cache_key(strategy, df):
     try:
         cfg = getattr(strategy, "config", None)
         if getattr(strategy, "source_type", None) == "manual" and isinstance(cfg, dict):
-            body = json.dumps(_structure_only(cfg), sort_keys=True, default=str)
+            body = json.dumps(cfg, sort_keys=True, default=str)
         else:
             code = getattr(strategy, "code", None) or getattr(strategy, "file_path", None) or repr(strategy)
             body = str(code)
         h = hashlib.sha1(body.encode("utf-8", "ignore")).hexdigest()
-        return (type(strategy).__name__, h, len(df), str(df["timestamp"].iloc[0]), str(df["timestamp"].iloc[-1]))
+        # 2026-11-12 audit: keyed on the FULL config (numbers included) and a content fingerprint of the data -- a
+        # structure-only / length+endpoints key let a different-parameter or different-data run inherit a cached "pass".
+        return (type(strategy).__name__, h, _data_fingerprint(df))
     except Exception:
         return None
 
@@ -147,7 +150,7 @@ def _strategy_content_hash(strategy):
     from pathlib import Path
     cfg = getattr(strategy, "config", None)
     if getattr(strategy, "source_type", None) == "manual" and isinstance(cfg, dict):
-        body = json.dumps(_structure_only(cfg), sort_keys=True, default=str).encode("utf-8", "ignore")
+        body = json.dumps(cfg, sort_keys=True, default=str).encode("utf-8", "ignore")
     else:
         fp = getattr(strategy, "file_path", None)
         if fp is not None and Path(fp).is_file():

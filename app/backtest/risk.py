@@ -40,6 +40,8 @@ from dataclasses import dataclass
 # ---------------------------------------------------------------------------
 SIZING_MODES = ("skip", "fit_stop", "fixed_contracts", "micro_fallback", "rr_planned")
 FIT_STOP_TARGET_MODES = ("scale", "keep", "fixed_r")
+# 2026-11-12 audit P0-5: hard per-trade risk cap for any run with prop rules (% of account).
+PROP_MAX_RISK_PCT = 1.0
 
 # Reasons a SizingDecision can have units == 0 (the entry is skipped).
 SKIP_NO_BUDGET = "no_budget"
@@ -134,6 +136,12 @@ class RiskConfig:
     # open[i + entry_fill_lag_bars], not the signal bar's close -- 1 = next bar's open (0 = the
     # signal bar's own open; the old same-bar-close fill is gone by design).
     entry_fill_lag_bars: int = 1
+    # 2026-11-12 audit P0-5: set by with_prop_safety_defaults when it clamped an above-cap risk value (shown in reports).
+    risk_cap_note: str = ""
+    # 2026-11-12 audit: entry_fill_lag_bars=0 fills at the SIGNAL bar's own open -- but a bar-close signal cannot be acted
+    # on before that bar has closed, so 0 is intra-bar lookahead. It is floored to 1 unless a unit test / research harness
+    # explicitly sets allow_same_bar_fill=True (never set by any search, deploy or report path).
+    allow_same_bar_fill: bool = False
     # B2-4: $ commission per CONTRACT per round-turn, charged at settle on top of
     # commission_per_trade (total = commission_per_trade + commission_per_contract * contracts).
     commission_per_contract: float = 0.0
@@ -441,6 +449,13 @@ class RiskConfig:
         cs = self.contract_size if contract_size is None else contract_size
         contracts = (units / cs) if cs else 0.0
         return 2.0 * self.side_cost_price() * units + self.commission_for(contracts)
+
+    def __post_init__(self):
+        try:
+            if int(self.entry_fill_lag_bars or 0) < 1 and not self.allow_same_bar_fill:
+                self.entry_fill_lag_bars = 1
+        except (TypeError, ValueError):
+            self.entry_fill_lag_bars = 1
 
     def risk_amount(self, current_equity: float) -> float:
         # Floor equity at 0 for sizing purposes: a negative-equity account
@@ -794,8 +809,23 @@ def with_prop_safety_defaults(risk: "RiskConfig", prop_rules) -> "RiskConfig":
         # contract at a $450 stop on a $50k account trades exactly like
         # the manual trade it models. Callers that explicitly chose
         # fixed_contracts / micro_fallback keep their mode.
-        if risk.sizing_mode == "skip":
-            updates["sizing_mode"] = "fit_stop"
+        # 2026-11-12 audit P0-6: fit_stop SHRINKS the strategy's stop to force a trade, so a prop run measured a
+        # different (tighter-stop) strategy than the one that would be deployed. Prop paths now plan the risk
+        # (rr_planned: never shrinks the stop; a signal that does not fit is skipped and counted).
+        if risk.sizing_mode in ("skip", "fit_stop"):
+            updates["sizing_mode"] = "rr_planned"
+        # 2026-11-12 audit P0-5: the per-trade risk cap is a CAP. Any run carrying prop rules clamps risk to
+        # <= 1% of the account (percent mode: risk_value <= 1.0; fixed mode: risk_value <= 1% of account).
+        _acct = float(account_size or risk.initial_balance or 0.0)
+        _cap_note = ""
+        if risk.risk_mode == "percent" and float(risk.risk_value) > PROP_MAX_RISK_PCT + 1e-12:
+            updates["risk_value"] = PROP_MAX_RISK_PCT
+            _cap_note = f"risk_value {float(risk.risk_value):g}% clamped to the {PROP_MAX_RISK_PCT:g}% prop cap"
+        elif risk.risk_mode == "fixed" and _acct > 0 and float(risk.risk_value) > _acct * PROP_MAX_RISK_PCT / 100.0 + 1e-9:
+            updates["risk_value"] = _acct * PROP_MAX_RISK_PCT / 100.0
+            _cap_note = f"risk_amount ${float(risk.risk_value):,.2f} clamped to the {PROP_MAX_RISK_PCT:g}% cap (${_acct * PROP_MAX_RISK_PCT / 100.0:,.2f})"
+        if _cap_note:
+            updates["risk_cap_note"] = _cap_note
         # Intrabar replay only engages when a finer frame is available
         # (engine.run_backtest derives one automatically when the raw
         # data is finer than the strategy timeframe); enabling it here
@@ -860,7 +890,7 @@ def build_run_context(risk: "RiskConfig | None", prop_rules=None, instrument=Non
     if prop_rules is not None:
         hardened = with_prop_safety_defaults(hardened, prop_rules)
     elif hardened.sizing_mode == "skip":
-        hardened = _replace(hardened, sizing_mode="fit_stop")
+        hardened = _replace(hardened, sizing_mode="fit_stop")  # non-prop plain backtest only; prop runs use rr_planned
 
     if hardened is risk:
         hardened = _replace(hardened)
