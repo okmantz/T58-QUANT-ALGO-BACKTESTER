@@ -144,7 +144,7 @@ def test_library_control_row_fields():
     meta = {"last_run": {"profit_factor": 1.6, "net_profit": 5000, "trades": 100, "max_dd": 4.2},
             "last_champion_check": {"verdict": "READY", "t58_score": 80},
             "validation_methods_run": {"cpcv": {"efficiency": 70, "pbo": 20, "recorded_at": 1760000000}}}
-    row = lc.build_row("manual", "ES gap fade 5m.json", meta, "validated", {"eval_pass_probability": 0.42, "equity_curve": list(range(100))})
+    row = lc.build_row("manual", "ES gap fade 5m.json", meta, "validated", {"eval_pass_probability": 42.0, "equity_curve": list(range(100))})
     assert row["instrument"] == "ES" and row["timeframe"] == "5m" and row["status"] == "Ready"
     assert row["profit_factor"] == 1.6 and row["expectancy"] == 50.0 and row["max_drawdown_pct"] == 4.2
     assert row["pass_rate"] == 42.0 and row["robustness"] == 76.7 and row["validated_on"] == "2025-10-09"
