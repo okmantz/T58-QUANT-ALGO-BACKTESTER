@@ -2810,12 +2810,9 @@ def _ds_evaluate_task(task):
             return row
         mc = run_monte_carlo(trades, rules, MonteCarloConfig(n_simulations=mc_sims, random_seed=7))
         stressed = sum(float(t.pnl or 0) - float(t.commission or 0) for t in trades)
-        score, comps = deep_search.propfit_from_metrics(
-            eval_pass=float(mc.evaluation_pass_probability),
-            payout=float(mc.first_payout_probability),
-            profit_factor=float(stats.profit_factor or 0.0), n_trades=nt,
-            expectancy=float(stats.expectancy or 0.0),
-            max_dd_pct=float(stats.max_drawdown_pct or 0.0),
+        score, comps = deep_search.propfit_from_mc(
+            mc, {"net_profit": float(stats.net_profit), "profit_factor": float(stats.profit_factor or 0.0), "total_trades": nt,
+                 "expectancy": float(stats.expectancy or 0.0), "max_drawdown_pct": float(stats.max_drawdown_pct or 0.0)},
             dd_limit_pct=float(rules.max_drawdown_pct or 0.0), stressed_net=stressed)
         row.update({"eval_pass": float(mc.evaluation_pass_probability),
                     "payout": float(mc.first_payout_probability),
@@ -11488,8 +11485,11 @@ def deploy_live_start():
         # futures-prop-safe guardrails (no per-widget overrides on the web
         # route -- the enforced values are shown on deploy_live.html).
         from app.live_deploy.guardrails import (
-            enforced_guardrails_summary, futures_prop_safe_rules, resolve_units_per_lot,
+            deploy_risk_violation, enforced_guardrails_summary, futures_prop_safe_rules, resolve_units_per_lot,
         )
+        _viol = deploy_risk_violation(risk.risk_mode, risk.risk_value, risk.initial_balance)
+        if _viol:
+            return jsonify({"ok": False, "error": _viol}), 400
         contract_size = risk.contract_size
         # Futures: 1 broker lot/contract = contract_size sizing units;
         # FX (no contract_size): the 100,000 FX standard.
