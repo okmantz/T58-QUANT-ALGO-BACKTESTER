@@ -639,7 +639,7 @@ class TestExec002ReentryCooldown:
             # B2-2 (2026-10-04): fill lag is orthogonal to the cooldown --
             # lag=0 keeps this test about same-bar re-entry (now filled at
             # the bar's open instead of the old same-bar close).
-            entry_fill_lag_bars=0,
+            entry_fill_lag_bars=0, allow_same_bar_fill=True,
         )
         trades, _ = run_execution(
             df=df, signals=sig, risk=risk,

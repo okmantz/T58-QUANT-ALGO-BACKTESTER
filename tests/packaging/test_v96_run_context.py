@@ -48,7 +48,8 @@ def test_build_run_context_upgrades_skip_without_prop_rules():
 
 def test_build_run_context_upgrades_skip_with_prop_rules_and_preserves_fixed():
     out = build_run_context(RiskConfig(), _rules())
-    assert out.sizing_mode == "fit_stop"
+    # audit 2026-11-12 P0-6: prop paths never shrink the stop (fit_stop banned)
+    assert out.sizing_mode == "rr_planned"
 
     fixed = RiskConfig(sizing_mode="fixed_contracts", fixed_contracts=2)
     out_fixed = build_run_context(fixed)
