@@ -254,6 +254,9 @@ def build_report(
     report = {
         # 2026-10-31 audit (section 6): what was done to the price frame this report ran on (back-adjusted? how many rolls? fingerprint).
         "data_stamp": data_stamp,
+        # 2026-11-12 audit P0-3 / P0-5: gate provenance (env bypass switches) + post-hoc risk-cap audit, in every report.
+        "gate_provenance": _gate_provenance_safe(),
+        "risk_cap_audit": _risk_cap_audit_safe(backtest_result, risk_config, prop_rules),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "strategy": {
             "name": strategy_name,
@@ -1103,6 +1106,41 @@ def _sizing_policy_html(report: dict, stats: dict) -> str:
         return ""
 
 
+def _gate_provenance_safe() -> dict | None:
+    try:
+        from app.reports.provenance import gate_provenance
+        return gate_provenance()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _risk_cap_audit_safe(backtest_result, risk_config, prop_rules) -> dict | None:
+    try:
+        from app.reports.provenance import risk_cap_audit
+        return risk_cap_audit(getattr(backtest_result, "trades", None), risk_config, prop_rules)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _provenance_html(report: dict) -> str:
+    try:
+        from html import escape
+        from app.reports.provenance import gate_provenance_line, risk_cap_audit_line
+        out = ""
+        if report.get("gate_provenance"):
+            out += f"<br><b>{escape(gate_provenance_line(report['gate_provenance']))}</b>"
+        line = risk_cap_audit_line(report.get("risk_cap_audit"))
+        if line:
+            out += f"<br><b>{escape(line)}</b>"
+        from app.reports.provenance import cost_basis_line
+        cl = cost_basis_line()
+        if cl:
+            out += f"<br><b>{escape(cl)}</b>"
+        return out
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _data_stamp_html(report: dict) -> str:
     """The data-frame stamp line (adjusted? rolls removed? residual splices? fingerprint) for the report header; "" when absent."""
     try:
@@ -1131,7 +1169,7 @@ def _reliability_header(report: dict) -> str:
             flag += f" {skip:.0f}% of signals were skipped for sizing."
         return (f'<div class="{cls}" style="padding:8px 12px;border:1px solid #ccc;margin:8px 0">'
                 f'<b>Sample:</b> {n_tr} trades (full window) &middot; {att} account attempt(s) &middot; {skip:.0f}% of signals skipped for sizing.{flag}'
-                f'{_sizing_policy_html(report, st)}{_data_stamp_html(report)}</div>')
+                f'{_sizing_policy_html(report, st)}{_data_stamp_html(report)}{_provenance_html(report)}</div>')
     except Exception:  # noqa: BLE001
         return ""
 
