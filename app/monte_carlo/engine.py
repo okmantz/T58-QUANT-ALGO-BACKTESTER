@@ -14,7 +14,7 @@ so results are directly comparable.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -68,6 +68,11 @@ class MonteCarloConfig:
     # MonteCarloConfig() gets byte-identical output to before this field existed.
     session_slippage: SessionVolatilitySlippageConfig = field(default_factory=SessionVolatilitySlippageConfig)
     random_seed: int | None = 42
+    # 2026-11-12 audit P1-12: REAL cost stress. When ``cost_stress_mult`` > 1 and ``cost_stress_symbol`` resolves in app.data.cost_model,
+    # each trade is charged (mult-1) x its own round-trip tick costs (spread+slippage ticks x tick value x size) INSTEAD of the flat
+    # "slippage_stress_pct of P&L" haircut (which cost nothing on a flat trade and scaled with the win, not with the position).
+    cost_stress_mult: float = 0.0
+    cost_stress_symbol: str | None = None
     # When True, each of the n_simulations resampled paths is run through
     # simulate_account with reset_on_breach=True instead of stopping at the
     # first bust: within that ONE resampled trade ordering, a bust snaps
@@ -1319,6 +1324,24 @@ def run_monte_carlo(
 
     rng = np.random.default_rng(cfg.random_seed)
     base_pnls = apply_session_volatility_slippage(trades, cfg.session_slippage)
+    _cost_note = ""
+    if float(cfg.cost_stress_mult or 0.0) > 1.0 and cfg.cost_stress_symbol:
+        from app.data.cost_model import resolve_cost
+        _line = resolve_cost(cfg.cost_stress_symbol)
+        if _line is not None:
+            _sizes = np.array([float(getattr(t, "size", 0.0) or 0.0) for t in trades], dtype=float)
+            base_pnls = np.asarray(base_pnls, dtype=float) - (float(cfg.cost_stress_mult) - 1.0) * 2.0 * (_line.spread_ticks + _line.slippage_ticks) * _line.tick_value * _sizes
+            cfg = replace(cfg, slippage_stress_pct=0.0)          # the per-trade model replaces the %-of-P&L haircut
+            _cost_note = (f" COST STRESS: every trade re-costed at {float(cfg.cost_stress_mult):g}x tick costs on {_line.symbol} "
+                          "(per-contract, size-aware) instead of a flat percentage haircut.")
+        else:
+            _cost_note = f" COST STRESS NOT APPLIED: no cost line for {cfg.cost_stress_symbol!r}; the flat percentage haircut was used."
+    # 2026-11-12 audit P1-12: calendar fidelity. Resampled paths reuse the historical session-day calendar, so any rule keyed to
+    # CALENDAR time (eval time limit, payout cadence) is evaluated on the original calendar, not a resampled one.
+    _cal_rules = [n for n, v in (("max_eval_calendar_days", getattr(rules, "max_eval_calendar_days", None)),
+                                 ("payout_frequency_days", getattr(rules, "payout_frequency_days", None))) if v]
+    _cal_note = (" CALENDAR FIDELITY: resampled paths keep the historical day calendar, so the calendar-keyed rule(s) "
+                 + ", ".join(_cal_rules) + " are scored on that fixed calendar -- treat pass odds for calendar-limited firms as approximate.") if _cal_rules else ""
     # 2026-11-07 canonical-engine fix: raw entry timestamps (NOT midnight-normalised) so the 17:00 CT session roll buckets every
     # trade into the same session day as the direct simulate_account call -- see app.prop.lifecycle.canonical_trade_dates.
     from app.prop.lifecycle import canonical_trade_dates
@@ -1700,6 +1723,7 @@ def run_monte_carlo(
         return_distribution=return_arr.tolist(),
         drawdown_distribution=dd_arr.tolist(),
         methodology_note=_methodology_note(cfg, len(trades), selection_bias_caveat, n_trading_days=n_trading_days, excursion_set=excursion_set)
+        + _cost_note + _cal_note
         + (
             ""
             if _horizon_covered
