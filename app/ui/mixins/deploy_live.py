@@ -772,6 +772,13 @@ class DeployLiveMixin:
                     "enter the contract size explicitly (sizing units per whole contract, e.g. ES=50, MES=5)."))
                 self.root.after(0, lambda: self.dl_start_btn.config(state="normal"))
                 return
+            # 2026-11-12 audit P0-5: refuse (never silently fix) a per-trade risk above the 1% cap -- same check as the web form.
+            from app.live_deploy.guardrails import deploy_risk_violation
+            _viol = deploy_risk_violation("percent", self.dl_risk_pct.get_float(1.0), conn.balance or 10_000.0)
+            if _viol:
+                self.root.after(0, lambda v=_viol: messagebox.showerror("Risk above the cap", v))
+                self.root.after(0, lambda: self.dl_start_btn.config(state="normal"))
+                return
             upl_str = self.dl_units_per_lot.get_str().strip()
             units_per_lot = None
             if upl_str:
