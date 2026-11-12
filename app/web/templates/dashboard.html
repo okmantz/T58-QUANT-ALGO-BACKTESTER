@@ -327,20 +327,21 @@
   </div>
   <div class="db-kpi" style="--k: var(--violet-rgb)">
     <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17a8 8 0 1 1 16 0"/><path d="M12 17l4-5"/><circle cx="12" cy="17" r="1.1"/></svg></span>
-    <div class="txt"><div class="lbl">Single-run pass rate</div><div class="val {{ 'up' if data.pass_rate >= 50 else '' }}">{{ "%.0f"|format(data.pass_rate) }}%</div><div class="sub">of latest run per strategy</div></div>
+    <div class="txt"><div class="lbl" data-metric="single_run_pass_rate">Single-run pass rate</div><div class="val {{ 'up' if data.pass_rate >= 50 else '' }}">{{ "%.0f"|format(data.pass_rate) }}%</div><div class="sub">of latest run per strategy</div></div>
   </div>
   <div class="db-kpi" style="--k: var(--amber-rgb)">
     <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.6l2.6 5.4 5.9.8-4.3 4.1 1 5.9L12 17l-5.2 2.8 1-5.9L3.5 9.8l5.9-.8z"/></svg></span>
-    <div class="txt"><div class="lbl">Best Sharpe</div>
-      <div class="val">{% if data.best %}{{ "%.2f"|format(data.best.sharpe_ratio) }}{% else %}&ndash;{% endif %}</div>
-      <div class="sub">{% if data.best %}{{ data.best.strategy_name }}{% else %}run a backtest to see this{% endif %}</div></div>
+    <div class="txt"><div class="lbl" data-metric="sharpe_ratio">Best Sharpe</div>
+      {% set _bs = best_sharpe_card %}
+      <div class="val">{% if _bs %}{{ "%.2f"|format(_bs.sharpe) }}{% elif data.best %}{{ "%.2f"|format(data.best.sharpe_ratio) }}{% else %}&ndash;{% endif %}</div>
+      <div class="sub">{% if _bs %}{{ _bs.name }} &middot; {{ 'development window' if _bs.window == 'dev' else 'full history' }}{% elif data.best %}{{ data.best.strategy_name }} &middot; full history{% else %}run a backtest to see this{% endif %}</div></div>
   </div>
 </div>
 
 <!-- ---- Performance + focus ---- -->
 <div class="db-row">
   <div class="db-card">
-    <h2>Equity curves &mdash; return from starting balance <a href="/runs">All runs &rarr;</a></h2>
+    <h2>Equity curves &mdash; return from starting balance <span style="font-size:11.5px;font-weight:500;color:var(--text-dim);" data-metric="dev_vs_full_window">full history, incl. sealed holdout</span> <a href="/runs">All runs &rarr;</a></h2>
     <div id="equity-chart"></div>
   </div>
 
@@ -460,7 +461,7 @@
     <article class="sc {{ c.plan.tone }}">
       <header class="sc-top">
         <div class="sc-id"><h3 title="{{ c.name }}">{{ c.name }}</h3>
-          <div class="sc-meta">{% if c.instrument %}{{ c.instrument }}{% endif %}{% if c.timeframe %} &middot; {{ c.timeframe }}{% endif %}</div></div>
+          <div class="sc-meta">{% if c.instrument %}{{ c.instrument }}{% endif %}{% if c.timeframe %} &middot; {{ c.timeframe }}{% endif %} &middot; <span data-metric="dev_vs_full_window" title="Which stretch of history these numbers cover">{{ 'development window' if c.window == 'dev' else 'full history' }}</span></div></div>
         <span class="sc-stage">{{ c.stage }}</span>
       </header>
       <div class="sc-mid">
@@ -486,6 +487,7 @@
       <div class="sc-next">
         <div class="sc-head"><span class="sc-dot"></span>{{ c.plan.headline }}</div>
         <p>{{ c.plan.why }}</p>
+        {% if c.plan.diagnosis %}{% set diag = c.plan.diagnosis %}{% include '_diagnosis_card.html' %}{% endif %}
         <a class="t58-btn primary sm" href="{{ c.plan.primary.href }}">{{ c.plan.primary.label }} &rarr;</a>
         {% for s in c.plan.secondary[:1] %}<a class="t58-btn ghost sm" href="{{ s.href }}">{{ s.label }}</a>{% endfor %}
       </div>

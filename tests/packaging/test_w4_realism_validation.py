@@ -18,6 +18,7 @@ Covers:
   D5  WF-starved cap: no WF/CPCV and no holdout gate -> at most MARGINAL
 """
 from __future__ import annotations
+from tests.verdict_helpers import make_verdict_with_bound as _mv_bound
 
 import warnings
 from dataclasses import replace
@@ -482,7 +483,7 @@ def _no_coverage_cap(monkeypatch):
 
 def test_holdout_winning_does_not_reject(monkeypatch):
     _no_coverage_cap(monkeypatch)
-    verdict, reasons, _sc, _rf, _lf = _make_verdict(
+    verdict, reasons, _sc, _rf, _lf = _mv_bound(
         _mc(strong=True), None, None, holdout=_holdout(net=500.0, pf=1.8),
     )
     assert not any(
@@ -520,7 +521,7 @@ def test_wf_starved_cap_not_applied_when_holdout_gate_ran(monkeypatch):
     _no_coverage_cap(monkeypatch)
     """A holdout that ran with enough trades and won leaves the verdict
     alone (gate ran -> D5 does not fire)."""
-    verdict, _reasons, _sc, _rf, _lf = _make_verdict(
+    verdict, _reasons, _sc, _rf, _lf = _mv_bound(
         _mc(strong=True), None, None, holdout=_holdout(net=500.0, pf=1.8),
     )
     assert verdict == "READY"

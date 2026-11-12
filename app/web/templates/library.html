@@ -462,7 +462,7 @@ function STAGE(v){ return ({'FORWARD-TEST CANDIDATE':'FORWARD-TEST CANDIDATE','L
   const money = v => (v === null || v === undefined || isNaN(v)) ? '--' : (v < 0 ? '-$' : '$') + Math.abs(Number(v)).toLocaleString(undefined, {maximumFractionDigits: 0});
   const pct = (v, d) => (v === null || v === undefined || isNaN(v)) ? '--' : Number(v).toFixed(d === undefined ? 1 : d) + '%';
   const num = (v, d) => (v === null || v === undefined || isNaN(v)) ? '--' : Number(v).toFixed(d === undefined ? 2 : d);
-  const tile = (label, val, cls) => `<div class="stat-tile"><span>${escapeHtml(label)}</span><b class="${cls || ''}">${val}</b></div>`;
+  const tile = (label, val, cls, key) => `<div class="stat-tile"><span${key ? ` data-metric="${key}" role="button" tabindex="0" title="What it is and how it is calculated"` : ''}>${escapeHtml(label)}</span><b class="${cls || ''}">${val}</b></div>`;
   const emptyState = (msg, href, label) => `<div class="empty-state"><p style="margin:0 0 10px;">${msg}</p>${href ? `<a class="go-btn primary" href="${escapeHtml(href)}">${escapeHtml(label)} &rarr;</a>` : ''}</div>`;
   function verdictBadge(v) {
     if (!v) return '';
@@ -510,36 +510,73 @@ function STAGE(v){ return ({'FORWARD-TEST CANDIDATE':'FORWARD-TEST CANDIDATE','L
       (dl.all_zip ? btn('Everything (.zip)', dl.all_zip) : '');
   }
 
+  let btWin = 'dev';
+  const SEV = {blocker: 'Blocking', cap: 'Caps the verdict', advisory: 'To do'};
+  function renderDiagnosis(dg) {
+    if (!dg || !dg.has) return '';
+    return `<div class="focus-card first"><h4>Exactly why it failed and how to fix it</h4><p>${escapeHtml(dg.summary || '')}</p>
+      ${dg.causes.map(c => `<div style="margin:10px 0;padding-top:8px;border-top:1px solid var(--t-line,#1c2230);">
+        <div style="font-weight:600;"><span class="vbadge ${c.severity === 'blocker' ? 'bad' : (c.severity === 'cap' ? 'warn' : 'good')}" style="margin-right:6px;">${escapeHtml(SEV[c.severity] || c.severity)}</span>${escapeHtml(c.title)}</div>
+        <p style="margin:4px 0;">${escapeHtml(c.why)}</p>
+        ${(c.evidence || []).length ? '<ul style="margin:4px 0 6px 18px;padding:0;color:var(--t-faint);">' + c.evidence.map(e => '<li>' + escapeHtml(e) + '</li>').join('') + '</ul>' : ''}
+        ${(c.steps || []).length ? '<ol style="margin:4px 0 6px 18px;padding:0;">' + c.steps.map(e => '<li>' + escapeHtml(e) + '</li>').join('') + '</ol>' : ''}
+        ${c.action ? `<a class="go-btn primary" href="${escapeHtml(c.action.href)}">${escapeHtml(c.action.label)} &rarr;</a>` : ''}
+        ${(c.also || []).map(a => `<a class="go-btn" href="${escapeHtml(a.href)}">${escapeHtml(a.label)}</a>`).join(' ')}</div>`).join('')}
+      <p style="margin-top:10px;"><b>Can the optimizer fix this?</b> ${escapeHtml(dg.optimizer.explain)}</p>
+      <p style="color:var(--t-faint);">${escapeHtml(dg.rerun_note)}</p></div>`;
+  }
+  const fmtWinStat = v => (v === null || v === undefined) ? '--' : v;
+  function renderReconcile(rc) {
+    if (!rc || !rc.has) return '';
+    const row = r => `<tr><td><b>${escapeHtml(r.label)}</b><div style="font-size:11px;color:var(--t-faint);">${escapeHtml((r.surfaces || []).join(', '))}</div></td>
+      <td>${escapeHtml((r.period || []).join(' to ') || '--')}</td><td>${fmtWinStat(r.trades)}</td><td>${money(r.net_profit)}</td><td>${pct(r.win_rate)}</td><td>${num(r.profit_factor)}</td><td>${num(r.sharpe_ratio)}</td></tr>`;
+    return `<details style="margin-top:14px;"><summary style="cursor:pointer;font-size:13px;"><span data-metric="dev_vs_full_window">Why do other pages show different numbers for this strategy?</span></summary>
+      <div style="overflow-x:auto;"><table style="width:100%;font-size:12.5px;border-collapse:collapse;margin-top:8px;"><thead><tr style="text-align:left;color:var(--t-faint);"><th>Window</th><th>Dates</th><th>Trades</th><th>Net profit</th><th>Win rate</th><th>PF</th><th>Sharpe</th></tr></thead><tbody>${rc.rows.map(row).join('')}</tbody></table></div>
+      ${(rc.lines || []).map(l => `<p style="font-size:12.5px;color:var(--t-soft);margin:6px 0;">${escapeHtml(l)}</p>`).join('')}</details>`;
+  }
+
   function renderBacktestTab(d) {
     const b = d.backtest, el = document.getElementById('d-backtest');
     if (!b || !b.has) {
       el.innerHTML = emptyState('This strategy has not been through the Full Pipeline yet. Run it once and its equity curve, stats and report show up here.', d.full_pipeline_href, 'Test a Strategy');
       return;
     }
-    const st = b.stats || {};
+    const wins = b.windows || null;
+    if (!wins) btWin = 'dev';
+    const wsel = wins ? wins[btWin] : null;
+    const st = (wsel ? wsel.stats : b.stats) || {};
+    const eqv = wsel ? wsel.equity : b.equity;
+    const periodTxt = wsel ? wsel.period : b.period;
     const np = st.net_profit;
     el.innerHTML = `
+      ${renderDiagnosis(d.diagnosis)}
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">${verdictBadge(b.verdict)}
         ${b.t58_score !== null && b.t58_score !== undefined ? `<span style="font-size:12.5px;color:var(--t-soft);">T58 score <b>${num(b.t58_score, 0)}</b>${b.t58_tier ? ' (' + escapeHtml(b.t58_tier) + ')' : ''}</span>` : ''}
-        <span style="font-size:12px;color:var(--t-faint);">${escapeHtml(b.instrument || '')}${b.period ? ' &middot; ' + escapeHtml(b.period.join(' to ')) : ''}${b.recorded_display ? ' &middot; run ' + escapeHtml(b.recorded_display) : ''}</span></div>
-      ${b.equity && b.equity.length > 1 ? `<div style="margin-top:10px;">${equityChart(b.equity)}</div>` : (b.note ? `<p class="empty-state" style="margin-top:10px;">${escapeHtml(b.note)}</p>` : '')}
+        <span style="font-size:12px;color:var(--t-faint);">${escapeHtml(b.instrument || '')}${periodTxt ? ' &middot; ' + escapeHtml(periodTxt.join(' to ')) : ''}${b.recorded_display ? ' &middot; run ' + escapeHtml(b.recorded_display) : ''}</span></div>
+      ${wins ? `<div style="margin-top:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;"><span style="font-size:12px;color:var(--t-faint);" data-metric="dev_vs_full_window">Numbers shown for:</span>
+        ${['dev', 'full'].map(k => `<button type="button" class="go-btn${btWin === k ? ' primary' : ''}" data-win="${k}">${escapeHtml(wins[k].label)}</button>`).join('')}
+        <span style="font-size:11.5px;color:var(--t-faint);">Eval pass chance, payout chance, risk of ruin and the verdict are always scored on the development window.</span></div>`
+        : (d.reconciliation && d.reconciliation.has ? '<div style="margin-top:6px;font-size:11.5px;color:var(--t-faint);">Numbers are from the <span data-metric="dev_vs_full_window">development window</span> (what the verdict is scored on).</div>' : '')}
+      ${eqv && eqv.length > 1 ? `<div style="margin-top:10px;">${equityChart(eqv)}</div>` : (b.note ? `<p class="empty-state" style="margin-top:10px;">${escapeHtml(b.note)}</p>` : '')}
       <div class="stat-tiles">
-        ${tile('Net profit', money(np), np > 0 ? 'pos' : (np < 0 ? 'neg' : ''))}
-        ${tile('Trades', st.total_trades === null || st.total_trades === undefined ? '--' : Number(st.total_trades).toLocaleString())}
-        ${tile('Win rate', pct(st.win_rate))}
-        ${tile('Profit factor', num(st.profit_factor))}
-        ${tile('Max drawdown', pct(st.max_drawdown_pct))}
-        ${tile('Sharpe', num(st.sharpe_ratio))}
-        ${tile('Eval pass chance', pct(b.eval_pass_probability, 0))}
-        ${tile('Payout chance', pct(b.first_payout_probability, 0))}
-        ${tile('Risk of ruin', pct(b.risk_of_ruin_pct))}
+        ${tile('Net profit', money(np), np > 0 ? 'pos' : (np < 0 ? 'neg' : ''), 'net_profit')}
+        ${tile('Trades', st.total_trades === null || st.total_trades === undefined ? '--' : Number(st.total_trades).toLocaleString(), '', 'trades')}
+        ${tile('Win rate', pct(st.win_rate), '', 'win_rate')}
+        ${tile('Profit factor', num(st.profit_factor), '', 'profit_factor')}
+        ${tile('Max drawdown', pct(st.max_drawdown_pct), '', 'max_drawdown')}
+        ${tile('Sharpe', num(st.sharpe_ratio), '', 'sharpe_ratio')}
+        ${tile('Eval pass chance', pct(b.eval_pass_probability, 0), '', 'eval_pass_probability')}
+        ${tile('Payout chance', pct(b.first_payout_probability, 0), '', 'first_payout_probability')}
+        ${tile('Risk of ruin', pct(b.risk_of_ruin_pct), '', 'risk_of_ruin')}
       </div>
       ${(b.reasons || []).length ? `<ul style="margin:0 0 10px 18px;padding:0;font-size:12.5px;color:var(--t-soft);line-height:1.5;">${b.reasons.slice(0, 5).map(r => '<li>' + escapeHtml(r) + '</li>').join('')}</ul>` : ''}
       ${b.heatmap ? '<h3 style="font-size:13px;color:var(--t-faint2);margin:14px 0 0;">When it makes and loses money</h3>' + heatmap(b.heatmap) : ''}
+      ${renderReconcile(d.reconciliation)}
       <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
-        <a class="go-btn primary" href="${escapeHtml(d.full_pipeline_href)}">Re-run Full Pipeline &rarr;</a>
+        <a class="go-btn${d.diagnosis ? '' : ' primary'}" href="${escapeHtml(d.full_pipeline_href)}" title="Re-running with unchanged data and settings gives the same result">Re-run Full Pipeline &rarr;</a>
         ${(d.downloads.full_pipeline || {}).html ? `<a class="go-btn" href="${escapeHtml(d.downloads.full_pipeline.html)}" download>Download full report</a>` : ''}
       </div>`;
+    el.querySelectorAll('[data-win]').forEach(btn => { btn.onclick = () => { btWin = btn.dataset.win; renderBacktestTab(d); }; });
   }
 
   function renderValidationTab(d) {
@@ -572,6 +609,7 @@ function STAGE(v){ return ({'FORWARD-TEST CANDIDATE':'FORWARD-TEST CANDIDATE','L
     const o = d.optimize, el = document.getElementById('d-optimize');
     const lo = o.last_optimize;
     el.innerHTML = `
+      ${renderDiagnosis(o.diagnosis)}
       <p style="font-size:13px;color:var(--t-soft);margin:0 0 10px;">Based on this strategy's saved results, here is what is worth optimizing, most useful first.</p>
       ${o.focus.map((f, i) => `<div class="focus-card ${i === 0 ? 'first' : ''}"><h4>${i + 1}. ${escapeHtml(f.title)}</h4><p>${escapeHtml(f.why)}</p>
         ${f.slots ? `<p style="margin-top:5px;font-family:ui-monospace,monospace;">No entries: ${escapeHtml(f.slots.split('\n').join(', '))}</p>` : ''}</div>`).join('')}
@@ -587,7 +625,7 @@ function STAGE(v){ return ({'FORWARD-TEST CANDIDATE':'FORWARD-TEST CANDIDATE','L
     const la = r.lookahead, ls = r.last_search, lo = r.last_optimize;
     el.innerHTML = `
       <div class="stat-tiles">
-        ${tile('Verdict', r.verdict ? verdictBadge(r.verdict) : '--')}
+        ${tile('Verdict', r.verdict ? verdictBadge(r.verdict) : '--', '', 'champion_check')}
         ${tile('T58 score', r.t58_score !== null && r.t58_score !== undefined ? num(r.t58_score, 0) + (r.t58_tier ? ' <small style="font-size:11px;font-weight:400;">' + escapeHtml(r.t58_tier) + '</small>' : '') : '--')}
         ${tile('Status', escapeHtml(r.status || '--'))}
         ${tile('Lookahead check', la ? (la.clean ? 'Clean' : 'Leak found') : 'Not run', la ? (la.clean ? 'pos' : 'neg') : '')}

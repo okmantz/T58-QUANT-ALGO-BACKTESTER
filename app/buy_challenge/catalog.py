@@ -37,6 +37,18 @@ FIRM_SITES = {
     "The Futures Desk": {"site": "https://thefuturesdesk.com", "asset": "Futures", "platforms": ""},
     "FunderPro": {"site": "", "asset": "Forex / Futures", "platforms": ""},
     "Atlas Funded": {"site": "", "asset": "Forex", "platforms": "TradeLocker"},
+    # Firms added to app.prop.presets later. Sites stay empty until confirmed (the button then asks for the link); platforms unknown.
+    "Alpha Futures": {"site": "", "asset": "Futures", "platforms": ""},
+    "Bulenox": {"site": "", "asset": "Futures", "platforms": ""},
+    "Earn2Trade": {"site": "", "asset": "Futures", "platforms": ""},
+    "Elite Trader Funding": {"site": "", "asset": "Futures", "platforms": ""},
+    "Leeloo Trading": {"site": "", "asset": "Futures", "platforms": ""},
+    "MyFundedFutures": {"site": "", "asset": "Futures", "platforms": ""},
+    "OneUp Trader": {"site": "", "asset": "Futures", "platforms": ""},
+    "Take Profit Trader": {"site": "", "asset": "Futures", "platforms": ""},
+    "Top One Futures": {"site": "", "asset": "Futures", "platforms": ""},
+    "TradeDay": {"site": "", "asset": "Futures", "platforms": ""},
+    "Tradeify": {"site": "", "asset": "Futures", "platforms": ""},
 }
 
 LISTED_SOURCE = "PropFirmGorilla"

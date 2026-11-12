@@ -104,7 +104,8 @@ function renderLive(data){
     html += '<div class="lc-liverow"><span>' + esc(it ? it.label : c) + '</span><span>' +
       (it ? chip(it.status) : '<span class="lc-pill grey">waiting</span>') + '</span></div>';
   });
-  document.getElementById('lc-live').innerHTML = html;
+  const live = document.getElementById('lc-live');
+  if (live.getAttribute('data-sig') !== html) { live.setAttribute('data-sig', html); live.innerHTML = html; }
 }
 
 function metricsHtml(ms){

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests.verdict_helpers import make_verdict_with_bound as _mv_bound
 
 import warnings
 from types import SimpleNamespace
@@ -70,7 +71,7 @@ def test_verdict_wrapper_demotes_ready_when_null_not_beaten(monkeypatch):
     import app.orchestration.full_pipeline as fp
     monkeypatch.setattr(fp, "_make_verdict_core", lambda *a, **k: ("READY", ["ok"], {}, False, False))
     mc = SimpleNamespace(sample_ok=True, per_attempt_pass_probability=60.0)
-    v, reasons, *_ = fp._make_verdict(mc, null_result={"p_value": 0.4, "n_seeds": 100, "metric": "net_profit"})
+    v, reasons, *_ = _mv_bound(mc, null_result={"p_value": 0.4, "n_seeds": 100, "metric": "net_profit"})
     assert v == "MARGINAL" and any("NULL NOT BEATEN" in r for r in reasons)
-    v2, *_ = fp._make_verdict(mc, null_result={"p_value": 0.02, "n_seeds": 100, "metric": "net_profit"})
+    v2, *_ = _mv_bound(mc, null_result={"p_value": 0.02, "n_seeds": 100, "metric": "net_profit"})
     assert v2 == "READY"

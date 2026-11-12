@@ -14,8 +14,9 @@ from tests.backtest.test_live_sizing_v7 import _bars, _FakeBroker
 
 
 class _LongStrategy:
+    STOP = 10.0
     def generate(self, df):
-        return SimpleNamespace(signals=pd.Series([1] * len(df), index=df.index), stop_loss_distance=pd.Series([10.0] * len(df), index=df.index), stop_loss_pips=None,
+        return SimpleNamespace(signals=pd.Series([1] * len(df), index=df.index), stop_loss_distance=pd.Series([self.STOP] * len(df), index=df.index), stop_loss_pips=None,
                                take_profit_distance=None, take_profit_pips=None)
 
 
@@ -101,7 +102,15 @@ def test_guardian_flattens_and_halts_for_the_day(tmp_path):
     assert s.status.guardian["action"]["flatten"] and s.status.halted_reason and "halted for the day" in s.status.halted_reason
 
 
-def test_reduced_size_when_braking(tmp_path):
+def test_reduced_size_when_braking(tmp_path, monkeypatch):
+    # Live sizing floors to whole contracts and a per-trade max-loss ceiling applies, so use a tight stop: the base size is then several
+    # contracts and halving it is visible.
+    monkeypatch.setattr(_LongStrategy, "STOP", 2.0)
+
+    def _whole_contracts(self, units, contract_size, units_per_lot):      # like the real futures adapters (v7 P0-1)
+        import math
+        return float(math.floor(units / units_per_lot + 1e-9)) if units_per_lot else 0.0
+    monkeypatch.setattr(_Broker, "to_broker_qty", _whole_contracts)
     full = _Broker()
     s1 = _begun(tmp_path, full, GuardianRules(**RULES))
     s1._poll_once()

@@ -406,7 +406,7 @@ def apply_audit_layers(
     #    is a computable economics failure: EV <= 0 or below margin with every input present -> NOT READY; missing inputs cap at MARGINAL.
     if getattr(cfg, "ev_hard_bar", True):
         if ev.label == "NOT WORTH A FEE" and not ev.inputs_missing:
-            demote("NOT READY", "EV TEST FAILED: " + " ".join(ev.reasons[-2:]) + " The strategy does not earn back the fee at its measured, "
+            demote("NOT READY", "EV TEST FAILED: " + " ".join((getattr(ev, "blockers", None) or ev.reasons[-2:])[:3]) + " The strategy does not earn back the fee at its measured, "
                                 "deflated pass rate -- no pass-rate bar is needed to see that.")
         elif ev.label == "INSUFFICIENT EVIDENCE":
             demote("MARGINAL", "EV EVIDENCE INCOMPLETE: " + " ".join(ev.reasons[:1]) + " READY needs an economic verdict.")

@@ -20,6 +20,7 @@
 <div class="lc-crumb">Lifecycle · 3 · <b>Optimize</b></div>
 <h1 class="lc-title">Optimize</h1>
 <p class="lc-sub">Pick the strategy, the data and the firm, then say what you want to improve. T58 tries variations, keeps the best, and tells you plainly what changed &mdash; and what to do next. {% if request.args.get('why') %}<br><b>Suggested for this strategy:</b> {{ request.args.get('why') }}{% endif %}</p>
+{% if diag %}{% include '_diagnosis_card.html' %}{% endif %}
 
 {% if error %}
 <div class="lc-error">{{ error }}</div>

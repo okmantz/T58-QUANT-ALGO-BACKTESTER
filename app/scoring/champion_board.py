@@ -684,6 +684,11 @@ def _row_extras(metadata: dict[str, Any]) -> dict[str, Any]:
         "net_profit": _num(lr, "net_profit"),
         "win_rate": _num(lr, "win_rate"),
         "max_dd": _num(lr, "max_dd"),
+        "sharpe": _num(lr, "sharpe_ratio"),
+        "profit_factor": _num(lr, "profit_factor"),
+        "window": "dev" if (lr.get("window") == "dev" or lr.get("window_info")) else "",
+        "window_info": lr.get("window_info") if isinstance(lr.get("window_info"), dict) else None,
+        "equity_dev": list(((metadata.get("pipeline_snapshot") or {}).get("equity")) or [])[:160],
         "ladder_stage": str(lc.get("ladder_stage") or ""),
         "lookahead_clean": (metadata.get("lookahead") or {}).get("clean") is not False,
         "hard_fail": bool(lr.get("risk_of_ruin_hard_fail") or lr.get("lookahead_hard_fail")),
@@ -691,6 +696,7 @@ def _row_extras(metadata: dict[str, Any]) -> dict[str, Any]:
         "podium_place": int(place) if isinstance(place, (int, float)) and int(place) in (1, 2, 3) else None,
         "podium_at": pod.get("awarded_at"),
         # Loop-breaker inputs for app.guidance.next_step: has Optimize already been run, and with what outcome?
+        "verdict_reasons": [str(x)[:700] for x in ((lc.get("reasons") or [])[:14])],
         "optimized": bool(metadata.get("last_optimize") or metadata.get("last_search")),
         "optimize_outcome": dict(metadata.get("last_optimize") or {}) if isinstance(metadata.get("last_optimize"), dict) else {},
         "basis": (lr.get("basis") if isinstance(lr.get("basis"), dict) else None),
@@ -732,6 +738,13 @@ def list_board(strategy_type: Optional[str] = None) -> list[dict[str, Any]]:
             })
     for r in rows:
         r["next"] = row_next_step(r)
+        try:
+            from app.guidance.failure_diagnosis import diagnose
+            r["diagnosis"] = diagnose(r.get("verdict_reasons"), pick=f"{r['strategy_type']}::{r['filename']}", verdict=str(r.get("verdict") or ""),
+                                      ladder_stage=str(r.get("ladder_stage") or ""), optimized=r.get("optimize_outcome") or None,
+                                      validate_failed=r.get("validate_failed_checks"))
+        except Exception:  # noqa: BLE001
+            r["diagnosis"] = None
         _ve = r.get("verdict_explain") or {}
         if not _ve.get("points"):  # older runs stored no reasons -> use the board's own one-line diagnosis
             r["verdict_explain"] = explain_verdict(

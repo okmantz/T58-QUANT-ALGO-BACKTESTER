@@ -89,7 +89,7 @@ from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor
 from concurrent.futures import wait as futures_wait
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -680,6 +680,8 @@ class FullPipelineResult:
     # the chained score the GA selected on is only a diagnostic.
     honest_median_fold_score: float | None = None
     selection_chained_score: float | None = None
+    # Full-history backtest (development window + sealed holdout) kept on the result so the Library snapshot can show both windows.
+    full_history_bt: Any = None
 
 
 def _manifest_warnings() -> list:
@@ -4035,6 +4037,12 @@ def _finish(
     # this same metadata for every strategy in the library regardless of
     # which tool (Full Pipeline, Forge, Evolution Lab, Search Lab) wrote
     # it last.
+    try:
+        from app.reports.window import window_info as _wi_fn, _n as _wn
+        _window_info = _wi_fn(final_bt, full_history_bt)
+    except Exception:  # noqa: BLE001 -- provenance only; never fail a run over it
+        _window_info = None
+        _wn = lambda v: None  # noqa: E731
     t58_score = scorecard.score if scorecard is not None else None
     t58_tier = scorecard.tier if scorecard is not None else None
     parsimony_score = parsimony_result.score if parsimony_result is not None else None
@@ -4139,6 +4147,10 @@ def _finish(
                     "verdict": verdict,
                     "report_html": str(report_paths["html"]),
                     "basis": _fp_basis,
+                    "window": "dev",
+                    "window_info": _window_info,
+                    "profit_factor": _wn(getattr(final_bt.statistics, "profit_factor", None)),
+                    "sharpe_ratio": _wn(getattr(final_bt.statistics, "sharpe_ratio", None)),
                     "instrument": (_fp_instrument or "").upper(),
                     "prop_preset": str(getattr(prop_rules, "preset_key", "") or ""),
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
@@ -4195,6 +4207,10 @@ def _finish(
                     "verdict": verdict,
                     "report_html": str(report_paths["html"]),
                     "basis": _fp_basis,
+                    "window": "dev",
+                    "window_info": _window_info,
+                    "profit_factor": _wn(getattr(final_bt.statistics, "profit_factor", None)),
+                    "sharpe_ratio": _wn(getattr(final_bt.statistics, "sharpe_ratio", None)),
                     "instrument": (_fp_instrument or "").upper(),
                     "prop_preset": str(getattr(prop_rules, "preset_key", "") or ""),
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
@@ -4273,6 +4289,10 @@ def _finish(
                     "verdict": verdict,
                     "report_html": str(report_paths["html"]),
                     "basis": _fp_basis,
+                    "window": "dev",
+                    "window_info": _window_info,
+                    "profit_factor": _wn(getattr(final_bt.statistics, "profit_factor", None)),
+                    "sharpe_ratio": _wn(getattr(final_bt.statistics, "sharpe_ratio", None)),
                     "instrument": (_fp_instrument or "").upper(),
                     "prop_preset": str(getattr(prop_rules, "preset_key", "") or ""),
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
@@ -4339,6 +4359,10 @@ def _finish(
                     "verdict": verdict,
                     "report_html": str(report_paths["html"]),
                     "basis": _fp_basis,
+                    "window": "dev",
+                    "window_info": _window_info,
+                    "profit_factor": _wn(getattr(final_bt.statistics, "profit_factor", None)),
+                    "sharpe_ratio": _wn(getattr(final_bt.statistics, "sharpe_ratio", None)),
                     "instrument": (_fp_instrument or "").upper(),
                     "prop_preset": str(getattr(prop_rules, "preset_key", "") or ""),
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
@@ -4425,6 +4449,7 @@ def _finish(
         final_mc=final_mc,
         final_holdout=final_holdout,
         full_history_single_run=full_history_single_run,
+        full_history_bt=full_history_bt,
         oos_validation=oos_validation,
         oos_validation_skip_reason=oos_skip_reason,
         icir_gate=icir_gate,

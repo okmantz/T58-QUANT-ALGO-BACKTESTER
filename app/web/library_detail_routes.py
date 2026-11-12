@@ -148,6 +148,17 @@ def build_optimize_rundown(stype: str, fname: str, meta: dict, snap: dict | None
             "last_optimize": lo or None, "href": "/optimize-simple?" + urlencode(q)}
 
 
+def _latest_run_row(fname: str, name: str) -> dict | None:
+    """The newest run-history row for this strategy (what the Dashboard reads), matched on display name or file stem."""
+    try:
+        from app.reports.run_history import load_runs
+        stem = Path(fname).stem.lower()
+        rows = [r for r in load_runs() if str(r.get("strategy_name", "")).lower().split(" -- ")[0].strip() in (stem, name.lower())]
+        return rows[-1] if rows else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def build_detail(stype: str, fname: str) -> dict:
     from app.strategy.library import VALIDATION_STEP_METHODS  # noqa: F401  (documented vocabulary)
     meta = _meta(stype, fname)
@@ -169,6 +180,10 @@ def build_detail(stype: str, fname: str) -> dict:
                     "first_payout_probability": snap.get("first_payout_probability"),
                     "risk_of_ruin_pct": snap.get("risk_of_ruin_pct"),
                     "heatmap": snap.get("heatmap"), "heatmap_counts": snap.get("heatmap_counts")}
+        if snap.get("stats_full"):
+            backtest["windows"] = {
+                "dev": {"label": "Development window", "stats": snap.get("stats") or {}, "equity": snap.get("equity") or [], "period": snap.get("period")},
+                "full": {"label": "Full history", "stats": snap.get("stats_full") or {}, "equity": snap.get("equity_full") or [], "period": snap.get("period_full")}}
     elif last_run:
         backtest = {"has": True, "source": "last_run", "recorded_display": "", "equity": [],
                     "stats": {"net_profit": last_run.get("net_profit"), "total_trades": last_run.get("trades"),
@@ -229,6 +244,21 @@ def build_detail(stype: str, fname: str) -> dict:
 
     optimize = build_optimize_rundown(stype, fname, meta, snap, status_checks)
 
+    # ---------------- why the numbers differ between pages, and exactly why/how to fix a failure
+    from app.reports.window import reconcile
+    reconciliation = reconcile(meta, _latest_run_row(fname, name))
+    from app.guidance.failure_diagnosis import diagnose
+    reasons_src = (champ.get("reasons") or (snap or {}).get("reasons") or [])
+    diagnosis = diagnose(reasons_src, pick=f"{stype}::{fname}", verdict=str(results.get("verdict") or ""),
+                         ladder_stage=str(champ.get("ladder_stage") or ""),
+                         optimized=(meta.get("last_optimize") if isinstance(meta.get("last_optimize"), dict) else None),
+                         validate_failed=[c.get("check") for c in status_checks if c.get("status") == "fail" and c.get("check")])
+    if diagnosis.get("has"):
+        optimize["diagnosis"] = diagnosis
+        p = diagnosis.get("primary")
+        if p and p.get("kind") == "optimize":
+            optimize["href"] = p["href"]
+
     # ---------------- downloads
     fp = latest_report_entry(entries, ("full_pipeline",))
     fp_files: dict[str, str] = {}
@@ -244,6 +274,7 @@ def build_detail(stype: str, fname: str) -> dict:
                  "all_zip": f"/library/download-all.zip?{q}" if (fp_files or val_files or entries) else None}
     return {"ok": True, "type": stype, "filename": fname, "name": name, "backtest": backtest, "results": results,
             "validation": validation, "optimize": optimize, "downloads": downloads,
+            "reconciliation": reconciliation, "diagnosis": diagnosis if diagnosis.get("has") else None,
             "full_pipeline_href": "/full-pipeline?" + urlencode({"strategy_pick": f"{stype}::{fname}"}),
             "validate_href": "/validate-simple?" + urlencode({"strategy_pick": f"{stype}::{fname}"})}
 

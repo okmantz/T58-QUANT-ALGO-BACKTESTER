@@ -1,5 +1,6 @@
 """Acceptance tests for the 2026-10-07 accuracy overhaul + discovery layer."""
 from __future__ import annotations
+from tests.verdict_helpers import make_verdict_with_bound as _mv_bound
 
 import dataclasses
 import random
@@ -226,11 +227,11 @@ def test_verdict_wrapper_caps_thin_evidence(monkeypatch):
     import app.orchestration.full_pipeline as fp
     monkeypatch.setattr(fp, "_make_verdict_core", lambda *a, **k: ("READY", [], object(), False, False))
     thin = type("MC", (), {"sample_ok": False, "sample_notes": ["only 10 trades"], "per_attempt_pass_probability": 90.0})()
-    v, reasons, *_ = fp._make_verdict(thin, None)
+    v, reasons, *_ = _mv_bound(thin, None)
     assert v == "MARGINAL" and "SAMPLE FLOOR" in reasons[-1]
     ok = type("MC", (), {"sample_ok": True, "sample_notes": [], "per_attempt_pass_probability": 90.0})()
     replay = type("R", (), {"sample_ok": True, "pass_rate": 0.2, "n_attempts": 80})()
-    v, reasons, *_ = fp._make_verdict(ok, None, attempt_replay=replay)
+    v, reasons, *_ = _mv_bound(ok, None, attempt_replay=replay)
     assert v == "MARGINAL" and "REPLAY DISAGREES" in reasons[-1]
 
 

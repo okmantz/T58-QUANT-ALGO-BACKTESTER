@@ -1,5 +1,6 @@
 """2026-10-15 audit: tighter / fairer gates, and the plain-English verdict explanations."""
 from __future__ import annotations
+from tests.verdict_helpers import make_verdict_with_bound as _mv_bound
 
 import pytest
 
@@ -28,7 +29,7 @@ def _replay(rate, ci, n_eff=6.0, n=48):
 @pytest.mark.parametrize("net,expect_demote", [(1.0, True), (240.0, True), (260.0, False), (1000.0, False)])
 def test_cost_stress_needs_a_meaningful_share_of_base_profit(ready_core, net, expect_demote):
     cs = {"multiplier": 2.0, "net_profit": net, "base_net_profit": 1000.0}
-    v, reasons, *_ = fp._make_verdict(_mc(), None, cost_stress=cs)
+    v, reasons, *_ = _mv_bound(_mc(), None, cost_stress=cs)
     assert (v == "MARGINAL") is expect_demote
     if expect_demote:
         assert "COST STRESS" in reasons[-1] and "25%" in reasons[-1]
@@ -36,25 +37,25 @@ def test_cost_stress_needs_a_meaningful_share_of_base_profit(ready_core, net, ex
 
 def test_cost_stress_threshold_is_configurable(ready_core):
     cs = {"multiplier": 2.0, "net_profit": 400.0, "base_net_profit": 1000.0}
-    assert fp._make_verdict(_mc(), None, cost_stress=cs, cost_stress_min_retained=0.5)[0] == "MARGINAL"
-    assert fp._make_verdict(_mc(), None, cost_stress=cs, cost_stress_min_retained=0.25)[0] == "READY"
+    assert _mv_bound(_mc(), None, cost_stress=cs, cost_stress_min_retained=0.5)[0] == "MARGINAL"
+    assert _mv_bound(_mc(), None, cost_stress=cs, cost_stress_min_retained=0.25)[0] == "READY"
 
 
 # -- replay vs Monte Carlo, compared with intervals ---------------------------------------------------------
 def test_replay_with_wide_overlapping_interval_no_longer_demotes(ready_core):
     # 30-point gap (the old rule would demote) but the replay's honest interval (30-90%) overlaps MC's 70-80%.
-    v, _, *_ = fp._make_verdict(_mc(), None, attempt_replay=_replay(0.45, (0.30, 0.90)))
+    v, _, *_ = _mv_bound(_mc(), None, attempt_replay=_replay(0.45, (0.30, 0.90)))
     assert v == "READY"
 
 
 def test_replay_with_disjoint_intervals_demotes_even_below_25_points(ready_core):
-    v, reasons, *_ = fp._make_verdict(_mc(), None, attempt_replay=_replay(0.55, (0.50, 0.60)))
+    v, reasons, *_ = _mv_bound(_mc(), None, attempt_replay=_replay(0.55, (0.50, 0.60)))
     assert v == "MARGINAL" and "REPLAY DISAGREES" in reasons[-1] and "no overlap" in reasons[-1]
 
 
 def test_replay_disjoint_but_tiny_gap_is_not_demoted(ready_core):
     mc = _mc(per_attempt_pass_probability=75.0, per_attempt_pass_ci95=(74.0, 76.0))
-    v, _, *_ = fp._make_verdict(mc, None, attempt_replay=_replay(0.70, (0.69, 0.71)))   # 5-point gap
+    v, _, *_ = _mv_bound(mc, None, attempt_replay=_replay(0.70, (0.69, 0.71)))   # 5-point gap
     assert v == "READY"
 
 

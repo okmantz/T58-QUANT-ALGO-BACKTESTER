@@ -136,6 +136,9 @@ def resolve(board_row: Optional[dict] = None, run: Optional[dict] = None) -> dic
                          "2. Use Discovery to find a replacement on the same instrument."],
                         "Find a replacement", "/search",
                         [{"label": "Auto-optimize anyway", "href": opt("eval")}])
+        diag = (board_row or {}).get("diagnosis") or {}
+        if diag.get("has") and diag.get("primary"):
+            return _diagnosed_plan(diag, why, optimized, val_href, run_href)
         goal = "risk" if (dd is not None and dd > DD_WARN) else ("eval" if (ev is not None and ev < EVAL_OK) else "robust")
         opt_href = opt(goal, why)
         steps = [f"{i}. {fx}" for i, fx in enumerate(fixes[:3], 1)]
@@ -222,6 +225,29 @@ def resolve(board_row: Optional[dict] = None, run: Optional[dict] = None) -> dic
 
     return _out("needs_validation", "info", "Open Validate", "Validation not complete.",
                 ["1. Pick your checks and run them."], "Open Validate", val_href)
+
+
+def _diagnosed_plan(diag: dict, why: str, optimized: bool, val_href: str, run_href: str) -> dict:
+    """The plan when the failure was diagnosed: name the specific cause and do the specific fix -- never 'run it again'."""
+    causes = [c for c in diag.get("causes", []) if c.get("severity") != "advisory"]
+    top = causes[0] if causes else {}
+    steps = []
+    for i, c in enumerate(causes[:3], 1):
+        step = c["steps"][1] if len(c.get("steps", [])) > 1 else (c["steps"][0] if c.get("steps") else "")
+        steps.append(f"{i}. {c['title']}: {step}".strip())
+    steps.append(f"{len(steps) + 1}. " + diag.get("rerun_note", ""))
+    prim = diag["primary"]
+    secondary: list[dict] = []
+    opt = diag.get("optimizer") or {}
+    if opt.get("can_help") != "no" and not opt.get("tried_without_gain"):
+        a = next((c["action"] for c in causes if c.get("action") and c["action"]["kind"] == "optimize"), None)
+        if a and a["href"] != prim["href"]:
+            secondary.append({"label": a["label"], "href": a["href"]})
+    secondary.append({"label": "Validate", "href": val_href})
+    head = f"Fix: {top.get('title', 'the failing gate')}"
+    out = _out("failed", "bad", head, top.get("why") or why or diag.get("summary", ""), steps[:5], prim["label"], prim["href"], secondary[:2])
+    out["diagnosis"] = diag
+    return out
 
 
 def _out(stage, tone, headline, why, steps, label, href, secondary=None) -> dict:

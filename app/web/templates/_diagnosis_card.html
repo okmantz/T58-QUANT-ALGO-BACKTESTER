@@ -1,0 +1,29 @@
+{# Exactly why a strategy failed and what to do, from app.guidance.failure_diagnosis. Expects `diag` in the including scope. #}
+{% if diag and diag.has %}
+<style>
+
+.t58-diag{margin:8px 0;border:1px solid var(--border,#2a3142);border-radius:10px;padding:8px 10px;font-size:12.5px;line-height:1.5}
+.t58-diag summary{cursor:pointer;font-weight:600}.t58-diag-sum{display:block;font-weight:400;color:var(--text-muted,#8a93a6)}
+.t58-diag-c{margin:10px 0;padding-top:8px;border-top:1px solid var(--border,#1c2230)}.t58-diag-t{font-weight:600}
+.t58-diag-tag{display:inline-block;font-size:10px;letter-spacing:.06em;text-transform:uppercase;border-radius:6px;padding:1px 6px;margin-right:6px;background:rgba(255,120,120,.15);color:#ff9d9d}
+.t58-diag-c.cap .t58-diag-tag{background:rgba(240,190,70,.15);color:#f0be46}.t58-diag-c.advisory .t58-diag-tag{background:rgba(120,160,255,.15);color:#9db8ff}
+.t58-diag p{margin:4px 0}.t58-diag ul,.t58-diag ol{margin:4px 0 6px;padding-left:18px}.t58-diag-ev li{color:var(--text-muted,#8a93a6)}
+.t58-diag-opt{color:var(--text-muted,#8a93a6)}
+</style>
+<details class="t58-diag" open>
+  <summary>Exactly why &amp; how to fix <span class="t58-diag-sum">{{ diag.summary }}</span></summary>
+  {% for c in diag.causes %}
+  <div class="t58-diag-c {{ c.severity }}">
+    <div class="t58-diag-t"><span class="t58-diag-tag">{{ {'blocker':'Blocking','cap':'Caps the verdict','advisory':'To do'}[c.severity] }}</span> {{ c.title }}</div>
+    <p>{{ c.why }}</p>
+    {% if c.evidence %}<ul class="t58-diag-ev">{% for e in c.evidence %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+    {% if c.steps %}<ol class="t58-diag-st">{% for st in c.steps %}<li>{{ st }}</li>{% endfor %}</ol>{% endif %}
+    {% if c.action %}<a class="t58-btn primary sm" href="{{ c.action.href }}">{{ c.action.label }} &rarr;</a>{% endif %}
+    {% for a in c.also %}<a class="t58-btn ghost sm" href="{{ a.href }}">{{ a.label }}</a>{% endfor %}
+  </div>
+  {% endfor %}
+  <p class="t58-diag-opt"><b>Can the optimizer fix this?</b> {{ diag.optimizer.explain }}</p>
+  <p class="t58-diag-opt">{{ diag.rerun_note }}</p>
+</details>
+
+{% endif %}

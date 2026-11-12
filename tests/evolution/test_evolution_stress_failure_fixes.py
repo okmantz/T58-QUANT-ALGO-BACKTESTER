@@ -193,7 +193,9 @@ def test_stress_failures_are_written_to_the_graveyard(tmp_path, monkeypatch):
 def test_stress_survivors_still_become_a_genuine_winner(tmp_path):
     """The fix must not break the happy path -- a REAL stress survivor
     should still reach the leaderboard and be reported as WINNER."""
-    cfg = _cfg(tmp_path)
+    # The locked-holdout champion gate (v5 B1-3) would reject a hand-built fake on real data; this test is
+    # about the stress-survivor path, so the gate is switched off (None restores the pre-v5 behaviour).
+    cfg = _cfg(tmp_path, target_eval_pass_pct=None)
     runner = EvolutionRunner(_trending_df(), RiskConfig(), PropRules(), cfg, progress_cb=None)
 
     survivor = _fake_record("mean_reversion_band-gen0-bbbb", "mean_reversion_band", 15.0, robustness_ratio=0.8)

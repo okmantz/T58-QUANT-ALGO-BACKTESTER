@@ -175,7 +175,12 @@ def test_preset_keys_unique():
     assert len(keys) == len(set(keys))
 
 
-def test_no_alpha_futures_preset():
-    for p in PROP_FIRM_PRESETS:
-        assert "alpha" not in p.firm.lower(), p.key
-        assert "alpha" not in p.key.lower(), p.key
+def test_alpha_futures_presets_are_never_algo_or_ready_eligible():
+    """Alpha Futures presets were added 2026-11-12 for manual / semi-automated use only: Alpha prohibits automation, and the
+    rules are UNSTAMPED, so none may ever be marked algo-allowed or READY-eligible."""
+    from app.prop import presets as P
+    alpha = [p for p in PROP_FIRM_PRESETS if "alpha" in p.firm.lower() or "alpha" in p.key.lower()]
+    assert alpha, "expected the Alpha Futures presets"
+    for p in alpha:
+        assert p.algo_trading_allowed is False, p.key
+        assert not P.is_ready_eligible(p), p.key

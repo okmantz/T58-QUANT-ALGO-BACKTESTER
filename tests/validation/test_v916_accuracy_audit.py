@@ -1,6 +1,7 @@
 """v9.16 audit fixes: EOD trailing ratchet, session flatten, preset field
 parity, loss clamp, 30-day payout replay and dependence-aware intervals."""
 from __future__ import annotations
+from tests.verdict_helpers import make_verdict_with_bound as _mv_bound
 
 import warnings
 
@@ -163,13 +164,13 @@ def test_verdict_wrapper_demotes_ready_on_low_30_day_payout_rate(monkeypatch):
     monkeypatch.setattr(fp, "_make_verdict_core", lambda *a, **k: ("READY", ["ok"], {}, False, False))
     mc = SimpleNamespace(sample_ok=True, per_attempt_pass_probability=60.0)
     low = {"rate": 0.10, "ci": (0.02, 0.30), "n": 36, "n_effective": 9.0, "window": 30, "source": "out-of-sample holdout"}
-    v, reasons, *_ = fp._make_verdict(mc, payout30=low, payout30_min_pct=35.0)
+    v, reasons, *_ = _mv_bound(mc, payout30=low, payout30_min_pct=35.0)
     assert v == "MARGINAL" and any("30-DAY PAYOUT" in r for r in reasons)
     ok = {**low, "rate": 0.55, "ci": (0.40, 0.70)}
-    assert fp._make_verdict(mc, payout30=ok, payout30_min_pct=35.0)[0] == "READY"
+    assert _mv_bound(mc, payout30=ok, payout30_min_pct=35.0)[0] == "READY"
     # too few independent windows -> no gate (the report still prints the numbers)
     thin = {**low, "n_effective": 1.5}
-    assert fp._make_verdict(mc, payout30=thin, payout30_min_pct=35.0, payout30_min_windows=3.0)[0] == "READY"
+    assert _mv_bound(mc, payout30=thin, payout30_min_pct=35.0, payout30_min_windows=3.0)[0] == "READY"
 
 
 def test_block_bootstrap_never_claims_zero_width_interval():

@@ -203,6 +203,9 @@ class EVVerdict:
     bankroll_ruin_pct: float | None = None
     ruin_cap_pct: float | None = None
     inputs_missing: list = field(default_factory=list)
+    # The conditions that actually produced a NOT WORTH A FEE / INSUFFICIENT EVIDENCE label, kept apart from the advisory
+    # notes in ``reasons`` so a failure message can never quote a NOTE (e.g. the written-confirmation reminder) as the cause.
+    blockers: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -344,11 +347,11 @@ def evaluate_ev(
         )
     if v.break_even_p is None:
         v.label = NOT_WORTH_A_FEE
-        reasons.append(
-            "q x V does not cover the activation fee"
-            + (f" (${a:,.0f})" if a > 0 else "")
-            + ": no pass rate pays for the fee."
-        )
+        _fee_msg = ("q x V does not cover the activation fee"
+                    + (f" (${a:,.0f})" if a > 0 else "")
+                    + ": no pass rate pays for the fee.")
+        reasons.append(_fee_msg)
+        v.blockers = [_fee_msg]
         return v
     need = max(v.break_even_p * margin_multiple, v.break_even_p + margin_points)
     v.margin_required = need
@@ -379,6 +382,7 @@ def evaluate_ev(
         else:
             v.label = NOT_WORTH_A_FEE
         reasons.extend(blockers)
+        v.blockers = list(blockers)
         return v
 
     v.label = HIGH_CONFIDENCE if legacy_verdict == "READY" else FORWARD_TEST_CANDIDATE

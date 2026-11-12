@@ -159,8 +159,11 @@ def build_row(strategy_type: str, name: str, meta: dict, status: str, run: Optio
     tags = list(meta.get("tags") or [])
     family = (meta.get("family") or (meta.get("last_search") or {}).get("family") or
               next((t for t in tags if t.lower() not in ("manual", "es", "nq", "gc")), None) or "uncategorised")
+    # One window per card: when the saved result carries its own trades/profit (development window), profit factor comes from the SAME
+    # result. Falling back to run history (full history) only when the saved result has no numbers at all keeps the card from mixing
+    # a 390-trade profit with a 463-trade profit factor.
     pf = _f(last.get("profit_factor"))
-    if pf is None:
+    if pf is None and last.get("trades") is None:
         pf = _f(run.get("profit_factor"))
     trades = _f(last.get("trades") if last.get("trades") is not None else run.get("trades"))
     net = _f(last.get("net_profit") if last.get("net_profit") is not None else run.get("net_profit"))
@@ -186,6 +189,7 @@ def build_row(strategy_type: str, name: str, meta: dict, status: str, run: Optio
         "robustness": robustness_score(meta), "robustness_inputs": robustness_inputs(meta),
         "validated_on": vdate, "validation_status": "Validated" if vdate else "Not validated",
         "trades": None if trades is None else int(trades), "net_profit": net,
+        "window": "dev" if (last.get("window") == "dev" or last.get("window_info")) else ("full" if (last.get("trades") is None and run) else "unknown"),
         "curve": _curve(run.get("equity_curve") or last.get("equity_curve")),
         "t58_score": _f((meta.get("last_champion_check") or {}).get("t58_score")),
         "verdict": (meta.get("last_champion_check") or {}).get("verdict"),

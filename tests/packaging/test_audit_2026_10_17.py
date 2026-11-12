@@ -161,6 +161,10 @@ def test_funded_breach_cap_demotes_ready(monkeypatch):
 
 def test_missing_independent_evidence_caps_ready_only_when_required(monkeypatch):
     mv, mc = _ready_fixture(monkeypatch)
-    assert mv(mc, None)[0] == "READY"                                   # legacy callers unchanged
+    good = {"n": 200, "mean": 0.2, "lb": 0.05, "ub": 0.35}
+    assert mv(mc, None, expectancy_bound=good)[0] == "READY"            # with a measured unseen-data bound, READY stands
+    # 2026-11-12 audit P1-10: no bound at all can never support READY, with or without evidence_required.
+    v0, r0, *_ = mv(mc, None)
+    assert v0 == "MARGINAL" and any("INSUFFICIENT UNSEEN EVIDENCE" in r for r in r0)
     v, reasons, *_ = mv(mc, None, evidence_required=True)
     assert v == "MARGINAL" and any("lower bound on expectancy" in r for r in reasons)

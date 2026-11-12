@@ -3054,9 +3054,9 @@ class EvolutionRunner(DiscoveryMixin):
         not one per leaderboard row.
 
         Inconclusive evaluations (the holdout backtest/MC itself raised)
-        fail OPEN -- the candidate is kept but flagged
-        holdout_check={"passed": None, ...} -- because a broken holdout
-        slice must not silently crown OR silently kill a candidate.
+        fail CLOSED (2026-11-12 audit P1-11) -- the candidate is rejected and
+        flagged holdout_check={"passed": False, "inconclusive": True, ...},
+        because an unreadable holdout slice must never crown a champion.
         target_eval_pass_pct=None disables the gate entirely (pre-v5
         behavior); a run with no holdout slice logs one skip line and is
         likewise unaffected.

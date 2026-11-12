@@ -116,6 +116,11 @@ def _fix_for(reason: str) -> Optional[str]:
     return None
 
 
+# Diagnosis causes that the prefix-matched bullets below already explain (same text, same fix) -- not repeated up front.
+_GENERIC_COVERED = frozenset({"ruin", "holdout", "cpcv_gate", "pbo_gate", "dsr_gate", "cost_stress", "pass_and_paid", "payout_30d",
+                              "sample_floor", "null_test"})
+
+
 def explain_verdict(
     verdict: Optional[str],
     reasons: Optional[Iterable[str]] = None,
@@ -134,9 +139,31 @@ def explain_verdict(
     points: list[str] = []
     fixes: list[str] = []
     seen: set[str] = set()
+    # The diagnosed causes (unproven out-of-sample edge, unmeasured checks, expected-value blockers ...) are the real answer and
+    # carry the numbers that failed, so they lead; the generic prefix-matched bullets follow.
+    diagnosis = None
+    try:
+        from app.guidance.failure_diagnosis import diagnose
+        diagnosis = diagnose(reasons, verdict=v)
+        for cause in diagnosis["causes"]:
+            if cause["severity"] == "advisory" or cause["id"] in _GENERIC_COVERED:
+                continue
+            ev = cause["evidence"][0] if cause["evidence"] else ""
+            text = f"{cause['title']}. {ev}".strip()
+            if text not in seen:
+                seen.add(text)
+                points.append(text)
+                step = cause["steps"][1] if len(cause["steps"]) > 1 else (cause["steps"][0] if cause["steps"] else "")
+                if step and step not in fixes:
+                    fixes.append(step)
+    except Exception:  # noqa: BLE001 -- the explainer must never break a page
+        diagnosis = None
     for raw in reasons or []:
         raw = str(raw)
         if any(raw.startswith(p) for p in _SKIP_PREFIXES):
+            continue
+        if diagnosis and diagnosis["has"] and (raw.startswith(("UNPROVEN (caps", "LADDER:", "EV TEST FAILED", "EV EVIDENCE INCOMPLETE"))
+                                               or "checks weren't available" in raw):
             continue
         plain = _plain_for(raw)
         if plain is None and raw.startswith("EV "):
@@ -148,7 +175,7 @@ def explain_verdict(
             _fx = _fix_for(raw)
             if _fx and _fx not in fixes:
                 fixes.append(_fx)
-        if len(points) >= 5:
+        if len(points) >= 6:
             break
     if not points and fallback:
         points.append(fallback)
@@ -165,4 +192,5 @@ def explain_verdict(
              "NOT READY": "Why it is NOT READY"}.get(v, "No verdict yet")
     return {"verdict": v, "title": title, "summary": summary, "points": points, "fixes": fixes,
             "what_is_it": CHAMPION_CHECK_EXPLAINED,
-            "score": None if score is None else round(float(score), 1)}
+            "score": None if score is None else round(float(score), 1),
+            "diagnosis": diagnosis if diagnosis and diagnosis.get("has") else None}

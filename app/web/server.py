@@ -2056,14 +2056,24 @@ def _dashboard_cards_and_flow(stats: dict, board_rows: list) -> tuple[list, dict
         if row:
             used.add(row["filename"])
         plan = _ns.resolve(row, s)
+        # ONE window per card. When the library has this strategy's development-window result, every number on the card (profit, win rate,
+        # Sharpe, drawdown, trades, the curve) AND its eval/payout chances come from that same result, so the card agrees with the Library,
+        # Champion and verdict. Run history holds the full-history report numbers; they are used only when nothing better is on record.
+        _dev = bool(row and row.get("window") == "dev" and row.get("trades") is not None)
+        _nums = ({"net": row.get("net_profit") or 0, "sharpe": row.get("sharpe"), "win": row.get("win_rate"), "dd": row.get("max_dd"),
+                  "trades": int(row["trades"]), "curve": row.get("equity_dev") or s.get("equity_curve"), "window": "dev"}
+                 if _dev else
+                 {"net": s.get("net_profit") or 0, "sharpe": s.get("sharpe_ratio"), "win": s.get("win_rate"), "dd": s.get("max_drawdown_pct"),
+                  "trades": s.get("trades"), "curve": s.get("equity_curve"), "window": "full"})
         cards.append({
             "name": s.get("strategy_name"), "instrument": s.get("instrument"), "timeframe": s.get("timeframe"),
             "stage": (row or {}).get("promotion", {}).get("stage_title") or "Tested",
             "stage_idx": (champion_board.PROMOTION_STAGES.index(row["promotion"]["stage"]) if row else 0),
-            "spark": _spark(s.get("equity_curve")),
-            "up": (s.get("net_profit") or 0) >= 0,
-            "net": s.get("net_profit") or 0, "sharpe": s.get("sharpe_ratio"), "win": s.get("win_rate"),
-            "dd": s.get("max_drawdown_pct"), "trades": s.get("trades"), "passed": bool(s.get("single_run_passed")),
+            "spark": _spark(_nums["curve"]),
+            "up": (_nums["net"] or 0) >= 0,
+            "net": _nums["net"], "sharpe": _nums["sharpe"], "win": _nums["win"],
+            "window": _nums["window"],
+            "dd": _nums["dd"], "trades": _nums["trades"], "passed": bool(s.get("single_run_passed")),
             "verdict": (row or {}).get("verdict"), "plan": plan, "report": s.get("report_html"),
             "row_type": (row or {}).get("strategy_type"), "row_file": (row or {}).get("filename"),
             "can_promote": bool(row and row["promotion"].get("can_promote")),
@@ -2188,6 +2198,7 @@ def dashboard():
         focus_options=focus_options,
         focus_value=focus_value,
         strategy_cards=strategy_cards,
+        best_sharpe_card=max((c for c in strategy_cards if c.get('sharpe') is not None), key=lambda c: c['sharpe'], default=None),
         pipeline_flow=pipeline_flow,
         pipeline_controls=_controls,
         user_name=_first or "Trader",
@@ -3106,10 +3117,28 @@ def _run_optimize_simple_job(job_id: str, df, strategy, risk, rules, engines, fo
         JOB_MANAGER.fail(job_id, f"Unexpected error: {exc}")
 
 
+def _diagnosis_for_pick(pick: str):
+    """Saved failure diagnosis (why it failed / what to change) for a 'type::filename' library pick, or None."""
+    try:
+        if not pick or "::" not in pick:
+            return None
+        stype, fname = pick.split("::", 1)
+        meta = load_strategy_metadata(stype, fname) or {}
+        lc = meta.get("last_champion_check") or {}
+        snap = meta.get("pipeline_snapshot") or {}
+        from app.guidance.failure_diagnosis import diagnose
+        d = diagnose(lc.get("reasons") or snap.get("reasons") or [], pick=pick, verdict=str(lc.get("verdict") or snap.get("verdict") or ""),
+                     optimized=(meta.get("last_optimize") if isinstance(meta.get("last_optimize"), dict) else None))
+        return d if d.get("has") else None
+    except Exception:  # noqa: BLE001 -- advice only; never block the optimizer page
+        return None
+
+
 @app.route("/optimize-simple")
 def optimize_simple_form():
     return render_template("optimize_simple.html", active_page="optimize_simple", goals=OPTIMIZE_GOALS,
-                           want_goal=(request.args.get("goal") or "eval"), error=request.args.get("error"), **_simple_pickers())
+                           want_goal=(request.args.get("goal") or "eval"), error=request.args.get("error"),
+                           diag=_diagnosis_for_pick(request.args.get("strategy_pick") or ""), **_simple_pickers())
 
 
 # Optimize v2 (2026-10): two engines that tune DIFFERENT things, chosen through a plain-language goal.

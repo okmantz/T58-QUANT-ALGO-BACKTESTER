@@ -47,7 +47,7 @@ def build_pipeline_snapshot(result, *, instrument: str = "", report_urls: dict |
         "recorded_at": time.time(),
         "instrument": instrument,
         "verdict": getattr(result, "verdict", None),
-        "reasons": [str(r)[:300] for r in (getattr(result, "verdict_reasons", None) or [])[:8]],
+        "reasons": [str(r)[:700] for r in (getattr(result, "verdict_reasons", None) or [])[:14]],
         "t58_score": _num(getattr(sc, "score", None), 1),
         "t58_tier": getattr(sc, "tier", None),
         "stats": {k: _num(getattr(st, k, None)) for k in _STAT_FIELDS},
@@ -56,6 +56,20 @@ def build_pipeline_snapshot(result, *, instrument: str = "", report_urls: dict |
         "risk_of_ruin_pct": _num(getattr(mc, "risk_of_ruin_pct", None), 1),
         "reports": dict(report_urls or {}),
     }
+    try:  # both windows, so the Library can toggle and explain why other pages show different numbers
+        from app.reports.window import window_info
+        fbt = getattr(result, "full_history_bt", None)
+        snap["window_info"] = window_info(bt, fbt)
+        if fbt is not None and fbt is not bt:
+            snap["stats_full"] = {k: _num(getattr(getattr(fbt, "statistics", None), k, None)) for k in _STAT_FIELDS}
+            snap["equity_full"] = _downsample(fbt.equity_curve["equity"].astype(float).tolist())
+            try:
+                tsf = fbt.equity_curve["timestamp"]
+                snap["period_full"] = [str(tsf.iloc[0])[:10], str(tsf.iloc[-1])[:10]]
+            except Exception:  # noqa: BLE001
+                pass
+    except Exception:  # noqa: BLE001
+        pass
     try:
         eq = bt.equity_curve["equity"].astype(float).tolist()
         snap["equity"] = _downsample(eq)

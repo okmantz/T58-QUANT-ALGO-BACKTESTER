@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-12 - one number everywhere, exact failure diagnosis, definitions on every metric and check
+- **Why the numbers disagreed**: the dashboard, test page, Library and Champion page mixed two windows (development ~80% vs full history incl. the sealed holdout). Every stored result now carries `window` / `window_info`; dashboard cards and Library rows use one window per card; the Library Backtest tab has a Development / Full-history toggle and a reconciliation table (e.g. 390 + 73 = 463 trades).
+- **Exact failure diagnosis** (`app/guidance/failure_diagnosis.py`): turns Champion Check reasons into named causes with the failing numbers, quantified fixes (e.g. trades still needed for the lower bound to clear zero), and a straight answer on whether the optimizer can help. Shown on dashboard cards, the Library Backtest/Optimize tabs, Optimize page, verdict popup. Re-running the same pipeline is no longer suggested when it cannot change the result.
+- **Definitions everywhere**: Eval/Payout pass chance, Walk-Forward, WF-GA, Sensitivity, Parameter robustness, Regime matrix, Pooled OOS, Champion Check, PBO and the rest are clickable (popup: what it is, how it is calculated, what counts as a pass, what to do if it is not). Validate check cards get an info icon.
+- **EV verdict**: `EVVerdict.blockers` so the "EV TEST FAILED" message quotes the actual blockers, not the trailing notes.
+- **Tests**: new suites for diagnosis, window reconciliation and definitions; updated stale tests for the unseen-evidence gate (P1-10), fail-closed holdout (P1-11), Alpha Futures presets, Buy Challenge firm cards, whole-contract live sizing.
+
 ## 2026-11-11 - audit follow-ups: 30-day scoring wired in, sequential forward test, champion ladder, mission fix
 - **Index-401 crash**: `PythonStrategy` cached the imported module, so a strategy holding state sized for one DataFrame raised `index N is out of bounds` on the next, longer one. On failure the cached module is evicted and the call retried once on a fresh import; genuine strategy errors still surface unchanged.
 - **Discovery Engine scores the 30-day objective**: every champion carries a `thirty_day` record (`evaluate_thirty_day`: P(pass <= 30d), dependence-aware 95% interval, bust rate) and prop-mode ranking is by (lower bound, P(pass 30d), edge_lb_r). The CLI takes `--prop-preset` (default `lucid_50k`) instead of a bare `PropRules()`.

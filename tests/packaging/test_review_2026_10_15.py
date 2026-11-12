@@ -1,6 +1,7 @@
 """Regression tests for the 2026-10-15 backtester review fixes (ruin horizon, robustness metric,
 pass-and-paid product, stale docs, Topstep fee row, data gate, losing-OOS 'passes', crash/speed guards)."""
 from __future__ import annotations
+from tests.verdict_helpers import make_verdict_with_bound as _mv_bound
 
 import numpy as np
 import pandas as pd
@@ -129,7 +130,6 @@ def test_scorecard_payout_component_uses_the_product_not_the_conditional_rate():
 def test_pass_and_paid_gate_caps_ready(monkeypatch):
     from types import SimpleNamespace
     from app.orchestration import full_pipeline as fp
-    from app.orchestration.full_pipeline import _make_verdict
     # the wrapper's gates are demote-only, so feed it a core verdict of READY and check it is demoted
     monkeypatch.setattr(fp, "_make_verdict_core", lambda *a, **k: ("READY", [], SimpleNamespace(tier="Strong"), False, False))
 
@@ -161,7 +161,7 @@ def test_pass_and_paid_gate_caps_ready(monkeypatch):
         def to_dict(self):
             return {}
 
-    verdict, reasons, card, _, _ = _make_verdict(_MC(), _WF(), icir_gate=None, statistics=_Stats(),
+    verdict, reasons, card, _, _ = _mv_bound(_MC(), _WF(), icir_gate=None, statistics=_Stats(),
                                                  prop_rules=SimpleNamespace(max_drawdown_pct=10.0),
                                                  mc_dispersion_pts=1.0, min_trades_for_ready=100, paid_min_pct=35.0)
     assert verdict != "READY" and any("PASS-AND-PAID TOO LOW" in r for r in reasons)

@@ -23,12 +23,12 @@
     var s = document.createElement("style"); s.id = "t58-metric-css";
     s.textContent =
       "[data-metric]{cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;text-decoration-color:var(--text-dim,#5b6478)}" +
-      "[data-metric]:hover{text-decoration-color:var(--teal,#35e0b0)}[data-metric]:focus-visible{outline:2px solid var(--teal,#35e0b0);outline-offset:2px}" +
+      "[data-metric]:hover{text-decoration-color:var(--teal,#35e0b0)}.t58-i{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;margin-left:6px;border:1px solid currentColor;border-radius:50%;font-size:10px;font-weight:700;line-height:1;opacity:.7;text-decoration:none!important;vertical-align:middle;cursor:pointer}.t58-i:hover{opacity:1}[data-metric]:focus-visible{outline:2px solid var(--teal,#35e0b0);outline-offset:2px}" +
       ".t58-mx-back{position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px}" +
       ".t58-mx{position:relative;width:min(460px,100%);max-height:88vh;overflow:auto;background:var(--pop-bg,#12161f);color:var(--text,#e8ecf3);border:1px solid var(--border-light,#2a3142);border-radius:14px;padding:18px 18px 16px;box-shadow:0 18px 50px rgba(0,0,0,.55);font-size:13.5px;line-height:1.5}" +
       ".t58-mx h3{margin:0 28px 2px 0;font-size:17px}.t58-mx .val{font-size:26px;font-weight:700;color:var(--teal,#35e0b0);margin:4px 0 8px}" +
       ".t58-mx h5{margin:14px 0 5px;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-muted,#8a93a6)}" +
-      ".t58-mx p{margin:0 0 4px}.t58-mx ul{margin:0;padding-left:18px}.t58-mx li{margin:0 0 4px}" +
+      ".t58-mx p{margin:0 0 4px}.t58-mx ul,.t58-mx ol{margin:0;padding-left:18px}.t58-mx li{margin:0 0 4px}" +
       ".t58-mx .formula{font-family:ui-monospace,Menlo,Consolas,monospace;background:var(--panel-3,#151a24);border:1px solid var(--border,#1c2230);border-radius:8px;padding:9px 10px;font-size:12.5px}" +
       ".t58-mx .x{position:absolute;top:8px;right:10px;background:none;border:0;color:inherit;font-size:22px;cursor:pointer;line-height:1}" +
       ".t58-mx table{width:100%;border-collapse:collapse;font-size:12.5px}.t58-mx td{padding:4px 2px;border-bottom:1px solid var(--border,#1c2230)}.t58-mx td:last-child{text-align:right;font-variant-numeric:tabular-nums}" +
@@ -91,7 +91,10 @@
       } else if (m.inputs && m.inputs.length) {
         card.appendChild(el("h5", null, "What goes into it")); var ul = el("ul"); m.inputs.forEach(function (i) { ul.appendChild(el("li", null, i)); }); card.appendChild(ul);
       }
+      if (m.how && m.how.length) { card.appendChild(el("h5", null, "How it is calculated")); var ol = el("ol"); m.how.forEach(function (i) { ol.appendChild(el("li", null, i)); }); card.appendChild(ol); }
+      if (m.bar) { card.appendChild(el("h5", null, "What counts as a pass")); card.appendChild(el("p", null, m.bar)); }
       if (m.reading && m.reading.length) { card.appendChild(el("h5", null, "How to read it")); var ul2 = el("ul"); m.reading.forEach(function (i) { ul2.appendChild(el("li", null, i)); }); card.appendChild(ul2); }
+      if (m.fix && m.fix.length) { card.appendChild(el("h5", null, "If it is not passing")); var ul3 = el("ul"); m.fix.forEach(function (i) { ul3.appendChild(el("li", null, i)); }); card.appendChild(ul3); }
       var hist = el("div"); card.appendChild(hist);
       back.appendChild(card); document.body.appendChild(back);
       back.addEventListener("click", function (e) { if (e.target === back) close(); });
@@ -115,16 +118,37 @@
     node.setAttribute("title", "Click for the definition, formula and history");
   }
 
+  // Check cards, method cards and result rows sit inside forms/labels (where a whole-element click means something else), so they
+  // get an explicit "i" button next to the name instead of making the name itself clickable.
+  var ICON_SEL = ".lc-checkcard .cname, .t58-method-card h3, .lc-check .ck-name, .lc-liverow > span:first-child, .chk-row b, .lc-adv .adv-t, .t58-step-b > h3";
+  function decorate(root, map) {
+    var nodes = root.querySelectorAll ? root.querySelectorAll(ICON_SEL) : [];
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      if (n.getAttribute("data-t58-i")) continue;
+      var t = norm(n.textContent).replace(/:$/, ""), key = map[t];
+      if (!key) continue;
+      n.setAttribute("data-t58-i", "1");
+      var b = document.createElement("span"); b.className = "t58-i"; b.textContent = "i";
+      b.setAttribute("data-metric", key); b.setAttribute("role", "button"); b.setAttribute("tabindex", "0");
+      b.setAttribute("aria-label", "What is " + (n.textContent || key).trim() + "? How is it calculated?");
+      b.setAttribute("title", "What it is and how it is calculated");
+      n.appendChild(b);
+    }
+  }
+
   function scan(root) {
     css();
     loadLabels().then(function (map) {
-      var nodes = (root || document).querySelectorAll("th, td, span, div, p, small, h2, h3, h4, dt, strong, b, em");
+      var nodes = (root || document).querySelectorAll("th, td, span, div, p, small, h2, h3, h4, dt, strong, b, em, label, li, legend");
       for (var i = 0; i < nodes.length; i++) {
         var n = nodes[i];
-        if (n.children.length || n.getAttribute("data-metric") || n.closest("a,button,select,option,label,form,[data-ve],.t58-mx,nav,.t58-sidebar,#t58-sidebar")) continue;
+        if (n.children.length || n.getAttribute("data-metric") || n.closest("a,button,select,option,form,[data-ve],.t58-mx,nav,.t58-sidebar,#t58-sidebar")) continue;
+        var lb = n.closest("label"); if (lb && lb.querySelector("input,select,textarea")) continue;
         var t = norm(n.textContent); if (!t || t.length > 40) continue;
         var key = map[t.replace(/:$/, "")]; if (key) bind(n, key);
       }
+      decorate(root || document, map);
     });
   }
 

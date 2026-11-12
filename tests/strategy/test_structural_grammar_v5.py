@@ -305,7 +305,8 @@ def test_holdout_gate_disabled_when_target_none(tmp_path, monkeypatch):
     assert all(r.holdout_check is None for r in runner.leaderboard)
 
 
-def test_holdout_gate_fails_open_on_eval_error(tmp_path, monkeypatch):
+def test_holdout_gate_fails_closed_on_eval_error(tmp_path, monkeypatch):
+    """2026-11-12 audit P1-11: an inconclusive holdout read can never crown a champion (it used to fail open)."""
     runner = _runner(tmp_path, target_eval_pass_pct=70.0, elite_keep=3)
 
     def _raise(self, candidate=None, mc_sims=None):
@@ -314,9 +315,8 @@ def test_holdout_gate_fails_open_on_eval_error(tmp_path, monkeypatch):
     monkeypatch.setattr(EvolutionRunner, "evaluate_champion_on_locked_holdout", _raise)
     rec = _gated_record("fragile", 99.0)
     runner._update_leaderboard([rec])
-    # Inconclusive != failure: kept, flagged, never silently crowned-or-killed.
-    assert [r.candidate_id for r in runner.leaderboard] == ["fragile"]
-    assert rec.holdout_check["passed"] is None
+    assert [r.candidate_id for r in runner.leaderboard] == []
+    assert rec.holdout_check["passed"] is False and rec.holdout_check["inconclusive"] is True
     assert "simulated holdout blowup" in rec.holdout_check["error"]
 
 

@@ -640,7 +640,7 @@ function t58SetCheckboxes(containerId, checked) {
       "background:var(--pop-bg,#0c1c22);color:var(--text,#e8ecf3);border:1px solid var(--pop-bd,#2a3142);" +
       "border-radius:10px;box-shadow:0 14px 36px rgba(0,0,0,.6);font-size:13px;line-height:1.45}" +
       ".t58-ve h4{margin:0 22px 6px 0;font-size:14px}.t58-ve p{margin:0 0 8px;color:var(--text-dim,#9aa4b8)}" +
-      ".t58-ve ul{margin:0;padding-left:18px}.t58-ve li{margin:0 0 5px}" +
+      ".t58-ve ul{margin:0;padding-left:18px}.t58-ve li{margin:0 0 5px}.t58-ve{max-height:80vh;overflow:auto}" +
       ".t58-ve .x{position:absolute;top:6px;right:8px;background:none;border:0;color:inherit;font-size:18px;cursor:pointer}" +
       ".t58-ve.READY h4{color:var(--ok,#35e0b0)}.t58-ve.MARGINAL h4{color:var(--amber,#f5b83d)}" +
       ".t58-ve.NOT h4{color:var(--coral,#ff6f6f)}";
@@ -667,8 +667,13 @@ function t58SetCheckboxes(containerId, checked) {
     box.setAttribute("role", "dialog");
     box.setAttribute("aria-label", d.title || "Verdict explanation");
     var pts = (d.points || []).map(function (p) { return "<li>" + esc(p) + "</li>"; }).join("");
+    var fx = (d.fixes || []).map(function (p) { return "<li>" + esc(p) + "</li>"; }).join("");
+    var dg = d.diagnosis || null, act = dg && dg.primary ? dg.primary : null;
     box.innerHTML = '<button class="x" aria-label="Close">×</button><h4>' + esc(d.title) + "</h4><p>" +
-      esc(d.summary) + "</p>" + (pts ? "<ul>" + pts + "</ul>" : "");
+      esc(d.summary) + "</p>" + (pts ? "<ul>" + pts + "</ul>" : "") +
+      (fx ? '<h5 style="margin:10px 0 4px;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-dim,#9aa4b8)">How to fix it</h5><ol style="margin:0;padding-left:18px">' + fx + "</ol>" : "") +
+      (dg && dg.optimizer ? '<p style="margin-top:8px"><b>Can the optimizer fix it?</b> ' + esc(dg.optimizer.explain) + "</p>" : "") +
+      (act ? '<p><a class="t58-btn primary sm" href="' + esc(act.href) + '">' + esc(act.label) + " &rarr;</a></p>" : "");
     document.body.appendChild(box);
     var r = el.getBoundingClientRect(), w = box.offsetWidth;
     var left = Math.max(12, Math.min(window.scrollX + r.left, window.scrollX + document.documentElement.clientWidth - w - 12));
