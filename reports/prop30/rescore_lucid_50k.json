@@ -1,0 +1,1497 @@
+{
+  "config": {
+    "preset": "lucid_50k",
+    "discovery": [
+      "2020-01-01",
+      "2023-01-01"
+    ],
+    "development": [
+      "2023-01-01",
+      "2024-07-01"
+    ],
+    "holdout": [
+      "2024-09-01",
+      "2025-09-01"
+    ],
+    "assume_untouched_after": null,
+    "risk_usd": 500.0,
+    "max_contracts": 4,
+    "top_k": 3,
+    "minutes": 5,
+    "seed": 7
+  },
+  "rules": {
+    "account": 50000,
+    "target_pct": 6.0,
+    "max_dd_pct": 4.0,
+    "daily_loss_pct": 2.4
+  },
+  "feasibility_frontier": [
+    {
+      "expectancy_r": 0.1,
+      "win_prob": 0.46,
+      "trades_per_30d": 5,
+      "best_risk_pct": 2.0,
+      "p_pass_30": 0.2215,
+      "p_bust_30": 0.505
+    },
+    {
+      "expectancy_r": 0.1,
+      "win_prob": 0.46,
+      "trades_per_30d": 10,
+      "best_risk_pct": 2.0,
+      "p_pass_30": 0.3255,
+      "p_bust_30": 0.6335
+    },
+    {
+      "expectancy_r": 0.1,
+      "win_prob": 0.46,
+      "trades_per_30d": 20,
+      "best_risk_pct": 1.25,
+      "p_pass_30": 0.4075,
+      "p_bust_30": 0.523
+    },
+    {
+      "expectancy_r": 0.1,
+      "win_prob": 0.46,
+      "trades_per_30d": 40,
+      "best_risk_pct": 1.25,
+      "p_pass_30": 0.4145,
+      "p_bust_30": 0.5825
+    },
+    {
+      "expectancy_r": 0.1,
+      "win_prob": 0.46,
+      "trades_per_30d": 80,
+      "best_risk_pct": 0.6,
+      "p_pass_30": 0.465,
+      "p_bust_30": 0.5065
+    },
+    {
+      "expectancy_r": 0.2,
+      "win_prob": 0.5,
+      "trades_per_30d": 5,
+      "best_risk_pct": 2.0,
+      "p_pass_30": 0.2745,
+      "p_bust_30": 0.4495
+    },
+    {
+      "expectancy_r": 0.2,
+      "win_prob": 0.5,
+      "trades_per_30d": 10,
+      "best_risk_pct": 2.0,
+      "p_pass_30": 0.3905,
+      "p_bust_30": 0.5665
+    },
+    {
+      "expectancy_r": 0.2,
+      "win_prob": 0.5,
+      "trades_per_30d": 20,
+      "best_risk_pct": 1.25,
+      "p_pass_30": 0.52,
+      "p_bust_30": 0.41
+    },
+    {
+      "expectancy_r": 0.2,
+      "win_prob": 0.5,
+      "trades_per_30d": 40,
+      "best_risk_pct": 0.75,
+      "p_pass_30": 0.563,
+      "p_bust_30": 0.3365
+    },
+    {
+      "expectancy_r": 0.2,
+      "win_prob": 0.5,
+      "trades_per_30d": 80,
+      "best_risk_pct": 0.5,
+      "p_pass_30": 0.672,
+      "p_bust_30": 0.2595
+    },
+    {
+      "expectancy_r": 0.3,
+      "win_prob": 0.54,
+      "trades_per_30d": 5,
+      "best_risk_pct": 2.0,
+      "p_pass_30": 0.325,
+      "p_bust_30": 0.392
+    },
+    {
+      "expectancy_r": 0.3,
+      "win_prob": 0.54,
+      "trades_per_30d": 10,
+      "best_risk_pct": 2.0,
+      "p_pass_30": 0.4715,
+      "p_bust_30": 0.4895
+    },
+    {
+      "expectancy_r": 0.3,
+      "win_prob": 0.54,
+      "trades_per_30d": 20,
+      "best_risk_pct": 1.25,
+      "p_pass_30": 0.6335,
+      "p_bust_30": 0.3045
+    },
+    {
+      "expectancy_r": 0.3,
+      "win_prob": 0.54,
+      "trades_per_30d": 40,
+      "best_risk_pct": 0.75,
+      "p_pass_30": 0.715,
+      "p_bust_30": 0.2105
+    },
+    {
+      "expectancy_r": 0.3,
+      "win_prob": 0.54,
+      "trades_per_30d": 80,
+      "best_risk_pct": 0.5,
+      "p_pass_30": 0.838,
+      "p_bust_30": 0.126
+    },
+    {
+      "expectancy_r": 0.5,
+      "win_prob": 0.62,
+      "trades_per_30d": 5,
+      "best_risk_pct": 2.0,
+      "p_pass_30": 0.445,
+      "p_bust_30": 0.274
+    },
+    {
+      "expectancy_r": 0.5,
+      "win_prob": 0.62,
+      "trades_per_30d": 10,
+      "best_risk_pct": 1.5,
+      "p_pass_30": 0.632,
+      "p_bust_30": 0.2105
+    },
+    {
+      "expectancy_r": 0.5,
+      "win_prob": 0.62,
+      "trades_per_30d": 20,
+      "best_risk_pct": 1.25,
+      "p_pass_30": 0.82,
+      "p_bust_30": 0.1495
+    },
+    {
+      "expectancy_r": 0.5,
+      "win_prob": 0.62,
+      "trades_per_30d": 40,
+      "best_risk_pct": 0.75,
+      "p_pass_30": 0.922,
+      "p_bust_30": 0.0605
+    },
+    {
+      "expectancy_r": 0.5,
+      "win_prob": 0.62,
+      "trades_per_30d": 80,
+      "best_risk_pct": 0.4,
+      "p_pass_30": 0.9885,
+      "p_bust_30": 0.004
+    }
+  ],
+  "scan": {
+    "n_trials": 150,
+    "notes": [
+      "NQ: 31 continuous-contract roll session(s) excluded from entries.",
+      "ES: 25 continuous-contract roll session(s) excluded from entries.",
+      "GC: 20 continuous-contract roll session(s) excluded from entries.",
+      "150 cells tried on DISCOVERY data only (< 2023-01-01). Survivors are hypotheses: they have not touched development, walk-forward or sealed data and the trial count above is the multiple-testing burden."
+    ],
+    "skipped_instruments": {
+      "CL": "no data supplied"
+    },
+    "top": [
+      {
+        "cell": "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R",
+        "n_signals": 762,
+        "skipped_sizing": 27,
+        "trades_per_30d": 20.17,
+        "win_rate": 0.423,
+        "payoff_r": 1.387,
+        "net_expectancy_r": 0.0101,
+        "feasibility_upper_bound": 0.308,
+        "p_pass_30": 0.2018970189701897,
+        "lower_bound": 0.10206366669745301,
+        "p_bust_30": 0.6138211382113821,
+        "median_days": 22.5,
+        "trusted": false,
+        "stress": {
+          "1.0": {
+            "net_expectancy_r": 0.010116366162392818,
+            "p_pass_30": 0.2018970189701897,
+            "lower_bound": 0.10206366669745301,
+            "passed": false
+          },
+          "2.0": {
+            "net_expectancy_r": -0.0027457359365646652,
+            "p_pass_30": 0.1978319783197832,
+            "lower_bound": 0.0920485186797424,
+            "passed": false
+          }
+        }
+      },
+      {
+        "cell": "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be",
+        "n_signals": 762,
+        "skipped_sizing": 27,
+        "trades_per_30d": 20.17,
+        "win_rate": 0.276,
+        "payoff_r": 2.66,
+        "net_expectancy_r": 0.0077,
+        "feasibility_upper_bound": 0.307,
+        "p_pass_30": 0.2046070460704607,
+        "lower_bound": 0.09886184784713825,
+        "p_bust_30": 0.6327913279132791,
+        "median_days": 18.5,
+        "trusted": false,
+        "stress": {
+          "1.0": {
+            "net_expectancy_r": 0.007679406088726439,
+            "p_pass_30": 0.2046070460704607,
+            "lower_bound": 0.09886184784713825,
+            "passed": false
+          },
+          "2.0": {
+            "net_expectancy_r": -0.0062198867333054225,
+            "p_pass_30": 0.19647696476964768,
+            "lower_bound": 0.09558607693617294,
+            "passed": false
+          }
+        }
+      },
+      {
+        "cell": "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R",
+        "n_signals": 648,
+        "skipped_sizing": 25,
+        "trades_per_30d": 17.1,
+        "win_rate": 0.457,
+        "payoff_r": 1.34,
+        "net_expectancy_r": 0.0714,
+        "feasibility_upper_bound": 0.39,
+        "p_pass_30": 0.1991869918699187,
+        "lower_bound": 0.09876516483349126,
+        "p_bust_30": 0.4254742547425474,
+        "median_days": 30.0,
+        "trusted": false,
+        "stress": {
+          "1.0": {
+            "net_expectancy_r": 0.07142770005845334,
+            "p_pass_30": 0.1991869918699187,
+            "lower_bound": 0.09876516483349126,
+            "passed": false
+          },
+          "2.0": {
+            "net_expectancy_r": 0.05980919522164337,
+            "p_pass_30": 0.17750677506775067,
+            "lower_bound": 0.08571738245424271,
+            "passed": false
+          }
+        }
+      },
+      {
+        "cell": "NQ|orb|ny_open|{'or_minutes': 30}|t2R_be",
+        "n_signals": 724,
+        "skipped_sizing": 27,
+        "trades_per_30d": 19.13,
+        "win_rate": 0.288,
+        "payoff_r": 2.623,
+        "net_expectancy_r": 0.0318,
+        "feasibility_upper_bound": 0.345,
+        "p_pass_30": 0.17886178861788618,
+        "lower_bound": 0.08272869296412372,
+        "p_bust_30": 0.6056910569105691,
+        "median_days": 21.0,
+        "trusted": false,
+        "stress": {
+          "1.0": {
+            "net_expectancy_r": 0.03181537900913987,
+            "p_pass_30": 0.17886178861788618,
+            "lower_bound": 0.08272869296412372,
+            "passed": false
+          },
+          "2.0": {
+            "net_expectancy_r": 0.019098253208107766,
+            "p_pass_30": 0.15853658536585366,
+            "lower_bound": 0.06381655698442719,
+            "passed": false
+          }
+        }
+      },
+      {
+        "cell": "NQ|compression|ny_open|{'lookback': 12, 'ratio': 0.7}|t1.5R",
+        "n_signals": 513,
+        "skipped_sizing": 28,
+        "trades_per_30d": 13.31,
+        "win_rate": 0.433,
+        "payoff_r": 1.37,
+        "net_expectancy_r": 0.0265,
+        "feasibility_upper_bound": 0.278,
+        "p_pass_30": 0.14905149051490515,
+        "lower_bound": 0.0627884615384616,
+        "p_bust_30": 0.4146341463414634,
+        "median_days": 28.0,
+        "trusted": false,
+        "stress": {
+          "1.0": {
+            "net_expectancy_r": 0.026508390880311348,
+            "p_pass_30": 0.14905149051490515,
+            "lower_bound": 0.0627884615384616,
+            "passed": false
+          },
+          "2.0": {
+            "net_expectancy_r": 0.011229313691663283,
+            "p_pass_30": 0.14498644986449866,
+            "lower_bound": 0.06025641025641026,
+            "passed": false
+          }
+        }
+      },
+      {
+        "cell": "NQ|orb|ny_open|{'or_minutes': 60}|t2R_be",
+        "n_signals": 648,
+        "skipped_sizing": 25,
+        "trades_per_30d": 17.1,
+        "win_rate": 0.302,
+        "payoff_r": 2.673,
+        "net_expectancy_r": 0.0732,
+        "feasibility_upper_bound": 0.375,
+        "p_pass_30": 0.14905149051490515,
+        "lower_bound": 0.06084804599554236,
+        "p_bust_30": 0.4159891598915989,
+        "median_days": 30.0,
+        "trusted": false,
+        "stress": {
+          "1.0": {
+            "net_expectancy_r": 0.07318614683518226,
+            "p_pass_30": 0.14905149051490515,
+            "lower_bound": 0.06084804599554236,
+            "passed": false
+          },
+          "2.0": {
+            "net_expectancy_r": 0.060557198951684287,
+            "p_pass_30": 0.14092140921409213,
+            "lower_bound": 0.05484163911037987,
+            "passed": false
+          }
+        }
+      },
+      {
+        "cell": "NQ|orb|ny_open|{'or_minutes': 30}|t1.5R",
+        "n_signals": 724,
+        "skipped_sizing": 27,
+        "trades_per_30d": 19.13,
+        "win_rate": 0.428,
+        "payoff_r": 1.378,
+        "net_expectancy_r": 0.0172,
+        "feasibility_upper_bound": 0.312,
+        "p_pass_30": 0.15040650406504066,
+        "lower_bound": 0.06058768637160927,
+        "p_bust_30": 0.6273712737127372,
+        "median_days": 28.0,
+        "trusted": false,
+        "stress": {
+          "1.0": {
+            "net_expectancy_r": 0.017158425564929768,
+            "p_pass_30": 0.15040650406504066,
+            "lower_bound": 0.06058768637160927,
+            "passed": false
+          },
+          "2.0": {
+            "net_expectancy_r": 0.00531197071786188,
+            "p_pass_30": 0.13414634146341464,
+            "lower_bound": 0.054672187187099666,
+            "passed": false
+          }
+        }
+      },
+      {
+        "cell": "GC|orb|ny_open|{'or_minutes': 15}|t1.5R",
+        "n_signals": 614,
+        "skipped_sizing": 20,
+        "trades_per_30d": 20.27,
+        "win_rate": 0.439,
+        "payoff_r": 1.285,
+        "net_expectancy_r": 0.0043,
+        "feasibility_upper_bound": 0.312,
+        "p_pass_30": 0.14846416382252559,
+        "lower_bound": 0.058314071721723176,
+        "p_bust_30": 0.5392491467576792,
+        "median_days": 23.0,
+        "trusted": false,
+        "stress": {
+          "1.0": {
+            "net_expectancy_r": 0.004343582279117704,
+            "p_pass_30": 0.14846416382252559,
+            "lower_bound": 0.058314071721723176,
+            "passed": false
+          },
+          "2.0": {
+            "net_expectancy_r": -0.04043936868619354,
+            "p_pass_30": 0.12116040955631399,
+            "lower_bound": 0.04772523108113605,
+            "passed": false
+          }
+        }
+      },
+      {
+        "cell": "NQ|orb|ny_open|{'or_minutes': 60}|t1R",
+        "n_signals": 648,
+        "skipped_sizing": 25,
+        "trades_per_30d": 17.1,
+        "win_rate": 0.546,
+        "payoff_r": 0.944,
+        "net_expectancy_r": 0.0624,
+        "feasibility_upper_bound": 0.303,
+        "p_pass_30": 0.13685636856368563,
+        "lower_bound": 0.05765514560549334,
+        "p_bust_30": 0.31978319783197834,
+        "median_days": 32.5,
+        "trusted": false,
+        "stress": {
+          "1.0": {
+            "net_expectancy_r": 0.06237700849975691,
+            "p_pass_30": 0.13685636856368563,
+            "lower_bound": 0.05765514560549334,
+            "passed": false
+          },
+          "2.0": {
+            "net_expectancy_r": 0.05182029048909709,
+            "p_pass_30": 0.11653116531165311,
+            "lower_bound": 0.05172696628808532,
+            "passed": false
+          }
+        }
+      },
+      {
+        "cell": "NQ|gap_fade|london|{'k_atr': 1.0}|t2R_be",
+        "n_signals": 656,
+        "skipped_sizing": 40,
+        "trades_per_30d": 16.91,
+        "win_rate": 0.307,
+        "payoff_r": 2.309,
+        "net_expectancy_r": 0.0116,
+        "feasibility_upper_bound": 0.323,
+        "p_pass_30": 0.15040650406504066,
+        "lower_bound": 0.05458750740632774,
+        "p_bust_30": 0.6043360433604336,
+        "median_days": 27.0,
+        "trusted": false,
+        "stress": {
+          "1.0": {
+            "net_expectancy_r": 0.011613753788922295,
+            "p_pass_30": 0.15040650406504066,
+            "lower_bound": 0.05458750740632774,
+            "passed": false
+          },
+          "2.0": {
+            "net_expectancy_r": -0.02254758973871896,
+            "p_pass_30": 0.11924119241192412,
+            "lower_bound": 0.03517027558882729,
+            "passed": false
+          }
+        }
+      },
+      {
+        "cell": "NQ|gap_fade|london|{'k_atr': 2.0}|t2R_be",
+        "n_signals": 426,
+        "skipped_sizing": 25,
+        "trades_per_30d": 11.01,
+        "win_rate": 0.337,
+        "payoff_r": 2.339,
+        "net_expectancy_r": 0.0888,
+        "feasibility_upper_bound": 0.34,
+        "p_pass_30": 0.12330623306233063,
+        "lower_bound": 0.05,
+        "p_bust_30": 0.31842818428184283,
+        "median_days": 31.0,
+        "trusted": false,
+        "stress": {
+          "1.0": {
+            "net_expectancy_r": 0.08882007679897215,
+            "p_pass_30": 0.12330623306233063,
+            "lower_bound": 0.05,
+            "passed": false
+          },
+          "2.0": {
+            "net_expectancy_r": 0.06507379064073564,
+            "p_pass_30": 0.10298102981029811,
+            "lower_bound": 0.03717948717948718,
+            "passed": false
+          }
+        }
+      },
+      {
+        "cell": "NQ|compression|ny_open|{'lookback': 12, 'ratio': 0.7}|t2R_be",
+        "n_signals": 513,
+        "skipped_sizing": 28,
+        "trades_per_30d": 13.31,
+        "win_rate": 0.293,
+        "payoff_r": 2.597,
+        "net_expectancy_r": 0.0376,
+        "feasibility_upper_bound": 0.335,
+        "p_pass_30": 0.12601626016260162,
+        "lower_bound": 0.04871794871794872,
+        "p_bust_30": 0.3902439024390244,
+        "median_days": 31.5,
+        "trusted": false,
+        "stress": {
+          "1.0": {
+            "net_expectancy_r": 0.03762445616345841,
+            "p_pass_30": 0.12601626016260162,
+            "lower_bound": 0.04871794871794872,
+            "passed": false
+          },
+          "2.0": {
+            "net_expectancy_r": 0.021119181541929235,
+            "p_pass_30": 0.12330623306233063,
+            "lower_bound": 0.047435897435897434,
+            "passed": false
+          }
+        }
+      },
+      {
+        "cell": "NQ|drive_cont|ny_open|{'drive_minutes': 30, 'k_atr': 1.0}|t2R_be",
+        "n_signals": 520,
+        "skipped_sizing": 23,
+        "trades_per_30d": 13.64,
+        "win_rate": 0.286,
+        "payoff_r": 2.799,
+        "net_expectancy_r": 0.0601,
+        "feasibility_upper_bound": 0.343,
+        "p_pass_30": 0.10298102981029811,
+        "lower_bound": 0.038461538461538464,
+        "p_bust_30": 0.4092140921409214,
+        "median_days": 33.5,
+        "trusted": false,
+        "stress": {
+          "1.0": {
+            "net_expectancy_r": 0.060092148116253616,
+            "p_pass_30": 0.10298102981029811,
+            "lower_bound": 0.038461538461538464,
+            "passed": false
+          },
+          "2.0": {
+            "net_expectancy_r": 0.03847906789340069,
+            "p_pass_30": 0.08943089430894309,
+            "lower_bound": 0.028205128205128206,
+            "passed": false
+          }
+        }
+      },
+      {
+        "cell": "NQ|drive_cont|ny_open|{'drive_minutes': 30, 'k_atr': 2.0}|t2R_be",
+        "n_signals": 325,
+        "skipped_sizing": 17,
+        "trades_per_30d": 8.45,
+        "win_rate": 0.312,
+        "payoff_r": 3.044,
+        "net_expectancy_r": 0.1688,
+        "feasibility_upper_bound": 0.412,
+        "p_pass_30": 0.09620596205962059,
+        "lower_bound": 0.03333333333333333,
+        "p_bust_30": 0.1842818428184282,
+        "median_days": 39.0,
+        "trusted": false,
+        "stress": {
+          "1.0": {
+            "net_expectancy_r": 0.16878399438143749,
+            "p_pass_30": 0.09620596205962059,
+            "lower_bound": 0.03333333333333333,
+            "passed": false
+          },
+          "2.0": {
+            "net_expectancy_r": 0.14763853932692889,
+            "p_pass_30": 0.08536585365853659,
+            "lower_bound": 0.025608974358974416,
+            "passed": false
+          }
+        }
+      },
+      {
+        "cell": "NQ|drive_cont|ny_open|{'drive_minutes': 30, 'k_atr': 1.0}|t1.5R",
+        "n_signals": 520,
+        "skipped_sizing": 23,
+        "trades_per_30d": 13.64,
+        "win_rate": 0.431,
+        "payoff_r": 1.41,
+        "net_expectancy_r": 0.0393,
+        "feasibility_upper_bound": 0.308,
+        "p_pass_30": 0.06504065040650407,
+        "lower_bound": 0.023076923076923078,
+        "p_bust_30": 0.47696476964769646,
+        "median_days": 35.0,
+        "trusted": false,
+        "stress": {
+          "1.0": {
+            "net_expectancy_r": 0.03928647531524852,
+            "p_pass_30": 0.06504065040650407,
+            "lower_bound": 0.023076923076923078,
+            "passed": false
+          },
+          "2.0": {
+            "net_expectancy_r": 0.019762888110779624,
+            "p_pass_30": 0.058265582655826556,
+            "lower_bound": 0.0183636649090001,
+            "passed": false
+          }
+        }
+      }
+    ]
+  },
+  "survivors": [
+    {
+      "cell": "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R",
+      "n_signals": 762,
+      "skipped_sizing": 27,
+      "trades_per_30d": 20.17,
+      "win_rate": 0.423,
+      "payoff_r": 1.387,
+      "net_expectancy_r": 0.0101,
+      "feasibility_upper_bound": 0.308,
+      "p_pass_30": 0.2018970189701897,
+      "lower_bound": 0.10206366669745301,
+      "p_bust_30": 0.6138211382113821,
+      "median_days": 22.5,
+      "trusted": false,
+      "stress": {
+        "1.0": {
+          "net_expectancy_r": 0.010116366162392818,
+          "p_pass_30": 0.2018970189701897,
+          "lower_bound": 0.10206366669745301,
+          "passed": false
+        },
+        "2.0": {
+          "net_expectancy_r": -0.0027457359365646652,
+          "p_pass_30": 0.1978319783197832,
+          "lower_bound": 0.0920485186797424,
+          "passed": false
+        }
+      }
+    },
+    {
+      "cell": "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be",
+      "n_signals": 762,
+      "skipped_sizing": 27,
+      "trades_per_30d": 20.17,
+      "win_rate": 0.276,
+      "payoff_r": 2.66,
+      "net_expectancy_r": 0.0077,
+      "feasibility_upper_bound": 0.307,
+      "p_pass_30": 0.2046070460704607,
+      "lower_bound": 0.09886184784713825,
+      "p_bust_30": 0.6327913279132791,
+      "median_days": 18.5,
+      "trusted": false,
+      "stress": {
+        "1.0": {
+          "net_expectancy_r": 0.007679406088726439,
+          "p_pass_30": 0.2046070460704607,
+          "lower_bound": 0.09886184784713825,
+          "passed": false
+        },
+        "2.0": {
+          "net_expectancy_r": -0.0062198867333054225,
+          "p_pass_30": 0.19647696476964768,
+          "lower_bound": 0.09558607693617294,
+          "passed": false
+        }
+      }
+    },
+    {
+      "cell": "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R",
+      "n_signals": 648,
+      "skipped_sizing": 25,
+      "trades_per_30d": 17.1,
+      "win_rate": 0.457,
+      "payoff_r": 1.34,
+      "net_expectancy_r": 0.0714,
+      "feasibility_upper_bound": 0.39,
+      "p_pass_30": 0.1991869918699187,
+      "lower_bound": 0.09876516483349126,
+      "p_bust_30": 0.4254742547425474,
+      "median_days": 30.0,
+      "trusted": false,
+      "stress": {
+        "1.0": {
+          "net_expectancy_r": 0.07142770005845334,
+          "p_pass_30": 0.1991869918699187,
+          "lower_bound": 0.09876516483349126,
+          "passed": false
+        },
+        "2.0": {
+          "net_expectancy_r": 0.05980919522164337,
+          "p_pass_30": 0.17750677506775067,
+          "lower_bound": 0.08571738245424271,
+          "passed": false
+        }
+      }
+    }
+  ],
+  "exit_lab": {
+    "cell": "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R",
+    "entries_frozen": 762,
+    "n_trials": 13,
+    "notes": [
+      "13 exit policies were tried on 762 frozen entries; read the winner against that search size."
+    ],
+    "ranked": [
+      {
+        "policy": "fixed_3R",
+        "kind": "fixed",
+        "p_pass_30": 0.32113821138211385,
+        "lower_bound": 0.19999905460428233,
+        "mean_r": 0.07942690841923805,
+        "risk_usd": 500.0,
+        "p_bust_30": 0.6463414634146342,
+        "median_days": 12.0
+      },
+      {
+        "policy": "trail_3atr_t4",
+        "kind": "atr_trail",
+        "p_pass_30": 0.3062330623306233,
+        "lower_bound": 0.18714743589743596,
+        "mean_r": 0.08882102423878142,
+        "risk_usd": 500.0,
+        "p_bust_30": 0.6273712737127372,
+        "median_days": 13.0
+      },
+      {
+        "policy": "be_1R_t3",
+        "kind": "breakeven",
+        "p_pass_30": 0.2872628726287263,
+        "lower_bound": 0.16981015369727342,
+        "mean_r": 0.04554437541714021,
+        "risk_usd": 500.0,
+        "p_bust_30": 0.6165311653116531,
+        "median_days": 15.0
+      },
+      {
+        "policy": "fixed_2R",
+        "kind": "fixed",
+        "p_pass_30": 0.2804878048780488,
+        "lower_bound": 0.15489953697654524,
+        "mean_r": 0.017976775694601654,
+        "risk_usd": 500.0,
+        "p_bust_30": 0.6395663956639567,
+        "median_days": 15.0
+      },
+      {
+        "policy": "time_60_t2",
+        "kind": "time",
+        "p_pass_30": 0.2777777777777778,
+        "lower_bound": 0.15489953697654524,
+        "mean_r": 0.013794586753817121,
+        "risk_usd": 500.0,
+        "p_bust_30": 0.6504065040650406,
+        "median_days": 15.0
+      },
+      {
+        "policy": "trail_2atr",
+        "kind": "atr_trail",
+        "p_pass_30": 0.27100271002710025,
+        "lower_bound": 0.15129607563493083,
+        "mean_r": 0.06621252253630283,
+        "risk_usd": 500.0,
+        "p_bust_30": 0.5636856368563685,
+        "median_days": 19.0
+      },
+      {
+        "policy": "dyn_target_3atr",
+        "kind": "dynamic_target",
+        "p_pass_30": 0.2669376693766938,
+        "lower_bound": 0.14028055275527568,
+        "mean_r": 0.01636789679750677,
+        "risk_usd": 500.0,
+        "p_bust_30": 0.6558265582655827,
+        "median_days": 14.0
+      },
+      {
+        "policy": "regime_t1.5_hi2.5",
+        "kind": "regime",
+        "p_pass_30": 0.2032520325203252,
+        "lower_bound": 0.10206366669745301,
+        "mean_r": 0.009857549008956664,
+        "risk_usd": 500.0,
+        "p_bust_30": 0.6138211382113821,
+        "median_days": 23.0
+      },
+      {
+        "policy": "time_30_t1.5",
+        "kind": "time",
+        "p_pass_30": 0.2005420054200542,
+        "lower_bound": 0.10128205128205128,
+        "mean_r": 0.016341734361185883,
+        "risk_usd": 500.0,
+        "p_bust_30": 0.6124661246612466,
+        "median_days": 25.0
+      },
+      {
+        "policy": "vol_adj_t2",
+        "kind": "vol_adjusted",
+        "p_pass_30": 0.21544715447154472,
+        "lower_bound": 0.09886184784713825,
+        "mean_r": 0.02189630005262873,
+        "risk_usd": 500.0,
+        "p_bust_30": 0.6233062330623306,
+        "median_days": 21.0
+      },
+      {
+        "policy": "be_1R_t2",
+        "kind": "breakeven",
+        "p_pass_30": 0.1991869918699187,
+        "lower_bound": 0.09549009075618703,
+        "mean_r": 0.004763079897731049,
+        "risk_usd": 500.0,
+        "p_bust_30": 0.6382113821138211,
+        "median_days": 18.0
+      },
+      {
+        "policy": "partial_1R_run3",
+        "kind": "partial",
+        "p_pass_30": 0.17479674796747968,
+        "lower_bound": 0.08235674659186322,
+        "mean_r": 0.017904105403001355,
+        "risk_usd": 500.0,
+        "p_bust_30": 0.5894308943089431,
+        "median_days": 25.0
+      },
+      {
+        "policy": "fixed_1R",
+        "kind": "fixed",
+        "p_pass_30": 0.06775067750677506,
+        "lower_bound": 0.021794871794871794,
+        "mean_r": -0.01529603985585168,
+        "risk_usd": 500.0,
+        "p_bust_30": 0.5460704607046071,
+        "median_days": 36.0
+      }
+    ]
+  },
+  "portfolio": {
+    "correlation": {
+      "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": {
+        "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 1.0,
+        "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 0.844,
+        "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 0.214
+      },
+      "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": {
+        "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 0.844,
+        "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 1.0,
+        "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 0.22
+      },
+      "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": {
+        "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 0.214,
+        "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 0.22,
+        "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 1.0
+      }
+    },
+    "diversification_ratio": 1.2611827586231572,
+    "n_trials": 26,
+    "notes": [
+      "26 weight vectors tried on the SAME data they are scored on: in-sample. Confirm out of sample before trusting."
+    ],
+    "ranked": [
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 0.5,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 1.0,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 0.0
+        },
+        "p_pass_30": 0.33468286099865047,
+        "lower_bound": 0.19913575312845833,
+        "p_bust_30": 0.6356275303643725,
+        "median_days": 13.0,
+        "n_trades": 1470,
+        "shared_risk": {
+          "admitted": 1470,
+          "skipped_concurrency": 0,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 1.0,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 0.5,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 0.0
+        },
+        "p_pass_30": 0.3225371120107962,
+        "lower_bound": 0.18778320706924045,
+        "p_bust_30": 0.6464237516869096,
+        "median_days": 12.0,
+        "n_trades": 1470,
+        "shared_risk": {
+          "admitted": 1470,
+          "skipped_concurrency": 0,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 0.5,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 1.0,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 0.5
+        },
+        "p_pass_30": 0.31039136302294196,
+        "lower_bound": 0.17286589130473742,
+        "p_bust_30": 0.6545209176788124,
+        "median_days": 12.0,
+        "n_trades": 1924,
+        "shared_risk": {
+          "admitted": 1924,
+          "skipped_concurrency": 169,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 1.0,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 0.0,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 0.5
+        },
+        "p_pass_30": 0.2793522267206478,
+        "lower_bound": 0.165181267940264,
+        "p_bust_30": 0.5492577597840755,
+        "median_days": 21.0,
+        "n_trades": 1358,
+        "shared_risk": {
+          "admitted": 1358,
+          "skipped_concurrency": 0,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 1.0,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 1.0,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 0.0
+        },
+        "p_pass_30": 0.2968960863697706,
+        "lower_bound": 0.16141986234876,
+        "p_bust_30": 0.7031039136302294,
+        "median_days": 6.0,
+        "n_trades": 1470,
+        "shared_risk": {
+          "admitted": 1470,
+          "skipped_concurrency": 0,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 1.0,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 0.5,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 0.5
+        },
+        "p_pass_30": 0.28205128205128205,
+        "lower_bound": 0.15416371003291923,
+        "p_bust_30": 0.7031039136302294,
+        "median_days": 11.0,
+        "n_trades": 1924,
+        "shared_risk": {
+          "admitted": 1924,
+          "skipped_concurrency": 169,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 1.0,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 0.0,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 1.0
+        },
+        "p_pass_30": 0.25371120107962214,
+        "lower_bound": 0.14697746120344746,
+        "p_bust_30": 0.717948717948718,
+        "median_days": 13.0,
+        "n_trades": 1358,
+        "shared_risk": {
+          "admitted": 1358,
+          "skipped_concurrency": 0,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 0.5,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 1.0,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 1.0
+        },
+        "p_pass_30": 0.25101214574898784,
+        "lower_bound": 0.14320197895341988,
+        "p_bust_30": 0.7489878542510121,
+        "median_days": 8.0,
+        "n_trades": 1924,
+        "shared_risk": {
+          "admitted": 1924,
+          "skipped_concurrency": 169,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 1.0,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 1.0,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 1.0
+        },
+        "p_pass_30": 0.2793522267206478,
+        "lower_bound": 0.1430973955484993,
+        "p_bust_30": 0.7206477732793523,
+        "median_days": 6.0,
+        "n_trades": 1924,
+        "shared_risk": {
+          "admitted": 1924,
+          "skipped_concurrency": 169,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 1.0,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 1.0,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 0.5
+        },
+        "p_pass_30": 0.26045883940620784,
+        "lower_bound": 0.13965506562599597,
+        "p_bust_30": 0.7395411605937922,
+        "median_days": 6.0,
+        "n_trades": 1924,
+        "shared_risk": {
+          "admitted": 1924,
+          "skipped_concurrency": 169,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 0.5,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 0.0,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 1.0
+        },
+        "p_pass_30": 0.2550607287449393,
+        "lower_bound": 0.13623023843993737,
+        "p_bust_30": 0.5155195681511471,
+        "median_days": 24.0,
+        "n_trades": 1358,
+        "shared_risk": {
+          "admitted": 1358,
+          "skipped_concurrency": 0,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 0.0,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 1.0,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 1.0
+        },
+        "p_pass_30": 0.24696356275303644,
+        "lower_bound": 0.13251435372402984,
+        "p_bust_30": 0.7449392712550608,
+        "median_days": 11.0,
+        "n_trades": 1358,
+        "shared_risk": {
+          "admitted": 1358,
+          "skipped_concurrency": 0,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 1.0,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 0.5,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 1.0
+        },
+        "p_pass_30": 0.242914979757085,
+        "lower_bound": 0.13251435372402984,
+        "p_bust_30": 0.7543859649122807,
+        "median_days": 8.0,
+        "n_trades": 1924,
+        "shared_risk": {
+          "admitted": 1924,
+          "skipped_concurrency": 169,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 0.0,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 0.5,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 1.0
+        },
+        "p_pass_30": 0.23751686909581646,
+        "lower_bound": 0.12307692307692308,
+        "p_bust_30": 0.5721997300944669,
+        "median_days": 20.5,
+        "n_trades": 1358,
+        "shared_risk": {
+          "admitted": 1358,
+          "skipped_concurrency": 0,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 0.0,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 1.0,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 0.5
+        },
+        "p_pass_30": 0.24156545209176788,
+        "lower_bound": 0.12169976129510726,
+        "p_bust_30": 0.6410256410256411,
+        "median_days": 17.0,
+        "n_trades": 1358,
+        "shared_risk": {
+          "admitted": 1358,
+          "skipped_concurrency": 0,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 0.5,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 0.5,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 1.0
+        },
+        "p_pass_30": 0.2145748987854251,
+        "lower_bound": 0.09835038812862895,
+        "p_bust_30": 0.6828609986504723,
+        "median_days": 17.0,
+        "n_trades": 1924,
+        "shared_risk": {
+          "admitted": 1924,
+          "skipped_concurrency": 169,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 0.5,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 0.5,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 0.0
+        },
+        "p_pass_30": 0.19298245614035087,
+        "lower_bound": 0.09497990542434218,
+        "p_bust_30": 0.5560053981106613,
+        "median_days": 21.0,
+        "n_trades": 1470,
+        "shared_risk": {
+          "admitted": 1470,
+          "skipped_concurrency": 0,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 1.0,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 0.0,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 0.0
+        },
+        "p_pass_30": 0.20107962213225372,
+        "lower_bound": 0.0948839777158196,
+        "p_bust_30": 0.6153846153846154,
+        "median_days": 22.5,
+        "n_trades": 735,
+        "shared_risk": {
+          "admitted": 735,
+          "skipped_concurrency": 0,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 0.0,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 1.0,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 0.0
+        },
+        "p_pass_30": 0.203778677462888,
+        "lower_bound": 0.0947880708414266,
+        "p_bust_30": 0.6342780026990553,
+        "median_days": 18.5,
+        "n_trades": 735,
+        "shared_risk": {
+          "admitted": 735,
+          "skipped_concurrency": 0,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 0.0,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 0.0,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 1.0
+        },
+        "p_pass_30": 0.19838056680161945,
+        "lower_bound": 0.09163492952334473,
+        "p_bust_30": 0.4251012145748988,
+        "median_days": 30.0,
+        "n_trades": 623,
+        "shared_risk": {
+          "admitted": 623,
+          "skipped_concurrency": 0,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 0.5,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 0.5,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 0.5
+        },
+        "p_pass_30": 0.1970310391363023,
+        "lower_bound": 0.08511780672357072,
+        "p_bust_30": 0.562753036437247,
+        "median_days": 24.0,
+        "n_trades": 1924,
+        "shared_risk": {
+          "admitted": 1924,
+          "skipped_concurrency": 169,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 0.0,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 0.5,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 0.5
+        },
+        "p_pass_30": 0.10661268556005399,
+        "lower_bound": 0.033301282051282105,
+        "p_bust_30": 0.3144399460188934,
+        "median_days": 33.0,
+        "n_trades": 1358,
+        "shared_risk": {
+          "admitted": 1358,
+          "skipped_concurrency": 0,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 0.5,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 0.0,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 0.5
+        },
+        "p_pass_30": 0.09446693657219973,
+        "lower_bound": 0.02435897435897436,
+        "p_bust_30": 0.3049932523616734,
+        "median_days": 35.0,
+        "n_trades": 1358,
+        "shared_risk": {
+          "admitted": 1358,
+          "skipped_concurrency": 0,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 0.0,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 0.5,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 0.0
+        },
+        "p_pass_30": 0.02834008097165992,
+        "lower_bound": 0.0,
+        "p_bust_30": 0.14439946018893388,
+        "median_days": 33.0,
+        "n_trades": 735,
+        "shared_risk": {
+          "admitted": 735,
+          "skipped_concurrency": 0,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 0.5,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 0.0,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 0.0
+        },
+        "p_pass_30": 0.001349527665317139,
+        "lower_bound": 0.0,
+        "p_bust_30": 0.15519568151147098,
+        "median_days": 41.0,
+        "n_trades": 735,
+        "shared_risk": {
+          "admitted": 735,
+          "skipped_concurrency": 0,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      },
+      {
+        "weights": {
+          "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R": 0.0,
+          "NQ|orb|ny_open|{'or_minutes': 15}|t2R_be": 0.0,
+          "NQ|orb|ny_open|{'or_minutes': 60}|t1.5R": 0.5
+        },
+        "p_pass_30": 0.0,
+        "lower_bound": 0.0,
+        "p_bust_30": 0.043184885290148446,
+        "median_days": 49.0,
+        "n_trades": 623,
+        "shared_risk": {
+          "admitted": 623,
+          "skipped_concurrency": 0,
+          "skipped_open_risk": 0,
+          "skipped_daily_stop": 0
+        }
+      }
+    ]
+  },
+  "validation": {
+    "config_id": "NQ|orb|ny_open|{'or_minutes': 15}|t1.5R",
+    "verdict": "NOT_ESTABLISHED",
+    "reasons": [
+      "Development P(pass<=30d) is 8.0%: below half the 65% target, so there is nothing worth validating.",
+      "The holdout overlaps a range already observed (bundled data after development: read by earlier experiments / sealed window (cannot be proven unread): 2024-07-01..2026-03-01). A window that was looked at before cannot be reused as independent validation.",
+      "No independent holdout: the 30-day claim cannot be established from this data. A forward test (or newer, unseen data) is required.",
+      "Walk-forward: only 0% of test spans reach half the target pass rate (need >= 60%).",
+      "Block robustness: the pass rate is concentrated in a minority of blocks, i.e. one regime carries the result."
+    ],
+    "partitions": {
+      "discovery": [
+        "2020-01-01",
+        "2023-01-01"
+      ],
+      "development": [
+        "2023-01-01",
+        "2024-07-01"
+      ],
+      "holdout": [
+        "2024-09-01",
+        "2025-09-01"
+      ],
+      "selection_cutoff": "2024-07-01"
+    },
+    "independence": {
+      "holdout_independent": false,
+      "problems": [
+        "The holdout overlaps a range already observed (bundled data after development: read by earlier experiments / sealed window (cannot be proven unread): 2024-07-01..2026-03-01). A window that was looked at before cannot be reused as independent validation."
+      ]
+    },
+    "discovery": {
+      "n_windows": 741,
+      "p_pass_30": 0.20107962213225372,
+      "lower_bound": 0.0948839777158196,
+      "p_bust_30": 0.6140350877192983,
+      "p_pass_60": 0.28475033738191635,
+      "median_days": 23.0,
+      "n_trades": 738,
+      "n_independent": 34.666666666666664,
+      "meets_target_lower_bound": false,
+      "cost_1.5x_p_pass_30": 0.19433198380566802
+    },
+    "development": {
+      "n_windows": 349,
+      "p_pass_30": 0.08022922636103152,
+      "lower_bound": 0.013829676255966372,
+      "p_bust_30": 0.6905444126074498,
+      "p_pass_60": 0.14040114613180515,
+      "median_days": 27.0,
+      "n_trades": 378,
+      "n_independent": 16.333333333333332,
+      "meets_target_lower_bound": false,
+      "cost_1.5x_p_pass_30": 0.06303724928366762
+    },
+    "walk_forward": [
+      {
+        "span": [
+          "2023-01-01",
+          "2023-05-01"
+        ],
+        "n_windows": 44,
+        "p_pass_30": 0.0,
+        "lower_bound": 0.0,
+        "p_bust_30": 0.8636363636363636,
+        "p_pass_60": 0.0,
+        "median_days": null,
+        "n_trades": 81,
+        "n_independent": 2.0,
+        "meets_target_lower_bound": false,
+        "cost_1.5x_p_pass_30": 0.0
+      },
+      {
+        "span": [
+          "2023-05-01",
+          "2023-08-29"
+        ],
+        "n_windows": 45,
+        "p_pass_30": 0.28888888888888886,
+        "lower_bound": 0.013425139787617169,
+        "p_bust_30": 0.35555555555555557,
+        "p_pass_60": 0.6,
+        "median_days": 32.0,
+        "n_trades": 86,
+        "n_independent": 2.1666666666666665,
+        "meets_target_lower_bound": false,
+        "cost_1.5x_p_pass_30": 0.24444444444444444
+      },
+      {
+        "span": [
+          "2023-08-29",
+          "2023-12-27"
+        ],
+        "n_windows": 44,
+        "p_pass_30": 0.0,
+        "lower_bound": 0.0,
+        "p_bust_30": 1.0,
+        "p_pass_60": 0.0,
+        "median_days": null,
+        "n_trades": 84,
+        "n_independent": 2.0,
+        "meets_target_lower_bound": false,
+        "cost_1.5x_p_pass_30": 0.0
+      },
+      {
+        "span": [
+          "2023-12-27",
+          "2024-04-25"
+        ],
+        "n_windows": 43,
+        "p_pass_30": 0.2558139534883721,
+        "lower_bound": 0.045255085819509266,
+        "p_bust_30": 0.37209302325581395,
+        "p_pass_60": 0.4186046511627907,
+        "median_days": 21.0,
+        "n_trades": 81,
+        "n_independent": 2.0,
+        "meets_target_lower_bound": false,
+        "cost_1.5x_p_pass_30": 0.20930232558139536
+      }
+    ],
+    "block_robustness": {
+      "n_blocks": 6,
+      "min": 0.0,
+      "median": 0.021739130434782608,
+      "share_blocks_ge_half_target": 0.0,
+      "note": "contiguous-block dispersion, not a full CPCV purge/embargo combinatorial run"
+    },
+    "holdout": null,
+    "forward": null,
+    "target_probability": 0.65
+  },
+  "verdict": "NOT_ESTABLISHED",
+  "conclusion": "The top discovery candidate does NOT establish a 30-day pass: Development P(pass<=30d) is 8.0%: below half the 65% target, so there is nothing worth validating.; The holdout overlaps a range already observed (bundled data after development: read by earlier experiments / sealed window (cannot be proven unread): 2024-07-01..2026-03-01). A window that was looked at before cannot be reused as independent validation.; No independent holdout: the 30-day claim cannot be established from this data. A forward test (or newer, unseen data) is required."
+}
