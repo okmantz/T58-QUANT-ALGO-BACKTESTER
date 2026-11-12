@@ -37,6 +37,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from app.backtest.risk import RiskConfig
+from app.data.inst import INST
 
 
 @dataclass(frozen=True)
@@ -157,7 +158,15 @@ _ALIASES: dict[str, str] = {"NASDAQ 100": "NAS100", "USATECHIDXUSD": "NAS100", "
                             "BRENT CRUDE": "BRENT", "ETHEREUM": "ETHUSD", "DOW JONES": "US30", "DJ30": "US30", "WS30": "US30",
                             "SPX": "SPX500", "SP500": "SPX500", "S&P 500 CFD": "SPX500", "RUSSELL 2000 CFD": "US2000"}
 
-KNOWN_INSTRUMENTS: dict[str, InstrumentSpec] = {spec.symbol: spec for spec in _SPECS}
+def _from_inst(spec: InstrumentSpec) -> InstrumentSpec:
+    """Commission and slippage come from the ONE cost table (``app.data.inst.INST``); the registry keeps only descriptive fields."""
+    i = INST.get(spec.symbol)
+    if i is None:
+        return spec
+    return replace(spec, default_commission_round_turn=i.comm_usd, default_slippage_ticks=i.slip_ticks)
+
+
+KNOWN_INSTRUMENTS: dict[str, InstrumentSpec] = {spec.symbol: _from_inst(spec) for spec in _SPECS}
 
 # RETAIL SPOT/CFD instruments for cross-market tests (added 2026-10-07). Kept OUT of KNOWN_INSTRUMENTS on
 # purpose: that registry means "known FUTURES contract" to the integrity check ($0-commission block,

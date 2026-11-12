@@ -21,6 +21,7 @@ so the orchestration is testable without a 20-minute run; the defaults call the 
 from __future__ import annotations
 
 import threading
+import logging
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -36,6 +37,8 @@ from app.discovery_engine.holdout import HoldoutBudget, split_three_way
 from app.discovery_engine.presets import Preset, apply_overrides, get_preset
 from app.discovery_engine.promotion import PromotionConfig, PromotionResult, run_promotion_sequence
 
+_log = logging.getLogger("t58.discovery_engine")
+
 
 @dataclass
 class EngineRequest:
@@ -43,6 +46,7 @@ class EngineRequest:
     df: pd.DataFrame
     risk: object
     prop_rules: object = None
+    honest_cfg: object = None                   # app.prop.thirty_day.ThirtyDayConfig: window / no time limit, DD type, target, daily loss, min days
     instrument: str = "unknown"
     timeframe: str = "unknown"
     families: object = None                     # None -> the preset's choice; "all" | "ready" | list[str]
@@ -118,8 +122,9 @@ def _rulebook_notes() -> list:
         if not rb.g0_rules_sheet().passed:
             out.append("Rulebook G0 (rules sheet) is still open, so a champion here is a LEAD, not a forward-test candidate, until the prop-firm rules are confirmed.")
         return out
-    except Exception:  # noqa: BLE001
-        return []
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("rulebook status unavailable: %s: %s", type(exc).__name__, exc, exc_info=True)
+        return [f"Rulebook status could not be read ({type(exc).__name__}: {exc})."]
 
 
 # ---------------------------------------------------------------------------------------------------------- family guard
@@ -149,12 +154,14 @@ def resolve_families(requested, preset: Preset, *, store=None) -> tuple[list, di
         try:
             from app.discovery.hypothesis import preregister_v13_families
             preregister_v13_families(store)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("could not pre-register v13 families: %s: %s", type(exc).__name__, exc, exc_info=True)
     for n in names:
         try:
             ok = is_preregistered(n, store)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("preregistration check failed for family %s: %s: %s", n, type(exc).__name__, exc, exc_info=True)
+            gated[n] = f"preregistration check failed ({type(exc).__name__}: {exc})"
             ok = False
         if ok:
             out.append(n)
@@ -177,11 +184,12 @@ class DiscoveryEngine:
         return build_steps(**kw)
 
     def promote(self, champions: list, *, dev_df, sealed_df, risk, frames=None, risks=None, pool_matrix=None, n_trials: int = 1,
-                cfg: PromotionConfig | None = None, budget: HoldoutBudget | None = None, loop: bool = False) -> list:
+                cfg: PromotionConfig | None = None, budget: HoldoutBudget | None = None, loop: bool = False,
+                prop_rules=None, honest_cfg=None) -> list:
         cfg = cfg or PromotionConfig()
         budget = budget or HoldoutBudget()
         steps = self._steps(dev_df=dev_df, sealed_df=sealed_df, risk=risk, frames=frames, risks=risks, pool_matrix=pool_matrix,
-                            n_trials=n_trials, cfg=cfg, holdout_budget=budget)
+                            n_trials=n_trials, cfg=cfg, holdout_budget=budget, prop_rules=prop_rules, honest_cfg=honest_cfg)
         out = []
         for c in champions:
             res = run_promotion_sequence(c, steps, cfg, family=c.get("family"))
@@ -222,6 +230,8 @@ class DiscoveryEngine:
 
         # champions: entry floor + provenance (the facade measures edge on the same dev slice the sequence reproduces on)
         champs = self._prepare_champions(out.champions, dev_gate, req, preset)
+        if getattr(self, "_eval_errors", None):
+            notes.append(f"{len(self._eval_errors)} champion(s) could not be backtested and were dropped: " + "; ".join(f"{cid}: {msg}" for cid, msg in self._eval_errors[:5]))
         if not champs:
             _rej = getattr(self, "_floor_rejects", [])
             if _rej:
@@ -241,7 +251,8 @@ class DiscoveryEngine:
             cfg = _dc.replace(req.promotion or PromotionConfig(), objective_mode=str(getattr(req, "objective_mode", "prop") or "prop"))
             budget = HoldoutBudget()
             res = self.promote(champs, dev_df=dev_gate, sealed_df=sealed, risk=req.risk, frames=req.frames, risks=req.risks,
-                               pool_matrix=out.pool_matrix, n_trials=ti.n_tests, cfg=cfg, budget=budget, loop=preset.loop)
+                               pool_matrix=out.pool_matrix, n_trials=ti.n_tests, cfg=cfg, budget=budget, loop=preset.loop,
+                               prop_rules=req.prop_rules, honest_cfg=getattr(req, 'honest_cfg', None))
             promotions = [r.to_dict() if hasattr(r, "to_dict") else r for r in res]
             # a loop-mode run FAILS when its stop-candidate fails any mandatory step
             if preset.loop and promotions and not promotions[0].get("passed"):
@@ -262,20 +273,23 @@ class DiscoveryEngine:
                     if c.get("candidate_id") and c.get("family"):
                         led.mark(scope, engine_key(req.timeframe, c["family"], c["candidate_id"]), "winner" if (pr or {}).get("passed") else "near_miss")
                 led.flush()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("search-ledger outcome marking failed: %s: %s", type(exc).__name__, exc, exc_info=True)
+                result.notes.append(f"Search-ledger outcomes were NOT recorded ({type(exc).__name__}: {exc}).")
         if req.register_retests:
             try:                                    # champions and near-misses are re-tested on newer data later; the lab is ranked by that record
                 from app.discovery_engine.retest import register_run
                 register_run(result, req.df, instrument=req.instrument)
-            except Exception:  # noqa: BLE001 -- bookkeeping never fails a run
-                pass
+            except Exception as exc:  # noqa: BLE001 -- bookkeeping does not fail a run, but it is reported
+                _log.warning("retest registration failed: %s: %s", type(exc).__name__, exc, exc_info=True)
+                result.notes.append(f"Champions were NOT registered for the automatic retest ({type(exc).__name__}: {exc}).")
         return result
 
     # --------------------------------------------------------------------------------------------------- champion prep
     def _prepare_champions(self, champions: list, dev_df, req: EngineRequest, preset: Preset) -> list:
-        from app.discovery_engine.engine_steps import edge_record, evaluate_spec, thirty_day_record
+        from app.discovery_engine.engine_steps import SpecEvaluationError, edge_record, evaluate_spec, thirty_day_record
         self._floor_rejects = []
+        self._eval_errors = []
         ranked = []
         for c in champions or []:
             c = dict(c)
@@ -284,7 +298,11 @@ class DiscoveryEngine:
                 continue
             trades = c.get("trades")
             if trades is None:
-                trades = evaluate_spec(spec, dev_df, req.risk, 1.0)
+                try:
+                    trades = evaluate_spec(spec, dev_df, req.risk, 1.0)
+                except SpecEvaluationError as exc:
+                    self._eval_errors.append((c.get("candidate_id"), str(exc)))
+                    continue
             sc = obj.score_edge(trades, spec)
             stats = {"total_trades": sc.n_trades, "profit_factor": getattr(sc, "profit_factor", 0.0), "mean_r": sc.mean_r, "t_stat": sc.t_stat}
             rec = edge_record(trades, spec)
@@ -292,9 +310,14 @@ class DiscoveryEngine:
             c["edge"] = rec
             # 30-day prop objective (2026-11-11): in prop mode every champion is also scored on P(pass <= 30 calendar days of purchase) under
             # the REQUEST'S prop rules (the dependence-aware lower bound is what ranks them). Never loosens a gate: floor / promotion unchanged.
-            c["thirty_day"] = (thirty_day_record(trades, req.risk, req.prop_rules, dev_df, label=str(c.get("candidate_id") or ""),
-                                                 instrument=req.instrument)
-                               if getattr(req, "objective_mode", "prop") != "net_profit" else None)
+            c["thirty_day"] = None
+            if getattr(req, "objective_mode", "prop") != "net_profit":
+                try:
+                    c["thirty_day"] = thirty_day_record(trades, req.risk, req.prop_rules, dev_df, label=str(c.get("candidate_id") or ""),
+                                                        instrument=req.instrument, cfg=getattr(req, "honest_cfg", None))
+                except Exception as exc:  # noqa: BLE001 -- recorded on the champion; the honest_eval gate then FAILS it with this message
+                    _log.warning("honest evaluation failed for %s: %s: %s", c.get("candidate_id"), type(exc).__name__, exc, exc_info=True)
+                    c["thirty_day"] = {"error": f"{type(exc).__name__}: {exc}"}
             if c.get("provenance") is None:
                 c["provenance"] = prov.capture(seed=req.seed, df=dev_df, config={"preset": preset.name, "overrides": req.overrides}, spec=spec,
                                                instrument=req.instrument, timeframe=req.timeframe, edge=rec).to_dict()
@@ -309,7 +332,7 @@ class DiscoveryEngine:
         def _rank(c):
             edge = -1e9 if c["edge_lb_r"] is None else c["edge_lb_r"]
             td = c.get("thirty_day")
-            return ((td["lower_bound"], td["p_pass_30"], edge) if td else (-1.0, -1.0, edge))
+            return ((td["lower_bound"], td["p_pass_30"], edge) if td and not td.get("error") else (-1.0, -1.0, edge))
         ranked.sort(key=_rank, reverse=True)
         eligible = [c for c in ranked if not c["floor_reasons"]]
         for c in ranked:
@@ -337,7 +360,8 @@ def _engine_ledger(req: EngineRequest):
         from app.search.ledger_search import scope_for
         from app.search.variant_ledger import get_ledger
         return get_ledger(), scope_for(req.instrument)
-    except Exception:  # noqa: BLE001 -- memory is a bonus
+    except Exception as exc:  # noqa: BLE001 -- memory is a bonus, but its absence is reported
+        _log.warning("search memory unavailable: %s: %s", type(exc).__name__, exc, exc_info=True)
         return None, ""
 
 
@@ -363,6 +387,7 @@ def _search_backend(req: EngineRequest, preset: Preset, families: list, df) -> B
             from app.search.ledger_search import fresh_space
             info = fresh_space(space, led, scope, req.timeframe, want)
         except Exception as exc:  # noqa: BLE001
+            _log.warning("fresh_space failed: %s: %s", type(exc).__name__, exc, exc_info=True)
             led.finish_run()
             raise
         if not space.candidates:
@@ -389,12 +414,13 @@ def _search_backend(req: EngineRequest, preset: Preset, families: list, df) -> B
                     with ResultsDB(wd / "search.db") as _db:
                         runs = _db.list_runs(limit=1)
                         rid = runs[0]["run_id"] if runs else None
-                except Exception:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001
+                    _log.warning("could not read the search run id: %s: %s", type(exc).__name__, exc, exc_info=True)
                     rid = None
                 n = record_outcomes(led, scope, req.timeframe, wd / "search.db", rid, space) if rid else 0
                 led.finish_run(tested=n)
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("recording search outcomes failed: %s: %s", type(exc).__name__, exc, exc_info=True)
     champs = _champions_from_db(wd / "search.db", summary.run_id)
     seen_ids = {c.get("candidate_id") for c in champs}
     champs += [c for c in extra_champs if c.get("candidate_id") not in seen_ids]
@@ -439,6 +465,7 @@ def _converge(req, preset, families, df, cfg, wd, first_summary, led, scope, not
             tracker.add_round(rows_of(db_path, summ.run_id), int(summ.total_candidates))
         notes.append(tracker.note())
     except Exception as exc:  # noqa: BLE001
+        _log.warning("convergence check stopped early: %s: %s", type(exc).__name__, exc, exc_info=True)
         notes.append(f"Convergence check stopped early ({type(exc).__name__}: {exc}); the first batch's result stands.")
     return extra_champs, extra_evals
 

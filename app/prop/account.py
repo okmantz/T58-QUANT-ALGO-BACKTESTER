@@ -435,6 +435,7 @@ class PropAccount:
 
         self.begin_day(cur)
         balance_before = self.balance
+        force_lock = False
 
         # floating pre-check from the trade's own excursion
         floating_basis_active = (self.dd_basis in ("floating", "eod")) or self.daily_loss_basis == "floating"
@@ -447,7 +448,16 @@ class PropAccount:
             if res == FAILED:
                 return FAILED
             if res == DAY_LOCKED:
-                return DAY_LOCKED
+                # 2026-11-11 FIX (lock_day booking bug): the trade's floating loss reached the daily limit, so the platform LIQUIDATES it at
+                # the daily floor and books that loss. This used to ``return DAY_LOCKED`` here, BEFORE the P&L was added to the balance and
+                # to the trailing-drawdown bookkeeping, so every stop-out larger than the daily limit was free (three -$1,314 days on a Lucid
+                # 50K left the balance at $50,000). The loss is now booked at the daily floor (never worse than the limit, whatever the
+                # trade's own P&L: a winner that dipped through the limit was liquidated at the limit too), and the normal realized checks
+                # below then run -- including the trailing-drawdown floor -- before the day is locked.
+                dfloor = self.daily_floor_equity(cur)
+                liq = (dfloor - balance_before) if dfloor is not None else pnl
+                pnl = min(0.0, liq)
+                force_lock = True
 
         self.balance += pnl
         self.daily_pnl[cur] = self.daily_pnl.get(cur, 0.0) + pnl
@@ -496,10 +506,14 @@ class PropAccount:
 
         # daily loss on the realized day P&L
         dll_limit = self.daily_limit_dollars(cur)
-        if self.daily_pnl[cur] <= -dll_limit:
+        if force_lock or self.daily_pnl[cur] <= -dll_limit:
             if r.daily_loss_action == "lock_day":
                 self.day_close[cur] = self.balance
                 self.locked_day = cur
+                # 2026-11-11: a locked day must still respect the trailing / static drawdown floor. The lock used to return first, so a
+                # day that lost its way through the max-loss line merely "locked" instead of failing the account.
+                if self.balance <= dd_floor:
+                    return self._fail(f"max_drawdown ({r.drawdown_type})", cur)
                 return DAY_LOCKED
             return self._fail("daily_loss_limit", cur)
 

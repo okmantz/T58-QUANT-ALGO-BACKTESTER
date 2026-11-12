@@ -79,10 +79,21 @@ class ExitResult:
     mfe_r: float              # >= 0
     reason: str
     exit_bar: int
+    cost_r: float = 0.0       # friction actually paid, in R: commission (every trade) + conditional slippage (entry, stop/market exit, limit target)
 
 
 def simulate_exit(o, h, l, c, atr, e: FrozenEntry, p: ExitPolicy, *, cost_points: float = 0.0, slippage_points: float = 0.0,
-                  ref_atr: float | None = None, median_atr: float | None = None) -> ExitResult:
+                  ref_atr: float | None = None, median_atr: float | None = None, entry_slip_points: float = 0.0,
+                  target_slip_points: float = 0.0) -> ExitResult:
+    """Replay one frozen entry through an exit policy.
+
+    Friction is split by what actually happens to the order (2026-11-11; before this a flat cost was charged on every trade):
+      * ``cost_points``        COMMISSION per round turn in price points, charged on every trade;
+      * ``entry_slip_points``  a market entry fills this much worse than the signal price (long: higher);
+      * ``slippage_points``    a stop-out / time-exit (market order) fills this much worse than its level; a stop that gaps THROUGH its
+                               level also fills at the bar's open, as before;
+      * ``target_slip_points`` a resting limit target fills at its price minus this much (0 for a normal limit order).
+    Winners that exit at a target therefore pay commission and the entry slippage only."""
     n = len(c)
     side = e.side
     entry = e.price
@@ -107,6 +118,7 @@ def simulate_exit(o, h, l, c, atr, e: FrozenEntry, p: ExitPolicy, *, cost_points
     mfe = 0.0
     last = min(n - 1, e.bar + (p.max_bars if p.max_bars is not None else n))
     exit_px, reason, exit_bar = None, "data_end", last
+    exit_slip = 0.0
     first_bar = e.bar if e.fills_at_open else e.bar + 1
     for i in range(first_bar, last + 1):
         if side > 0:
@@ -120,6 +132,7 @@ def simulate_exit(o, h, l, c, atr, e: FrozenEntry, p: ExitPolicy, *, cost_points
             through = (gap_open <= stop) if side > 0 else (gap_open >= stop)
             fill = gap_open if through else stop
             exit_px = fill - side * slippage_points
+            exit_slip = slippage_points
             mae = min(mae, adverse / stop_dist)
             reason, exit_bar = "stop", i
             break
@@ -128,7 +141,8 @@ def simulate_exit(o, h, l, c, atr, e: FrozenEntry, p: ExitPolicy, *, cost_points
         if target is not None:
             hit = (h[i] >= target) if side > 0 else (l[i] <= target)
             if hit:
-                exit_px = target
+                exit_px = target - side * target_slip_points
+                exit_slip = target_slip_points
                 reason, exit_bar = "target", i
                 break
         # 2) learn from this bar; changes apply to the next bar
@@ -146,11 +160,14 @@ def simulate_exit(o, h, l, c, atr, e: FrozenEntry, p: ExitPolicy, *, cost_points
             tr_stop = best - side * p.trail_atr * float(atr[i])
             stop = max(stop, tr_stop) if side > 0 else min(stop, tr_stop)
     if exit_px is None:
-        exit_px = c[last]
+        exit_px = c[last] - side * slippage_points           # a time / flatten exit is a market order
+        exit_slip = slippage_points
         reason = "time" if (p.max_bars is not None and last == e.bar + p.max_bars) else "data_end"
     gross_r = banked + remaining * side * (exit_px - entry) / stop_dist
-    net_r = gross_r - cost_points / stop_dist
-    return ExitResult(float(net_r), int(exit_bar - e.bar), float(mae), float(mfe), reason, int(exit_bar))
+    cost_r = (cost_points + entry_slip_points) / stop_dist          # commission + market-entry slippage; exit slippage is already in exit_px
+    net_r = gross_r - cost_r
+    return ExitResult(float(net_r), int(exit_bar - e.bar), float(mae), float(mfe), reason, int(exit_bar),
+                      float(cost_r + exit_slip / stop_dist))
 
 
 def _ledger_from_results(df_ts, entries: Sequence[FrozenEntry], results: Sequence[ExitResult], stop_dists: Sequence[float],

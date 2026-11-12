@@ -257,11 +257,13 @@ class DiscoveryMixin:
                 ser, _ = PnlStore.load_series(self._pool_store.path)
                 sample = list(ser.values())[:120]
                 n_trials = int(effective_trials(n_trials, sample, self.cfg.dsr_cluster_corr)["effective_trials"])
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"  pool matrix unavailable for the deflated-Sharpe step ({type(exc).__name__}: {exc}); the spread falls back to the candidate alone")
                 matrix = None
         return build_steps(
             dev_df=self.df, sealed_df=self.sealed_final_df, risk=self.risk, frames=self.promotion_frames, risks=self.promotion_risks,
             pool_matrix=matrix, n_trials=n_trials, cfg=PromotionConfig(), holdout_budget=self._holdout_budget,
+            prop_rules=getattr(self, "prop_rules", None), honest_cfg=getattr(self, "honest_cfg", None),
         )
 
     def run_promotion(self, candidate=None, prune: bool | None = None):

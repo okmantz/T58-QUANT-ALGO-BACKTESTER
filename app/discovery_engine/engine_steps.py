@@ -6,8 +6,10 @@
 from __future__ import annotations
 
 import atexit
+import logging
 import shutil
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -16,7 +18,14 @@ import pandas as pd
 from app.discovery_engine import objective as obj
 from app.discovery_engine import provenance as prov
 from app.discovery_engine.pool_stats import daily_series_from_trades
-from app.discovery_engine.promotion import PromotionConfig, StepResult, Steps, deflated_step, pooled_step, sealed_step
+from app.discovery_engine.promotion import PromotionConfig, StepResult, Steps, deflated_step, honest_eval_step, pooled_step, sealed_step
+
+
+log = logging.getLogger("t58.discovery_engine")
+
+
+class SpecEvaluationError(RuntimeError):
+    """A candidate spec could not be backtested. Raised (never swallowed) so the failure shows up in the promotion detail / run notes."""
 
 
 _TMP_DIRS: list = []
@@ -59,14 +68,16 @@ def _strategy(spec: dict):
 
 
 def evaluate_spec(spec: dict, df: pd.DataFrame, risk, cost_multiplier: float = 1.0):
-    """Backtest ``spec`` on ``df`` at ``cost_multiplier`` x costs. Returns the trade list ([] on any failure -- no evidence is not a pass)."""
+    """Backtest ``spec`` on ``df`` at ``cost_multiplier`` x costs and return the trade list. A failing backtest raises
+    ``SpecEvaluationError`` (logged with its traceback): an empty list means the strategy genuinely took no trades."""
     from app.backtest.engine import run_backtest
     from app.optimize.two_stage import stress_risk
     try:
         rk = stress_risk(risk, cost_multiplier) if cost_multiplier and cost_multiplier != 1.0 else risk
         return list(run_backtest(df, _strategy(spec), rk, lookahead_check="skip").trades)
-    except Exception:  # noqa: BLE001
-        return []
+    except Exception as exc:  # noqa: BLE001
+        log.warning("evaluate_spec failed (cost x%s): %s: %s", cost_multiplier, type(exc).__name__, exc, exc_info=True)
+        raise SpecEvaluationError(f"{type(exc).__name__}: {exc}") from exc
 
 
 def edge_record(trades, spec: dict | None = None) -> dict:
@@ -76,7 +87,7 @@ def edge_record(trades, spec: dict | None = None) -> dict:
             "n_trades": sc.n_trades, "t_stat": sc.t_stat}
 
 
-def thirty_day_record(trades, risk, rules, df, *, label: str = "", instrument: str = "") -> dict | None:
+def thirty_day_record(trades, risk, rules, df, *, label: str = "", instrument: str = "", cfg=None) -> dict | None:
     """Score a champion's trades on the 30-day prop objective: P(pass <= 30 calendar days of purchase) under ``rules``, with the
     dependence-aware 95% interval (``app.prop.thirty_day.evaluate_thirty_day``). Returns a JSON-safe dict, or ``None`` when it cannot be
     measured (no trades, no rules, a ledger that cannot be built). Dollars are the champion's own account dollars.
@@ -85,36 +96,37 @@ def thirty_day_record(trades, risk, rules, df, *, label: str = "", instrument: s
     so (``excursions_proxy``) -- it is optimistic, never silent."""
     if rules is None or not trades:
         return None
-    try:
-        from app.prop.thirty_day import ExcursionsMissingError, ThirtyDayConfig, TradeLedger, evaluate_thirty_day, rank_key
-        led = TradeLedger.from_trades(list(trades), risk, strategy=label, instrument=instrument)
-        if not len(led):
-            return None
-        ts = pd.to_datetime(df["timestamp"]) if df is not None and "timestamp" in getattr(df, "columns", []) else None
-        d0 = ts.iloc[0] if ts is not None and len(ts) else None
-        d1 = ts.iloc[-1] if ts is not None and len(ts) else None
-        proxy = False
-        try:
-            res = evaluate_thirty_day(led, rules, data_start=d0, data_end=d1, cfg=ThirtyDayConfig(), with_sensitivity=False)
-        except ExcursionsMissingError:
-            proxy = True
-            res = evaluate_thirty_day(led, rules, data_start=d0, data_end=d1, cfg=ThirtyDayConfig(allow_proxy_excursions=True), with_sensitivity=False)
-        notes = list(res.notes)
-        acct = float(getattr(rules, "account_size", 0.0) or 0.0)
-        bal = float(getattr(risk, "initial_balance", 0.0) or 0.0)
-        if acct > 0 and bal > 0 and abs(acct - bal) / acct > 0.01:
-            notes.append(f"the strategy was sized on a ${bal:,.0f} account but scored on a ${acct:,.0f} evaluation: dollars are NOT rescaled.")
-        return {"p_pass_30": res.p_pass_30, "lower_bound": res.lower_bound, "upper_bound": float(res.interval.get("upper", 1.0)),
-                "p_bust_30": res.p_bust_30, "p_pass_60": res.p_pass_60, "median_days_to_pass": res.median_days_to_pass,
-                "n_windows": res.n_windows, "n_independent": float(res.interval.get("n_independent", 0.0)),
-                "meets_target_lower_bound": bool(res.meets_target_lower_bound), "target_probability": res.target_probability,
-                "excursions_proxy": proxy, "rank_key": [float(x) for x in rank_key(res)], "notes": notes}
-    except Exception:  # noqa: BLE001 -- the 30-day record is extra evidence; it never fails a run
+    from app.prop.thirty_day import ExcursionsMissingError, ThirtyDayConfig, TradeLedger, evaluate_thirty_day, rank_key
+    base_cfg = cfg or ThirtyDayConfig()
+    led = TradeLedger.from_trades(list(trades), risk, strategy=label, instrument=instrument)
+    if not len(led):
         return None
+    ts = pd.to_datetime(df["timestamp"]) if df is not None and "timestamp" in getattr(df, "columns", []) else None
+    d0 = ts.iloc[0] if ts is not None and len(ts) else None
+    d1 = ts.iloc[-1] if ts is not None and len(ts) else None
+    proxy = False
+    try:
+        res = evaluate_thirty_day(led, rules, data_start=d0, data_end=d1, cfg=base_cfg, with_sensitivity=False)
+    except ExcursionsMissingError:
+        proxy = True
+        res = evaluate_thirty_day(led, rules, data_start=d0, data_end=d1, cfg=replace(base_cfg, allow_proxy_excursions=True),
+                                  with_sensitivity=False)
+    notes = list(res.notes)
+    acct = float(getattr(rules, "account_size", 0.0) or 0.0)
+    bal = float(getattr(risk, "initial_balance", 0.0) or 0.0)
+    if acct > 0 and bal > 0 and abs(acct - bal) / acct > 0.01:
+        notes.append(f"the strategy was sized on a ${bal:,.0f} account but scored on a ${acct:,.0f} evaluation: dollars are NOT rescaled.")
+    return {"p_pass_30": res.p_pass_30, "lower_bound": res.lower_bound, "upper_bound": float(res.interval.get("upper", 1.0)),
+            "p_bust_30": res.p_bust_30, "p_pass_60": res.p_pass_60, "median_days_to_pass": res.median_days_to_pass,
+            "n_windows": res.n_windows, "n_independent": float(res.interval.get("n_independent", 0.0)),
+            "meets_target_lower_bound": bool(res.meets_target_lower_bound), "target_probability": res.target_probability,
+            "horizon_days": res.horizon_days, "p_paid": res.p_paid, "mean_payout_usd": res.mean_payout_usd,
+            "excursions_proxy": proxy, "rank_key": [float(x) for x in rank_key(res)], "notes": notes}
 
 
-def per_market_r(spec: dict, frames: dict, risks: dict, cost_multiplier: float = 2.0) -> dict:
-    """Run the candidate's FIXED config on every market -> {symbol: (R list, day list)}. A market that fails is reported empty."""
+def per_market_r(spec: dict, frames: dict, risks: dict, cost_multiplier: float = 2.0, errors: dict | None = None) -> dict:
+    """Run the candidate's FIXED config on every market -> {symbol: (R list, day list)}. A market whose backtest fails is reported
+    empty AND its error is recorded in ``errors`` (and logged), so it shows up in the pooled step's detail instead of vanishing."""
     from app.optimize.two_stage import trade_r_and_days
     out = {}
     for sym, df in (frames or {}).items():
@@ -122,14 +134,20 @@ def per_market_r(spec: dict, frames: dict, risks: dict, cost_multiplier: float =
         if df is None or risk is None or not len(df):
             out[sym] = ([], [])
             continue
-        tr = evaluate_spec(spec, df, risk, cost_multiplier)
+        try:
+            tr = evaluate_spec(spec, df, risk, cost_multiplier)
+        except SpecEvaluationError as exc:
+            if errors is not None:
+                errors[sym] = str(exc)
+            out[sym] = ([], [])
+            continue
         out[sym] = trade_r_and_days(tr) if tr else ([], [])
     return out
 
 
 def build_steps(*, dev_df: pd.DataFrame, sealed_df: pd.DataFrame | None, risk, frames: dict | None = None, risks: dict | None = None,
                 pool_matrix: np.ndarray | None = None, n_trials: int = 1, cfg: PromotionConfig | None = None,
-                holdout_budget=None, null_runner=None, sealed_ledger=None) -> Steps:
+                holdout_budget=None, null_runner=None, sealed_ledger=None, prop_rules=None, honest_cfg=None) -> Steps:
     """Wire the five steps to the real engine.
 
     ``frames`` / ``risks``: {SYMBOL: DataFrame} / {SYMBOL: RiskConfig} for the pooled test (the candidate's own market should be one
@@ -165,6 +183,18 @@ def build_steps(*, dev_df: pd.DataFrame, sealed_df: pd.DataFrame | None, risk, f
             detail += f" Pending: {'; '.join(pending)}."
         return StepResult("rulebook_g3", not failing, detail=detail, data={**(g.data or {}), "pending": pending, "failing": [f.name for f in failing]})
 
+    def honest_eval(c, ctx):
+        """THE GATE: honest rule simulation under the request's prop rules must clear ``cfg.honest_min_lower_bound``."""
+        if str(getattr(cfg, "objective_mode", "prop")) == "net_profit":
+            return StepResult("honest_eval", True, skipped=True, detail="not applicable: net-profit objective (no prop rules are applied)")
+        td = c.get("thirty_day")
+        if td is None:
+            if prop_rules is None:
+                return StepResult("honest_eval", False, detail="no prop rules were supplied, so the candidate cannot be honestly evaluated")
+            trades = evaluate_spec(c.get("spec"), dev_df, risk, 1.0)
+            td = thirty_day_record(trades, risk, prop_rules, dev_df, label=str(c.get("candidate_id") or ""), cfg=honest_cfg)
+        return honest_eval_step(td, cfg)
+
     def sequence_deflated(c, ctx):
         trades = evaluate_spec(c.get("spec"), dev_df, risk, 1.0)
         s = daily_series_from_trades(trades, unit="r")
@@ -181,8 +211,13 @@ def build_steps(*, dev_df: pd.DataFrame, sealed_df: pd.DataFrame | None, risk, f
         return StepResult("null_gate", bool(r.passed), detail=r.render(), data=r.to_dict())
 
     def pooled_edge(c, ctx):
-        per = per_market_r(c.get("spec"), frames or {}, risks or {}, cfg.cost_multiplier)
-        return pooled_step(per, cfg)
+        errs: dict = {}
+        per = per_market_r(c.get("spec"), frames or {}, risks or {}, cfg.cost_multiplier, errors=errs)
+        r = pooled_step(per, cfg)
+        if errs:
+            r.detail += " | backtest errors: " + "; ".join(f"{k}: {v}" for k, v in errs.items())
+            r.data["market_errors"] = dict(errs)
+        return r
 
     def sealed_slice(c, ctx):
         if sealed_df is None or not len(sealed_df):
@@ -205,5 +240,5 @@ def build_steps(*, dev_df: pd.DataFrame, sealed_df: pd.DataFrame | None, risk, f
         rs, days = trade_r_and_days(tr) if tr else ([], [])
         return sealed_step(rs, days, tied=ctx["tied"], cfg=cfg, looks=looks)
 
-    return Steps(reproduction=reproduction, rulebook_g3=rulebook_g3, sequence_deflated=sequence_deflated, null_gate=null_gate,
+    return Steps(reproduction=reproduction, rulebook_g3=rulebook_g3, honest_eval=honest_eval, sequence_deflated=sequence_deflated, null_gate=null_gate,
                  pooled_edge=pooled_edge, sealed_slice=sealed_slice)

@@ -1094,6 +1094,72 @@ try:
 except NameError:
     pass
 
+# ---------------------------------------------------------------------------
+# 2026-11-11 rules-report pass (owner-compiled "Prop Firm Rules Report", verified 2026-11-11). Applied AFTER the 2026-10-17 corrections so the
+# report's figures win where they differ. Fields not listed matched the report. Rows the report marks [secondary] stay unstamped
+# (verified_on is not touched): this layer corrects the RULE FIELDS only, it does not mint a verification stamp.
+# ---------------------------------------------------------------------------
+_RULE_CORRECTIONS_2026_11_11: dict[str, tuple[dict, str]] = {
+    "apex_25k_eod": ({"daily_loss_action": "lock_day", "max_eval_calendar_days": 30, "min_winning_day_profit": 100.0},
+        "25K EOD Trail: $1,500 target, $1,000 EOD trailing, $500 DLL is SOFT (lock the day; was 'fail'), 30 calendar days to pass (was none), payout gate 5 winning days >= $100 (was $250), "
+        "50% PA consistency, 4 contracts. Standard eval $490 + $109 activation [secondary]."),
+    "apex_25k_intraday": ({"max_eval_calendar_days": 30, "min_winning_day_profit": 100.0},
+        "25K Intraday Trail: $1,500 target, $1,000 trailing incl. unrealized, no evaluation DLL, 30 calendar days (was none), payout gate 5 winning days >= $100 (was $200)."),
+    "lucid_25k": ({"payout_threshold_pct": 1.0, "required_buffer_pct": 4.4, "payout_cap_dollars": 1000.0},
+        "LucidPro 25K funded cycle: $250 profit goal + $1,100 buffer above the starting balance before a payout, $1,000 cap per payout [secondary]; 40% funded consistency, 90/10."),
+    "lucid_50k": ({"payout_threshold_pct": 1.0, "required_buffer_pct": 4.2},
+        "LucidPro 50K funded cycle: $500 profit goal + $2,100 buffer [secondary]; 40% funded consistency, 90/10, $500 minimum payout."),
+    "lucid_100k": ({"payout_threshold_pct": 0.75, "required_buffer_pct": 3.1},
+        "LucidPro 100K funded cycle: $750 profit goal + $3,100 buffer [secondary]; 40% funded consistency, 90/10."),
+    "lucid_flex_25k": ({"consistency_rule_pct": 40.0, "min_trading_days": 3, "winning_days_for_payout": 5, "min_winning_day_profit": 100.0, "payout_cap_dollars": 1000.0},
+        "LucidFlex base configuration (the paid add-on gives 50% consistency / 2 days): eval consistency 40% (was 50%), 3 minimum days (was 1), DLL ON $600 soft; funded payout gate 5 profitable days >= $100, "
+        "no funded consistency, up to 50% of cycle profit, $1,000 cap [secondary]."),
+    "lucid_flex_50k": ({"consistency_rule_pct": 40.0, "min_trading_days": 3, "winning_days_for_payout": 5, "min_winning_day_profit": 150.0},
+        "LucidFlex 50K base configuration: eval consistency 40% (was 50%), 3 minimum days (was 1), DLL ON $1,200 soft; funded payout gate 5 profitable days >= $150, no funded consistency [secondary]."),
+    "lucid_flex_100k": ({"daily_loss_limit_pct": 1.8, "consistency_rule_pct": 40.0, "min_trading_days": 3, "winning_days_for_payout": 5, "min_winning_day_profit": 200.0},
+        "LucidFlex 100K base configuration: DLL $1,800 = 1.8% (was 2.4%), eval consistency 40% (was 50%), 3 minimum days (was 1); funded payout gate 5 profitable days >= $200, no funded consistency [secondary]."),
+    "fundednext_25k": ({"funded_consistency_rule_pct": None},
+        "Standard (80%) reward path has NO consistency rule; the 40% best-day rule belongs only to the On-Demand (90%) path (was applied to funded payouts here). EAs allowed only below $50k."),
+    "fundednext_100k": ({"funded_consistency_rule_pct": None},
+        "Same Stellar 2-Step table: 8% / 5% targets, 5% daily, 10% static, 5 min days; the 40% rule is On-Demand only (funded gate removed). Manual trading only at $50k+."),
+    "the5ers_20k": ({"daily_loss_limit_pct": 5.0, "max_drawdown_pct": 10.0},
+        "High Stakes program pages: daily loss 5% (<= $25k) / 4% ($50k-$100k), max loss 10% / 8%, target 10% / 5%, 3 profitable days per step. The older 3% figure is UNVERIFIED and superseded. "
+        "$20k is not a published size (2.5k/5k/10k/25k/50k/100k): the <= $25k tier is applied as a proxy."),
+    "the5ers_100k": ({"daily_loss_limit_pct": 4.0, "max_drawdown_pct": 8.0},
+        "High Stakes $100k: target 10% / 5%, daily loss 4% ($4,000), static max loss 8% ($8,000) (were 3% / 10%), 3 profitable days per step."),
+    "atlas_funded_1step_100k": ({"evaluation_profit_target_pct": 11.0, "min_trading_days": 5},
+        "CONFLICT kept visible: Atlas's official blog gives an 11% target and 5 minimum days (each with >= 1% profit); the 2026-10-17 note used 10% / 3 days. The stricter official-blog figures are modelled; "
+        "daily 4% / max 7% static agree. The $100K fee ($342 blog vs $538) is unresolved."),
+    "futures_desk_50k": ({"min_trading_days": 5, "consistency_rule_pct": 20.0, "daily_loss_action": "lock_day"},
+        "Static track $50k: $4,000 (8%) target, $2,000 static drawdown, $800 SOFT daily limit (40% of drawdown; pauses the day), 20% evaluation consistency (was none), 5 minimum days (was 7), no time limit, "
+        "daily payouts, 80% split. One secondary source says Topstep acquired the firm on 2026-04-01: re-confirm it still sells."),
+    "e8_one_100k": ({},
+        "E8 One 6% configuration re-checked: 9% target, 4% daily, 6% TRAILING (dynamic, closed profits, locks at the start balance), no minimum days, 40% consistency only on the funded account -- matches."),
+    "e8_one_25k": ({}, "E8 One 6% configuration scaled to $25k: 9% / 4% / 6% trailing, no minimum days (prices $188)."),
+    "topstep_50k": ({}, "Re-checked: 6% target, EOD trailing MLL locking at the start balance, 55% Combine consistency, 5 minis, 2-day minimum, XFA 90/10 (40% on the Consistency path) -- matches."),
+    "topstep_100k": ({}, "Re-checked: 6% target, $3,000 EOD trailing MLL, 55% consistency, 10 minis -- matches."),
+    "ftmo_10k": ({}, "2-Step re-checked: 10% target, 5% daily, 10% static, 4 minimum days, no time limit, no consistency, 80% split -- matches."),
+    "ftmo_25k": ({}, "2-Step re-checked (EUR 250 fee): 10% / 5% / 10% static, 4 minimum days -- matches."),
+    "ftmo_100k": ({}, "2-Step re-checked -- matches."),
+    "ftmo_200k": ({}, "2-Step re-checked -- matches."),
+    "funderpro_one_phase_100k": ({}, "One Phase $100k re-checked: 10% target, 3% daily, 6% static, 40-45% best-day consistency -- matches. Minimum days (none vs 5) is UNVERIFIED; none is modelled."),
+    "apex_50k_eod": ({}, "Apex 4.0 table re-checked -- matches (6% target, $2,000 EOD trailing, $1,000 soft DLL, 30 days, 50% PA consistency)."),
+    "apex_50k_intraday": ({}, "Apex 4.0 table re-checked -- matches."),
+    "apex_100k_eod": ({}, "Apex 4.0 table re-checked -- matches."),
+    "apex_100k_intraday": ({}, "Apex 4.0 table re-checked -- matches."),
+}
+for _p in PROP_FIRM_PRESETS:
+    _c = _RULE_CORRECTIONS_2026_11_11.get(_p.key)
+    if _c:
+        for _f, _v in _c[0].items():
+            object.__setattr__(_p, _f, _v)
+        object.__setattr__(_p, "source_note", ((_p.source_note + " ") if _p.source_note else "") + "[2026-11-11 rules report] " + _c[1])
+del _p
+try:
+    del _c, _f, _v
+except NameError:
+    pass
+
 # 2026-10 audit: verification stamps. Only rows whose own source_note records a direct check of the
 # firm's page are stamped; everything else stays unverified (verified_on == "") and is therefore NOT
 # READY-eligible until someone checks it and adds a row here.
@@ -1460,6 +1526,30 @@ _FEE_CORRECTIONS = {
 for _k, _kw in _FEE_CORRECTIONS.items():
     if _k in FIRM_FEES:
         FIRM_FEES[_k] = _dc.replace(FIRM_FEES[_k], date_checked="2026-10-17", **_kw)
+del _k, _kw
+
+# 2026-11-11 rules report (fees; every row is [secondary] unless the report says otherwise -- confirm at checkout). Apex 4.0 pays a flat 100% split.
+_FEE_CORRECTIONS_2026_11_11 = {
+    "apex_25k_eod": dict(challenge_price=490.0, activation_fee=109.0, profit_split_pct=100.0),
+    "apex_25k_intraday": dict(challenge_price=167.0, activation_fee=89.0, profit_split_pct=100.0),
+    "apex_50k_eod": dict(challenge_price=590.0, activation_fee=129.0, profit_split_pct=100.0),
+    "apex_50k_intraday": dict(challenge_price=249.0, activation_fee=99.0, profit_split_pct=100.0),
+    "apex_100k_eod": dict(challenge_price=1190.0, activation_fee=139.0, profit_split_pct=100.0),
+    "apex_100k_intraday": dict(challenge_price=790.0, activation_fee=129.0, profit_split_pct=100.0),
+    "lucid_25k": dict(challenge_price=108.0, reset_price=75.0),
+    "lucid_50k": dict(challenge_price=172.0, reset_price=120.0),
+    "lucid_flex_25k": dict(challenge_price=65.0, reset_price=45.0),
+    "lucid_flex_50k": dict(challenge_price=115.0),
+    "lucid_flex_100k": dict(challenge_price=215.0),
+    "e8_one_25k": dict(challenge_price=188.0),
+    "ftmo_25k": dict(challenge_price=round(250 * 1.15682, 2), reset_price=round(250 * 1.15682, 2)),
+    "the5ers_100k": dict(challenge_price=405.0),
+}
+for _k, _kw in _FEE_CORRECTIONS_2026_11_11.items():
+    if _k in FIRM_FEES:
+        _old = FIRM_FEES[_k]
+        FIRM_FEES[_k] = _dc.replace(_old, date_checked="2026-11-11",
+                                    notes=(_old.notes + " " if _old.notes else "") + "[2026-11-11 rules report] list price before promo codes; secondary source -- confirm at checkout.", **_kw)
 del _k, _kw
 
 

@@ -26,15 +26,24 @@ import pandas as pd
 from app.prop.feasibility import screening_upper_bound
 from app.prop.simulator import PropRules
 from app.prop.thirty_day import ThirtyDayConfig, ThirtyDayResult, TradeLedger, evaluate_thirty_day, rank_key
+from app.data.inst import INST
+from app.data.roll_handling import ROLL_POLICIES, back_adjust, detect_roll_bars, roll_session_dates, session_ordinals
 from app.research.exit_lab import ExitPolicy, FrozenEntry, atr_series, simulate_exit
 
-# micro-contract point value ($/point), round-turn friction in points (spread/slippage + commission), a conservative default table
-INSTRUMENTS = {
-    "NQ": {"micro_pv": 2.0, "cost_points": 1.0, "slip_points": 0.5},
-    "ES": {"micro_pv": 5.0, "cost_points": 0.7, "slip_points": 0.25},
-    "GC": {"micro_pv": 10.0, "cost_points": 0.3, "slip_points": 0.1},
-    "CL": {"micro_pv": 100.0, "cost_points": 0.03, "slip_points": 0.01},
-}
+def _scanner_table() -> dict:
+    """The scanner's per-instrument view, DERIVED from the one cost table (``app.data.inst.INST``) -- no numbers live here.
+    ``cost_points`` is the round-turn COMMISSION per MICRO contract in points; slippage is separate and conditional on order type."""
+    out = {}
+    for mini_sym in ("NQ", "ES", "GC", "CL"):
+        mini = INST[mini_sym]
+        micro = INST[mini.micro]
+        out[mini_sym] = {"mini": mini_sym, "micro": mini.micro, "mini_pv": mini.pv, "micro_pv": micro.pv, "tick": mini.tick,
+                         "cost_points": micro.comm_points, "mini_cost_points": mini.comm_points, "slip_points": mini.slip_points,
+                         "entry_slip_points": mini.entry_slip_points, "target_slip_points": mini.target_slip_points}
+    return out
+
+
+INSTRUMENTS = _scanner_table()
 # A mini future is 10 micros (NQ/ES/GC/CL alike). ``PropRules.max_contracts`` (and every preset, e.g. Lucid 50K "4 mini / 40 micro") counts MINI
 # contracts, so the micro-equivalent cap is ``max_contracts * MICROS_PER_MINI``. Before 2026-11-11 the scanner treated it as a micro count,
 # i.e. it silently sized at one tenth of the allowed size.
@@ -68,6 +77,9 @@ class ScanResult:
     net_expectancy_r: float
     feasibility_upper_bound: float
     result: ThirtyDayResult | None
+    # stress mode: {slip_ticks: {"net_expectancy_r", "p_pass_30", "lower_bound", "passed"}}; ``trusted`` = passed at EVERY stress level
+    stress: dict = field(default_factory=dict)
+    trusted: bool = False
 
     def to_dict(self) -> dict:
         r = self.result
@@ -75,7 +87,8 @@ class ScanResult:
                 "trades_per_30d": round(self.trades_per_30d, 2), "win_rate": round(self.win_rate, 3), "payoff_r": round(self.payoff_r, 3),
                 "net_expectancy_r": round(self.net_expectancy_r, 4), "feasibility_upper_bound": round(self.feasibility_upper_bound, 3),
                 "p_pass_30": None if r is None else r.p_pass_30, "lower_bound": None if r is None else r.lower_bound,
-                "p_bust_30": None if r is None else r.p_bust_30, "median_days": None if r is None else r.median_days_to_pass}
+                "p_bust_30": None if r is None else r.p_bust_30, "median_days": None if r is None else r.median_days_to_pass,
+                "trusted": self.trusted, "stress": {str(k): v for k, v in self.stress.items()}}
 
 
 @dataclass
@@ -88,6 +101,10 @@ class ScanReport:
 
     def top(self, k: int = 10) -> list:
         return self.results[:k]
+
+    def trusted(self) -> list:
+        """Cells that passed at EVERY stress slippage level (the only ones worth carrying forward)."""
+        return [r for r in self.results if r.trusted]
 
     def to_dict(self) -> dict:
         return {"n_trials": self.n_trials, "discovery_end": self.discovery_end, "notes": self.notes,
@@ -310,18 +327,38 @@ def _flatten_limits(bars: pd.DataFrame, flatten_ny_min: int) -> tuple:
 
 
 def build_ledger(bars: pd.DataFrame, atr: np.ndarray, entries: Sequence[FrozenEntry], policy: ExitPolicy, instrument: str, *,
-                 risk_usd: float, max_contracts: int, label: str, flatten_time_ct: str | None = None) -> tuple:
-    """Size in whole micro contracts (floor), skip what cannot be sized, replay the exit, return ``(ledger, n_skipped, r_list)``.
+                 risk_usd: float, max_contracts: int, label: str, flatten_time_ct: str | None = None, sizing: str = "auto",
+                 slip_ticks: float | None = None, roll_policy: str = "exclude", roll_days: set | None = None) -> tuple:
+    """Size against a fixed dollar risk, skip what cannot be sized, replay the exit, return ``(ledger, n_skipped, r_list)``.
+
+    Sizing (``sizing="auto"``, 2026-11-11): trade the MINI when at least one whole mini fits the risk budget
+    (``floor(risk / (stop * mini_pv)) >= 1``, e.g. 1 NQ when the stop is ~12 points or less at $250 risk), because a mini costs far less
+    commission per point of risk than ten micros ($4.78 vs $13.20 for NQ); otherwise trade whole micros. ``sizing="micro"`` is micros only
+    (the pre-2026-11-11 behaviour). ``max_contracts`` is the firm's MINI limit; the micro cap is ``max_contracts * MICROS_PER_MINI``.
+
+    Friction comes from the ONE cost table (``app.data.inst.INST``): commission on every trade (per contract actually traded), market-entry
+    slippage ``slip_ticks`` (default 1 tick), stop-out / time-exit slippage ``slip_ticks`` plus a gap-through fill at the open, and 0 slippage
+    on a limit target. ``slip_ticks`` overrides the table's market-order slippage (used by stress mode).
 
     Realism rules (2026-11-11 audit):
-      * ``max_contracts`` is the firm's MINI-contract limit; the cap in micro-equivalents is ``max_contracts * MICROS_PER_MINI``;
       * ``flatten_time_ct`` ("HH:MM" Chicago, e.g. a preset's ``flatten_time_ct``): no position is held past the flatten time of its own
         futures session -- an exit that would run later is replayed on the bars up to the last pre-flatten bar and closed at its close,
         and an entry that would open after the flatten time is skipped;
-      * ONE position at a time: an entry whose bar is not after the previous trade's exit bar is skipped.
-    ``n_skipped`` counts every skipped signal (cannot size, after flatten, or overlapping an open position)."""
+      * ONE position at a time: an entry whose bar is not after the previous trade's exit bar is skipped;
+      * ``roll_policy="exclude"``: entries on a continuous-contract ROLL session are skipped (the roll jump is not tradable P&L and
+        contaminates gap logic); ``roll_days`` supplies the session ordinals (detected from ``bars`` when omitted).
+    ``n_skipped`` counts every skipped signal (cannot size, after flatten, overlapping a position, or on a roll session)."""
+    if sizing not in ("auto", "micro"):
+        raise ValueError(f"sizing must be 'auto' or 'micro', got {sizing!r}")
+    if roll_policy not in ROLL_POLICIES:
+        raise ValueError(f"roll_policy must be one of {ROLL_POLICIES}, got {roll_policy!r}")
     spec = INSTRUMENTS[instrument]
-    pv, cost_pts, slip = spec["micro_pv"], spec["cost_points"], spec["slip_points"]
+    micro_pv, mini_pv = spec["micro_pv"], spec["mini_pv"]
+    micro_cost_pts, mini_cost_pts = spec["cost_points"], spec["mini_cost_points"]
+    tick = spec["tick"]
+    slip = spec["slip_points"] if slip_ticks is None else float(slip_ticks) * tick
+    entry_slip = spec["entry_slip_points"] if slip_ticks is None else float(slip_ticks) * tick
+    tgt_slip = spec["target_slip_points"]
     cap_micros = int(max(0, max_contracts)) * MICROS_PER_MINI
     o, h, l, c = (bars[k].to_numpy(float) for k in ("open", "high", "low", "close"))
     ref_atr = float(np.nanmedian(atr))
@@ -329,6 +366,11 @@ def build_ledger(bars: pd.DataFrame, atr: np.ndarray, entries: Sequence[FrozenEn
     allowed = run_end = None
     if flat_min is not None and len(bars):
         allowed, run_end = _flatten_limits(bars, flat_min)
+    sess = roll_set = None
+    if roll_policy == "exclude" and len(bars):
+        roll_set = roll_days if roll_days is not None else roll_session_dates(bars, detect_roll_bars(bars, instrument))
+        if roll_set:
+            sess = session_ordinals(bars)
     et, xt, pnl, mae, mfe, cost, risk, side, rs = [], [], [], [], [], [], [], [], []
     skipped = 0
     last_exit_bar = -1
@@ -340,24 +382,36 @@ def build_ledger(bars: pd.DataFrame, atr: np.ndarray, entries: Sequence[FrozenEn
         if allowed is not None and not allowed[e.bar]:   # would open after the flatten time
             skipped += 1
             continue
-        n_c = int(min(cap_micros, math.floor(risk_usd / (e.stop_dist * pv)))) if e.stop_dist > 0 else 0
+        if sess is not None and int(sess[e.bar]) in roll_set:   # roll session: the gap is a splice artefact
+            skipped += 1
+            continue
+        n_c = 0
+        pv, cost_pts = micro_pv, micro_cost_pts
+        if e.stop_dist > 0:
+            if sizing == "auto":
+                n_mini = int(min(max(0, max_contracts), math.floor(risk_usd / (e.stop_dist * mini_pv))))
+                if n_mini >= 1:
+                    n_c, pv, cost_pts = n_mini, mini_pv, mini_cost_pts
+            if n_c < 1:
+                n_c = int(min(cap_micros, math.floor(risk_usd / (e.stop_dist * micro_pv))))
         if n_c < 1:
             skipped += 1
             continue
+        kw = dict(cost_points=cost_pts, slippage_points=slip, entry_slip_points=entry_slip, target_slip_points=tgt_slip, ref_atr=ref_atr)
         if run_end is not None:
             stop_ix = int(run_end[e.bar]) + 1            # replay only up to (and including) the last pre-flatten bar
-            r = simulate_exit(o[:stop_ix], h[:stop_ix], l[:stop_ix], c[:stop_ix], atr[:stop_ix], e, policy, cost_points=cost_pts,
-                              slippage_points=slip, ref_atr=ref_atr)
+            r = simulate_exit(o[:stop_ix], h[:stop_ix], l[:stop_ix], c[:stop_ix], atr[:stop_ix], e, policy, **kw)
         else:
-            r = simulate_exit(o, h, l, c, atr, e, policy, cost_points=cost_pts, slippage_points=slip, ref_atr=ref_atr)
+            r = simulate_exit(o, h, l, c, atr, e, policy, **kw)
         last_exit_bar = r.exit_bar
         act_risk = n_c * e.stop_dist * pv
+        entry_cost = (cost_pts + entry_slip) / e.stop_dist * act_risk
         et.append(ts[e.bar])
         xt.append(ts[r.exit_bar])
         pnl.append(r.r * act_risk)
-        mae.append(min(r.mae_r * act_risk - cost_pts / e.stop_dist * act_risk, r.r * act_risk))
+        mae.append(min(r.mae_r * act_risk - entry_cost, r.r * act_risk))
         mfe.append(max(r.mfe_r * act_risk, r.r * act_risk))
-        cost.append(cost_pts / e.stop_dist * act_risk)
+        cost.append(r.cost_r * act_risk)
         risk.append(act_risk)
         side.append(e.side)
         rs.append(r.r)
@@ -372,16 +426,24 @@ def build_ledger(bars: pd.DataFrame, atr: np.ndarray, entries: Sequence[FrozenEn
 
 def scan(frames: dict, rules: PropRules, *, discovery_end, discovery_start=None, minutes: int = 5, risk_usd: float = 500.0,
          max_contracts: int = 4, sessions: dict | None = None, families=FAMILY_GRID, exits: Iterable[ExitPolicy] = EXIT_GRID,
-         min_trades_per_30d: float = 3.0, cfg: ThirtyDayConfig | None = None, feasibility_sims: int = 600) -> ScanReport:
+         min_trades_per_30d: float = 3.0, cfg: ThirtyDayConfig | None = None, feasibility_sims: int = 600,
+         stress_ticks: Sequence[float] = (1.0, 2.0), stress_min_lower_bound: float | None = None, sizing: str = "auto",
+         roll_policy: str = "exclude") -> ScanReport:
     """``frames``: ``{instrument: 1m-or-finer DataFrame(timestamp, open, high, low, close)}``. Only bars before ``discovery_end`` are used.
 
     ``sessions``: ``{instrument: [session names]}`` (default NY open for every instrument, plus London/Asia for GC and NQ).
+    ``stress_ticks``: every surviving cell is re-run at each market-order slippage level (default 1 and 2 ticks, entry and stop-out; limit
+    targets stay at 0). The FIRST level is the headline result; ``ScanResult.trusted`` is True only when the cell clears the bar at ALL levels
+    (net expectancy > 0 and the 30-day lower bound >= ``stress_min_lower_bound``, default ``cfg.target_probability``).
+    ``roll_policy``: "exclude" (skip entries on continuous-contract roll sessions), "adjust" (back-adjust the roll gaps), or "none".
     """
     end = pd.Timestamp(discovery_end)
     start = pd.Timestamp(discovery_start) if discovery_start is not None else None
     cfg = cfg or ThirtyDayConfig()
     rep = ScanReport(n_trials=0, discovery_end=str(end))
     exits = list(exits)
+    stress_levels = [float(x) for x in stress_ticks] or [1.0]
+    stress_bar = cfg.target_probability if stress_min_lower_bound is None else float(stress_min_lower_bound)
     for inst in INSTRUMENTS:
         if inst not in frames or frames[inst] is None or len(frames[inst]) == 0:
             rep.skipped_instruments[inst] = "no data supplied"
@@ -393,6 +455,13 @@ def scan(frames: dict, rules: PropRules, *, discovery_end, discovery_start=None,
         if start is not None:
             bars = bars[bars["timestamp"] >= start]
         bars = bars.reset_index(drop=True)
+        roll_days = None
+        if roll_policy == "adjust":
+            bars = back_adjust(bars, detect_roll_bars(bars, inst))
+        elif roll_policy == "exclude":
+            roll_days = roll_session_dates(bars, detect_roll_bars(bars, inst))
+            if roll_days:
+                rep.notes.append(f"{inst}: {len(roll_days)} continuous-contract roll session(s) excluded from entries.")
         if len(bars) < 2000:
             rep.skipped_instruments[inst] = "fewer than 2000 discovery bars"
             continue
@@ -409,8 +478,10 @@ def scan(frames: dict, rules: PropRules, *, discovery_end, discovery_start=None,
                 for pol in exits:
                     cell = Cell(fam, inst, session, tuple(sorted(params.items())), pol.name)
                     rep.n_trials += 1
-                    led, skipped, rs = build_ledger(bars, atr, ents, pol, inst, risk_usd=risk_usd, max_contracts=max_contracts, label=cell.key,
-                                                 flatten_time_ct=getattr(rules, "flatten_time_ct", None))
+                    bl_kw = dict(risk_usd=risk_usd, max_contracts=max_contracts, label=cell.key, sizing=sizing,
+                                 flatten_time_ct=getattr(rules, "flatten_time_ct", None),
+                                 roll_policy="none" if roll_policy == "adjust" else roll_policy, roll_days=roll_days)
+                    led, skipped, rs = build_ledger(bars, atr, ents, pol, inst, slip_ticks=stress_levels[0], **bl_kw)
                     if len(led) < 30:
                         continue
                     r = np.asarray(rs)
@@ -424,7 +495,20 @@ def scan(frames: dict, rules: PropRules, *, discovery_end, discovery_start=None,
                         continue
                     ub = screening_upper_bound(trades_per_30d=tpm, expectancy_r_net=net_e, win_prob=wr, payoff_r=payoff, rules=rules, n_sims=feasibility_sims)
                     res = evaluate_thirty_day(led, rules, data_start=d0, data_end=d1, cfg=cfg, with_sensitivity=False)
-                    rep.results.append(ScanResult(cell, len(ents), skipped, tpm, wr, payoff, net_e, ub, res))
+                    sr = ScanResult(cell, len(ents), skipped, tpm, wr, payoff, net_e, ub, res)
+                    sr.stress[stress_levels[0]] = {"net_expectancy_r": net_e, "p_pass_30": res.p_pass_30, "lower_bound": res.lower_bound,
+                                                   "passed": bool(net_e > 0 and res.lower_bound >= stress_bar)}
+                    for lvl in stress_levels[1:]:
+                        led2, _sk2, rs2 = build_ledger(bars, atr, ents, pol, inst, slip_ticks=lvl, **bl_kw)
+                        if len(led2) < 30:
+                            sr.stress[lvl] = {"net_expectancy_r": 0.0, "p_pass_30": 0.0, "lower_bound": 0.0, "passed": False}
+                            continue
+                        e2 = float(np.mean(rs2))
+                        r2 = evaluate_thirty_day(led2, rules, data_start=d0, data_end=d1, cfg=cfg, with_sensitivity=False)
+                        sr.stress[lvl] = {"net_expectancy_r": e2, "p_pass_30": r2.p_pass_30, "lower_bound": r2.lower_bound,
+                                          "passed": bool(e2 > 0 and r2.lower_bound >= stress_bar)}
+                    sr.trusted = all(v["passed"] for v in sr.stress.values())
+                    rep.results.append(sr)
     rep.results.sort(key=lambda s: (rank_key(s.result) if s.result is not None else (1.0, 0.0, 1e9, 1.0)))
     rep.notes.append(f"{rep.n_trials} cells tried on DISCOVERY data only (< {end.date()}). Survivors are hypotheses: they have not touched "
                      "development, walk-forward or sealed data and the trial count above is the multiple-testing burden.")

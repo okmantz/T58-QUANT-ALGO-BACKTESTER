@@ -263,6 +263,45 @@ class ThirtyDayConfig:
     streak_levels: tuple = (3, 4, 5, 6, 8, 10)
     allow_proxy_excursions: bool = False       # explicit opt-in to closed-P&L MAE/MFE (optimistic under floating rules)
     min_regime_windows: int = 20
+    # --- configurable honest evaluation (2026-11-11) -------------------------------------------------------------------
+    # no_time_limit: score firms with NO evaluation clock. P(pass) is then P(pass within ``no_limit_horizon_days``).
+    no_time_limit: bool = False
+    no_limit_horizon_days: int = 365
+    # Rule overrides applied on top of the preset's PropRules (None = keep the preset value; dollars, not percent).
+    dd_type: str | None = None                 # "trailing" | "static" | "larger" (best of the two, reported with a note)
+    target_usd: float | None = None            # profit target
+    max_dd_usd: float | None = None            # maximum drawdown distance
+    daily_loss_usd: float | None = None        # daily loss limit; 0 = the firm has none
+    min_days: int | None = None                # minimum trading days
+    # Funded phase: payouts decide whether passing pays. Calendar days after the pass over which payouts are counted
+    # (None = do not simulate the funded phase).
+    funded_horizon_days: int | None = 60
+
+    def resolved(self) -> "ThirtyDayConfig":
+        if self.no_time_limit:
+            h = max(int(self.no_limit_horizon_days), 1)
+            return replace(self, horizon_days=h, long_horizon_days=h)
+        return self
+
+
+def apply_rule_overrides(rules: PropRules, cfg: ThirtyDayConfig, dd_type: str | None = None) -> PropRules:
+    """Return ``rules`` with the config's overrides applied (dollar amounts converted to % of the account)."""
+    acct = float(rules.account_size)
+    kw: dict = {}
+    dt = dd_type or cfg.dd_type
+    if dt in ("trailing", "static"):
+        kw["drawdown_type"] = dt
+    elif dt not in (None, "larger"):
+        raise ValueError(f"dd_type must be trailing/static/larger, got {dt!r}")
+    if cfg.target_usd is not None:
+        kw["evaluation_profit_target_pct"] = float(cfg.target_usd) / acct * 100.0
+    if cfg.max_dd_usd is not None:
+        kw["max_drawdown_pct"] = float(cfg.max_dd_usd) / acct * 100.0
+    if cfg.daily_loss_usd is not None:
+        kw["daily_loss_limit_pct"] = 100.0 if cfg.daily_loss_usd <= 0 else float(cfg.daily_loss_usd) / acct * 100.0
+    if cfg.min_days is not None:
+        kw["min_trading_days"] = int(cfg.min_days)
+    return replace(rules, **kw) if kw else rules
 
 
 # ----------------------------------------------------------------------------------------------------------------- results
@@ -301,6 +340,12 @@ class ThirtyDayResult:
     excursions_measured: float
     notes: list = field(default_factory=list)
     windows: list = field(default_factory=list)
+    # Funded phase (None = not simulated): P(pass AND first payout inside the funded horizon), mean payouts $ per window, etc.
+    funded_horizon_days: int | None = None
+    p_paid: float = 0.0                     # P(pass within horizon and receive >= 1 payout within funded_horizon_days of the pass)
+    p_paid_given_pass: float = 0.0
+    mean_payout_usd: float = 0.0            # mean gross payouts per purchase window (0 for windows that never got paid)
+    mean_payouts_per_paid_window: float = 0.0
 
     @property
     def lower_bound(self) -> float:
@@ -424,7 +469,7 @@ def _build_windows(ledger: TradeLedger, rules: PropRules, cfg: ThirtyDayConfig, 
 
 def _run_window(ledger, entry_ord, exit_ord, lo, hi, purchase_ord, rules, cfg, daily_limit) -> dict:
     out = {"purchase_ord": purchase_ord, "outcome": "open", "elapsed": None, "category": None, "n_trades": int(hi - lo),
-           "max_dd": 0.0, "daily_breach": False, "pnl_30": 0.0, "streak": 0, "weekdays_30": 0}
+           "payout_usd": 0.0, "n_payouts": 0, "max_dd": 0.0, "daily_breach": False, "pnl_30": 0.0, "streak": 0, "weekdays_30": 0}
     H = cfg.horizon_days
     wd = sum(1 for k in range(0, H + 1) if pd.Timestamp.fromordinal(purchase_ord + k).weekday() < 5)
     out["weekdays_30"] = wd
@@ -442,6 +487,13 @@ def _run_window(ledger, entry_ord, exit_ord, lo, hi, purchase_ord, rules, cfg, d
     if res.passed_evaluation and res.calendar_days_to_pass is not None:
         pass_ord = first_ord + int(res.calendar_days_to_pass) - 1
         out["outcome"], out["elapsed"], end_ord = "passed", pass_ord - purchase_ord, pass_ord
+        F = cfg.funded_horizon_days
+        if F is not None and out["elapsed"] <= cfg.horizon_days:
+            for ev in res.payouts:
+                p_ord = pd.Timestamp(ev.date).toordinal()
+                if p_ord <= pass_ord + int(F):
+                    out["payout_usd"] += float(ev.amount)
+                    out["n_payouts"] += 1
     elif res.failed and res.failure_day_index is not None:
         fail_ord = int(ds.day_dates[int(res.failure_day_index)].toordinal())
         out["outcome"], out["elapsed"], end_ord = "failed", fail_ord - purchase_ord, fail_ord
@@ -481,7 +533,19 @@ def evaluate_thirty_day(ledger: TradeLedger, rules: PropRules, *, data_start=Non
     ``regime_labels``: optional ``{name: pd.Series}`` mapping a date to a label (e.g. volatility tercile). Looked up causally on the
     purchase date (last label at or before it). Calendar-year labels are always added.
     """
-    cfg = cfg or ThirtyDayConfig()
+    cfg = (cfg or ThirtyDayConfig()).resolved()
+    if cfg.dd_type == "larger":
+        best = None
+        for kind in ("trailing", "static"):
+            r = evaluate_thirty_day(ledger, apply_rule_overrides(rules, cfg, kind), data_start=data_start, data_end=data_end,
+                                    regime_labels=regime_labels, cfg=replace(cfg, dd_type=None, target_usd=cfg.target_usd,
+                                    max_dd_usd=cfg.max_dd_usd, daily_loss_usd=cfg.daily_loss_usd, min_days=cfg.min_days),
+                                    with_sensitivity=with_sensitivity)
+            if best is None or r.p_pass_30 > best[1].p_pass_30:
+                best = (kind, r)
+        best[1].notes.append(f"dd_type='larger': the more permissive of trailing/static drawdown was used ({best[0]}).")
+        return best[1]
+    rules = apply_rule_overrides(rules, cfg)
     notes: list = []
     if len(ledger) == 0:
         return _empty_result(cfg, ["The ledger has no trades: nothing to evaluate."])
@@ -501,7 +565,7 @@ def evaluate_thirty_day(ledger: TradeLedger, rules: PropRules, *, data_start=Non
     rows = []
     for p_ord in starts:
         lo = int(np.searchsorted(entry_ord, p_ord, side="left"))
-        hi = int(np.searchsorted(entry_ord, p_ord + HL, side="right"))
+        hi = int(np.searchsorted(entry_ord, p_ord + HL + int(cfg.funded_horizon_days or 0), side="right"))
         rows.append(_run_window(ledger, entry_ord, exit_ord, lo, hi, p_ord, rules, cfg, daily_limit))
 
     elapsed = np.asarray([r["elapsed"] if r["elapsed"] is not None else -1 for r in rows], dtype=float)
@@ -545,6 +609,11 @@ def evaluate_thirty_day(ledger: TradeLedger, rules: PropRules, *, data_start=Non
                                                          and interval["n_independent"] >= cfg.min_independent_windows),
         target_probability=cfg.target_probability, cost_sensitivity={}, regimes={}, worst_regime=None,
         excursions_measured=float(ledger.excursions_measured), notes=notes,
+        funded_horizon_days=cfg.funded_horizon_days,
+        p_paid=float(np.mean([r["n_payouts"] > 0 for r in rows])),
+        p_paid_given_pass=float(np.mean([r["n_payouts"] > 0 for r in rows if r["outcome"] == "passed" and r["elapsed"] <= H] or [0.0])),
+        mean_payout_usd=float(np.mean([r["payout_usd"] for r in rows])),
+        mean_payouts_per_paid_window=float(np.mean([r["n_payouts"] for r in rows if r["n_payouts"] > 0] or [0.0])),
         windows=[{"purchase": str(pd.Timestamp.fromordinal(r["purchase_ord"]).date()), "outcome": r["outcome"], "elapsed_days": r["elapsed"],
                   "n_trades": r["n_trades"], "category": r["category"]} for r in rows],
     )

@@ -7,6 +7,10 @@ order and with no step skippable:
   1b. rulebook G3        T58 Prop Firm Rulebook v2 gate G3: E_plan = observed edge - E[max N] x SE (N = lifetime EFFECTIVE trial count)
                          must be >= +0.05R, on >= 400 trades over >= 150 days, with the long/short, top-3, quarter and year checks.
                          PROP objective only: a NET-PROFIT run never applies prop rules, so this step is recorded as not applicable.
+  1c. honest_eval        THE GATE for the prop objective (2026-11-11): the candidate's trades are scored by the honest rule simulator
+                         (``app.prop.thirty_day``) under the request's prop rules and must reach ``honest_min_lower_bound`` on the
+                         dependence-aware 95% lower bound of P(pass) with enough independent windows, on MEASURED excursions. It is a
+                         pass/fail gate, not a re-sort: a champion below the bar is never promoted however well it ranks.
   2. sequence-deflated   Deflated Sharpe against the LIFETIME ledger count clustered to effective trials, using the Sharpe spread of
                          the whole evaluated pool
   3. null gate           beats random entry timing (``run_null_edge_gate``)
@@ -31,7 +35,7 @@ from typing import Callable
 
 import numpy as np
 
-STEP_ORDER = ("reproduction", "rulebook_g3", "sequence_deflated", "null_gate", "pooled_edge", "sealed_slice")
+STEP_ORDER = ("reproduction", "rulebook_g3", "honest_eval", "sequence_deflated", "null_gate", "pooled_edge", "sealed_slice")
 
 # Substrings that mark a spec as tied to ONE instrument's auxiliary data (cannot be pooled across markets).
 INSTRUMENT_TIED_MARKERS = [
@@ -129,6 +133,9 @@ class PromotionConfig:
     sealed_max_lifetime_looks: int = 6        # reads of ONE sealed slice (per data fingerprint, across runs) before it is refused
     cost_multiplier: float = 2.0
     objective_mode: str = "prop"              # "prop" (Rulebook v2 gates apply) | "net_profit" (no prop rules, no Rulebook gates)
+    honest_min_lower_bound: float = 0.65      # honest_eval gate: lower 95% bound of P(pass) a champion must reach
+    honest_min_independent: float = 8.0       # ... measured on at least this many independent windows
+    honest_allow_proxy: bool = False          # ... with measured MAE/MFE (the closed-P&L proxy hides intratrade dips)
     repro_abs_tol: float = 0.02
     repro_rel_tol: float = 0.10
 
@@ -139,6 +146,7 @@ class Steps:
 
     reproduction: Callable | None = None
     rulebook_g3: Callable | None = None
+    honest_eval: Callable | None = None
     sequence_deflated: Callable | None = None
     null_gate: Callable | None = None
     pooled_edge: Callable | None = None
@@ -170,6 +178,27 @@ def deflated_step(observed_daily: np.ndarray, pool_matrix: np.ndarray | None, n_
                                 returns_kurtosis=kurt, min_probabilistic_sharpe=min_psr)
     return StepResult("sequence_deflated", bool(gate.passed), detail=gate.reason,
                       data={"psr": gate.probabilistic_sharpe, "n_trials": gate.n_trials, "benchmark_sharpe": gate.benchmark_sharpe})
+
+
+def honest_eval_step(td: dict | None, cfg: PromotionConfig) -> StepResult:
+    """The honest_eval promotion gate. ``td`` is a ``thirty_day_record`` dict (or ``None`` / ``{"error": ...}`` when it could not be
+    measured). No measurement is a FAILURE, never a pass."""
+    if not td:
+        return StepResult("honest_eval", False, detail="no honest evaluation could be produced (no trades or no prop rules)")
+    if td.get("error"):
+        return StepResult("honest_eval", False, detail=f"honest evaluation failed: {td['error']}", data=dict(td))
+    lb, p, n_ind = float(td.get("lower_bound", 0.0)), float(td.get("p_pass_30", 0.0)), float(td.get("n_independent", 0.0))
+    reasons = []
+    if lb < cfg.honest_min_lower_bound:
+        reasons.append(f"95% lower bound of P(pass) {lb * 100:.1f}% < {cfg.honest_min_lower_bound * 100:.0f}%")
+    if n_ind < cfg.honest_min_independent:
+        reasons.append(f"only ~{n_ind:.1f} independent windows (< {cfg.honest_min_independent:g})")
+    if td.get("excursions_proxy") and not cfg.honest_allow_proxy:
+        reasons.append("MAE/MFE are the closed-P&L proxy (optimistic)")
+    detail = f"P(pass) {p * 100:.1f}% (lower bound {lb * 100:.1f}%, ~{n_ind:.1f} independent windows, bust {float(td.get('p_bust_30', 0.0)) * 100:.1f}%)"
+    if reasons:
+        detail += " -- " + "; ".join(reasons)
+    return StepResult("honest_eval", not reasons, detail=detail, data=dict(td))
 
 
 def pooled_step(per_market: dict, cfg: PromotionConfig) -> StepResult:

@@ -282,6 +282,7 @@ def simulate_paths(
         day_close_set = np.where(new_day, False, day_close_set)
         cur_slot = np.where(new_day, sl, cur_slot)
         # ---- floating pre-check from the trade's own excursion ---------------------------
+        force_lock = np.zeros(P, dtype=bool)
         if floating_active:
             bb = bal
             adv = np.minimum(mae, 0.0)
@@ -302,10 +303,13 @@ def simulate_paths(
                 hit = go & (low <= dfloor)
                 if hit.any():
                     if lock_action:
-                        locked = np.where(hit, sl, locked)
+                        # 2026-11-11 FIX (twin of PropAccount.on_trade_close): liquidate at the daily floor and BOOK the loss, then let the
+                        # realized checks (trailing floor) run before the day is locked. It used to lock without booking anything.
+                        pnl = np.where(hit, np.minimum(0.0, dfloor - bb), pnl)
+                        force_lock = hit.copy()
                     else:
                         failed |= hit
-                    go &= ~hit
+                        go &= ~hit
         if not go.any():
             fa_state, fa_days = _first_bust(fa_state, fa_days, failed, was_failed, valid, passed, n_attempts, last_slot)
             continue
@@ -343,12 +347,14 @@ def simulate_paths(
         max_dd = np.where(cn, np.maximum(max_dd, dd_pct(peak, bal)), max_dd)
         # daily loss on the realized day P&L
         dll = daily_limit()
-        hit = cn & (day_pnl <= -dll)
+        hit = cn & ((day_pnl <= -dll) | force_lock)
         if hit.any():
             if lock_action:
                 day_close_cur = np.where(hit, bal, day_close_cur)
                 day_close_set = day_close_set | hit
                 locked = np.where(hit, sl, locked)
+                # a locked day must still respect the drawdown floor (twin of the PropAccount fix)
+                failed |= hit & (bal <= dd_floor)
             else:
                 failed |= hit
             cn = cn & ~hit
