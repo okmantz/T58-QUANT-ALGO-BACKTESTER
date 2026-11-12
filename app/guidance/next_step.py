@@ -109,6 +109,11 @@ def resolve(board_row: Optional[dict] = None, run: Optional[dict] = None) -> dic
 
     # ---- hard fail ----------------------------------------------------------------------------------------
     if verdict == "NOT READY":
+        ve = (board_row or {}).get("verdict_explain") or {}
+        points = list(ve.get("points") or [])
+        fixes = list(ve.get("fixes") or [])
+        optimized = bool((board_row or {}).get("optimized"))
+        val_failed = [c for c in ((board_row or {}).get("validate_failed_checks") or []) if c]
         problems = []
         if dd is not None and dd > DD_WARN:
             problems.append(f"drawdown {dd:.1f}%")
@@ -118,25 +123,42 @@ def resolve(board_row: Optional[dict] = None, run: Optional[dict] = None) -> dic
             problems.append(f"eval pass {ev:.0f}%")
         if sharpe is not None and sharpe < SHARPE_OK:
             problems.append(f"Sharpe {sharpe:.2f}")
-        why = "Failed the Champion Check" + (": " + ", ".join(problems) + "." if problems else " (a hard safety gate).")
+        # The saved Champion Check reasons are the real answer; the scorecard numbers are only a fallback.
+        if points:
+            why = "Failed the Champion Check -- " + " ".join(f"({i}) {p}" for i, p in enumerate(points[:3], 1))
+        else:
+            why = "Failed the Champion Check" + (": " + ", ".join(problems) + "." if problems else
+                                                  " -- re-run the Full Pipeline once so the exact failed gates are saved and listed here.")
         if (net is not None and net <= 0) or (sharpe is not None and sharpe < 0.3):
             return _out("failed", "bad", "Scrap it -- the edge isn't there",
                         why + " Tuning a strategy with no edge only curve-fits it.",
                         ["1. Send it to the Graveyard (keep the notes).",
                          "2. Use Discovery to find a replacement on the same instrument."],
                         "Find a replacement", "/search",
-                        [{"label": "Auto-optimize anyway", "href": opt_href}])
+                        [{"label": "Auto-optimize anyway", "href": opt("eval")}])
         goal = "risk" if (dd is not None and dd > DD_WARN) else ("eval" if (ev is not None and ev < EVAL_OK) else "robust")
         opt_href = opt(goal, why)
-        steps = []
-        if dd is not None and dd > DD_WARN:
-            steps.append("1. Optimize for drawdown: tighten the stop / ATR multiple and cap risk per trade.")
-        if trades is not None and trades < MIN_TRADES:
-            steps.append(f"{len(steps)+1}. Loosen entry filters or test a lower timeframe -- {int(trades)} trades is too few to trust.")
-        if ev is not None and ev < EVAL_OK:
-            steps.append(f"{len(steps)+1}. Re-run Optimize with the prop-firm rules on so it targets eval pass rate.")
-        steps.append(f"{len(steps)+1}. Re-run the Full Pipeline. If it still fails, scrap it.")
-        return _out("failed", "bad", "Rework once, then decide", why, steps[:4], "Open Optimize", opt_href,
+        steps = [f"{i}. {fx}" for i, fx in enumerate(fixes[:3], 1)]
+        if optimized:
+            # LOOP BREAKER: Optimize already ran and could not improve it, so sending the user back there is the
+            # circular advice that made the app feel stuck. Say so, and hand over a different, concrete move.
+            steps.append(f"{len(steps)+1}. Optimize has already been run on this strategy and found nothing better -- "
+                         "running it again will not change the verdict. Change the setup instead (risk size / prop preset / entry idea above).")
+            steps.append(f"{len(steps)+1}. Re-run the Full Pipeline after the change. If the same gates fail again, "
+                         "scrap it and run Discovery on this instrument -- that is a finished decision, not another lap.")
+            return _out("failed", "bad", "Already optimized -- change the setup or retire it", why, steps[:5],
+                        "Re-run Full Pipeline", run_href,
+                        [{"label": "Scrap & find new", "href": "/search"}, {"label": "Validate again", "href": val_href}])
+        if not steps:
+            if dd is not None and dd > DD_WARN:
+                steps.append("1. Optimize for drawdown: tighten the stop / ATR multiple and cap risk per trade.")
+            if trades is not None and trades < MIN_TRADES:
+                steps.append(f"{len(steps)+1}. Loosen entry filters or test a lower timeframe -- {int(trades)} trades is too few to trust.")
+            if ev is not None and ev < EVAL_OK:
+                steps.append(f"{len(steps)+1}. Re-run Optimize with the prop-firm rules on so it targets eval pass rate.")
+        steps.append(f"{len(steps)+1}. Run Optimize ONCE, then re-run the Full Pipeline. If it still fails, scrap it -- "
+                     "this page will say 'already optimized' so you are never sent round in a circle.")
+        return _out("failed", "bad", "Rework once, then decide", why, steps[:5], "Open Optimize", opt_href,
                     [{"label": "Scrap & find new", "href": "/search"}])
 
     # ---- weak but not dead: marginal numbers ---------------------------------------------------------------

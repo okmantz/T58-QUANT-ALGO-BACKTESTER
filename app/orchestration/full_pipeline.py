@@ -3946,6 +3946,22 @@ def _finish(
         if _fp_inds and isinstance(_fp_inds[0], dict):
             _fp_indicator = str(_fp_inds[0].get("type") or "").upper()
     _fp_formula = simple_run_name(_fp_instrument, _fp_timeframe, _fp_indicator, "full pipeline")
+
+    # Evaluation basis: what these pass-rate numbers were measured on, saved next to them so Validate / Optimize /
+    # the Dashboard can say exactly why their own numbers differ (app.reports.basis).
+    try:
+        from app.reports.basis import make_basis
+        _acct = float(getattr(prop_rules, "account_size", 0) or 0)
+        _sa = sizing_adjustment or {}
+        _risk_usd = _sa.get("planned_risk_dollars") if _sa.get("applied") else None
+        _risk_pct = (float(_risk_usd) / _acct * 100.0) if (_risk_usd and _acct) else getattr(risk, "risk_value", None)
+        _fp_basis = make_basis(
+            "full_pipeline", prop_preset=str(getattr(prop_rules, "preset_key", "") or ""), risk_pct=_risk_pct,
+            sizing_mode=str(getattr(risk, "sizing_mode", "") or ""), timeframe=_fp_timeframe,
+            window="dev_80" if (cfg.reserve_true_holdout and final_holdout is not None) else "full",
+            trades=len(final_bt.trades), reset_on_breach=bool(getattr(cfg, "reset_on_breach", False)))
+    except Exception:  # noqa: BLE001 -- provenance is a convenience, never fatal
+        _fp_basis = None
     save_name = _fp_formula if (mutated_by_ga and _fp_formula != "(FULL PIPELINE)") else display_name
     # PARAMETER-FIDELITY FIX (2026-09-24): make the report's own title say
     # when the backtested parameters are NOT the ones display_name/save_
@@ -4073,6 +4089,7 @@ def _finish(
                     "pass_and_paid_probability": round(final_mc.headline_pass_and_paid_probability, 1),
                     "verdict": verdict,
                     "report_html": str(report_paths["html"]),
+                    "basis": _fp_basis,
                     "instrument": (_fp_instrument or "").upper(),
                     "prop_preset": str(getattr(prop_rules, "preset_key", "") or ""),
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
@@ -4128,6 +4145,7 @@ def _finish(
                     "pass_and_paid_probability": round(final_mc.headline_pass_and_paid_probability, 1),
                     "verdict": verdict,
                     "report_html": str(report_paths["html"]),
+                    "basis": _fp_basis,
                     "instrument": (_fp_instrument or "").upper(),
                     "prop_preset": str(getattr(prop_rules, "preset_key", "") or ""),
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
@@ -4205,6 +4223,7 @@ def _finish(
                     "pass_and_paid_probability": round(final_mc.headline_pass_and_paid_probability, 1),
                     "verdict": verdict,
                     "report_html": str(report_paths["html"]),
+                    "basis": _fp_basis,
                     "instrument": (_fp_instrument or "").upper(),
                     "prop_preset": str(getattr(prop_rules, "preset_key", "") or ""),
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,
@@ -4270,6 +4289,7 @@ def _finish(
                     "pass_and_paid_probability": round(final_mc.headline_pass_and_paid_probability, 1),
                     "verdict": verdict,
                     "report_html": str(report_paths["html"]),
+                    "basis": _fp_basis,
                     "instrument": (_fp_instrument or "").upper(),
                     "prop_preset": str(getattr(prop_rules, "preset_key", "") or ""),
                     "t58_score": round(t58_score, 1) if t58_score is not None else None,

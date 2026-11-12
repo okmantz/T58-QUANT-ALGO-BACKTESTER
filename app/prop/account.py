@@ -529,7 +529,11 @@ class PropAccount:
 
         # evaluation pass / funded payout
         if self.stage == "evaluation":
-            if r.max_eval_calendar_days is not None and self.day_dates is not None:
+            if (r.max_eval_calendar_days is not None and self.day_dates is not None
+                    and 0 <= cur < len(self.day_dates)
+                    and 0 <= self.start_day_index < len(self.day_dates)):
+                # Bounds-guarded: after a mid-day account reset the new account's start index can sit one past
+                # the last known day; there is then no calendar span to measure yet (was an IndexError).
                 eval_cal_days = _days_between(self.day_dates[cur], self.day_dates[self.start_day_index])
                 if eval_cal_days > r.max_eval_calendar_days:
                     return self._fail("eval_time_limit", cur)

@@ -146,8 +146,14 @@ def _monte_carlo(s: dict) -> dict:
     if ev >= 50:
         return _item("monte_carlo", "caution", f"{ev:.0f}% chance to pass the evaluation.",
                      "Better than a coin flip but under the 70% READY bar -- an edge exists, the odds are not strong enough yet.", metrics)
+    extra = ""
+    if ruin is not None and ruin >= 25:
+        extra = (f" {ruin:.0f}% of simulated accounts blew up, so the first fix is risk size, not entry logic: "
+                 "halve the risk per trade and re-run this check.")
+    elif po is not None and po < ev:
+        extra = f" Only {po:.0f}% reached a first payout, so accounts pass but do not last."
     return _item("monte_carlo", "fail", f"Only a {ev:.0f}% chance to pass the evaluation.",
-                 "Under 50% against these rules. This is a performance problem, not a robustness one.", metrics)
+                 "Under 50% against these rules. This is a performance problem, not a robustness one." + extra, metrics)
 
 
 def _cpcv(s: dict) -> dict:
@@ -353,9 +359,11 @@ def _fix_guidance(check: str, status: str, ctx: Optional[dict]) -> Optional[dict
     if check == "monte_carlo":
         return {"bar": "Eval pass chance of 70% or more.",
                 "why": "The strategy's trades, shuffled thousands of ways, do not clear the prop-firm rules often enough.",
-                "steps": ["Optimize for eval pass probability (not just net profit).",
-                          "Reduce position size or risk per trade so the daily/max loss limits are hit less often.",
-                          "Pick a prop-firm preset whose drawdown rules suit this strategy's style."],
+                "steps": ["Halve the risk per trade (for example 1% -> 0.5%) and re-run this check: it is the fastest way to see whether the "
+                          "edge is real but over-sized. Do this BEFORE optimizing again.",
+                          "If the pass chance is still under 50% at half size, run Optimize ONCE with eval pass probability as the goal; "
+                          "if Optimize finds nothing, the settings are already best and the idea needs a different entry or a different prop-firm preset.",
+                          "Pick a prop-firm preset whose drawdown rules suit this strategy's style, then re-run so every page uses the same preset."],
                 "go": optimize}
     if check == "cpcv":
         return {"bar": "Out-of-sample results must keep most of the in-sample edge on every split.",

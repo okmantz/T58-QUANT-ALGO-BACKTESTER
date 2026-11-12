@@ -3263,7 +3263,13 @@ def _optimize_next_step(job: dict) -> dict:
             out["headline"] = "No better settings found -- choose what to do with this strategy"
             out["why"] = (f"Eval pass chance stayed at about {pct(b)}. The current settings are already the best this search could find, so the "
                           "strategy was left untouched. Either test it as it is, or scrap it and find a new one.")
-            out["bullets"] += ["Continue to Validate if you still believe in the idea: it will be tested exactly as it is, on all five checks.",
+            out["bullets"] += ["This is a final answer for these settings, not a step in a loop: Optimize only tunes parameters, so if the Champion Check or "
+                               "Validate failed on something Optimize does not touch (risk size, a lookahead leak, out-of-sample decay, too few trades), "
+                               "running it again changes nothing. Open the strategy's Champion Check reasons to see exactly which gate failed and the one change that clears it.",
+                               "Why numbers differ between pages: this Optimize figure is an in-sample estimate on the optimizer's own risk size and data window. "
+                               "Validate and the Full Pipeline can use a different risk size or hold back 20% of the data, so they will not match unless those settings match -- "
+                               "each result now lists which setting differs.",
+                               "Continue to Validate if you still believe in the idea: it will be tested exactly as it is, on all five checks.",
                                "Scrap it and find a new one if Validate is not worth your time: Discovery searches for a replacement on the same market.",
                                "Optional: the 'reliable edge' and 'Fix the exits' goals tune different things and may still find something."]
             out["no_improvement"] = True
@@ -3474,6 +3480,23 @@ def _run_validate_simple_job(job_id: str, df, strategy, risk, rules, checks, for
             state["done"] += weights[check]
             state["cur"] = 0.0
             item = simple_report.interpret_check(result, ctx)
+            if check == "monte_carlo":
+                # Say plainly whether this number disagrees with the Full Pipeline's or merely measured a different
+                # setup (risk size / sizing / data window) -- the "three engines, three answers" confusion.
+                try:
+                    from app.reports import basis as _basis
+                    _vb = _basis.make_basis(
+                        "validate", prop_preset=meta.get("prop_preset") or "",
+                        risk_pct=(float(risk.risk_value) if getattr(risk, "risk_mode", "percent") != "fixed"
+                                  else float(risk.risk_value) / max(float(getattr(risk, "initial_balance", 0) or 0), 1.0) * 100.0),
+                        sizing_mode=str(getattr(risk, "sizing_mode", "") or ""), timeframe=meta.get("timeframe") or "",
+                        window="full", trades=baseline_summary.get("trades"),
+                        reset_on_breach=bool(getattr(risk, "reset_on_breach", False)))
+                    _saved = (load_strategy_metadata(*library_ref).get("last_run") or {}) if library_ref else {}
+                    _basis.annotate_mc_item(item, _vb, _saved)
+                    result.setdefault("summary", {})["basis"] = _vb
+                except Exception:  # noqa: BLE001 -- explanation only
+                    pass
             partial.append(item)
             JOB_MANAGER.update(job_id, partial_items=_vs_clean(partial))
             JOB_MANAGER.log(job_id, f"{item['label']}: {item['status'].upper()} — {item['headline']}")

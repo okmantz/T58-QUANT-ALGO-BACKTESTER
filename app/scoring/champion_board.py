@@ -690,6 +690,13 @@ def _row_extras(metadata: dict[str, Any]) -> dict[str, Any]:
         "stale_methods": list((metadata.get("stale_validation") or {}).get("methods") or []),
         "podium_place": int(place) if isinstance(place, (int, float)) and int(place) in (1, 2, 3) else None,
         "podium_at": pod.get("awarded_at"),
+        # Loop-breaker inputs for app.guidance.next_step: has Optimize already been run, and with what outcome?
+        "optimized": bool(metadata.get("last_optimize") or metadata.get("last_search")),
+        "optimize_outcome": dict(metadata.get("last_optimize") or {}) if isinstance(metadata.get("last_optimize"), dict) else {},
+        "basis": (lr.get("basis") if isinstance(lr.get("basis"), dict) else None),
+        "validate_overall": str((metadata.get("last_validate_run") or {}).get("overall") or ""),
+        "validate_failed_checks": [i.get("check") for i in ((metadata.get("last_validate_run") or {}).get("items") or [])
+                                   if i.get("status") == "fail"],
     }
 
 

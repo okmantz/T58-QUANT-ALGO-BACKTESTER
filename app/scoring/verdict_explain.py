@@ -52,6 +52,36 @@ _PLAIN: tuple[tuple[str, str], ...] = (
     ("EV ", None),  # handled specially below (informational)
 )
 
+CHAMPION_CHECK_EXPLAINED = (
+    "The Champion Check is the Full Pipeline's final review. It scores the strategy 0-100 (T58 Score; 75+ is READY) and "
+    "first applies hard safety gates that cap the verdict no matter how good the score is: (1) Monte Carlo risk of ruin "
+    "-- too many simulated accounts breaking a prop-firm rule; (2) a lookahead leak -- the strategy peeking at future "
+    "prices; (3) out-of-sample gates -- walk-forward/CPCV, deflated Sharpe, probability of overfitting and the sealed "
+    "holdout. Any failed gate is listed by name under 'Why' with the number that failed."
+)
+
+# (prefix of the raw reason, the concrete change that clears it). First match wins; mirrors _PLAIN.
+_FIX: tuple[tuple[str, str], ...] = (
+    ("HARD SAFETY GATE FAILED: the lookahead",
+     "Fix the signal so it only uses bars that have closed (no future bars, no shift(-1), no same-bar close used as an entry price). Optimizing cannot fix this."),
+    ("HARD SAFETY GATE FAILED: Monte Carlo risk of ruin",
+     "Lower risk per trade (try half of the current size) or widen the daily-loss buffer; re-run the Full Pipeline. Risk size, not entry logic, is what moves this number."),
+    ("WALK-FORWARD", "Remove or fix parameters until the edge survives re-optimization on unseen windows; more years of data helps."),
+    ("HOLDOUT", "The last 20% of history lost money. Do not tune against it; check whether the edge is regime-specific and add a regime filter."),
+    ("CPCV", "Cut the number of tuned parameters and pick values in the middle of a flat region, then re-run CPCV."),
+    ("DSR", "Fewer trial variations or a longer history: the edge has to stay significant after counting every variation tried."),
+    ("PBO", "Test fewer, more distinct variants; prefer simpler logic. A high overfitting probability cannot be optimized away."),
+    ("RUIN WINDOW NOT COVERED", "Load a longer price history (it must span the full evaluation window) and re-run."),
+    ("PASS-AND-PAID TOO LOW", "Lower risk per trade or tighten the stop so accounts survive long enough to reach the first payout."),
+    ("SAMPLE FLOOR", "Loosen entry filters or use a lower timeframe/longer history until there are enough trades to trust."),
+    ("REPLAY DISAGREES", "Re-run with the same risk/settings; if the replay and the simulation still disagree, trust the replay (real start dates)."),
+    ("RANDOM-ENTRY NULL NOT BEATEN", "The entry signal adds nothing over random entries with the same exits: change the entry idea, not the settings."),
+    ("COST STRESS", "Use wider targets or fewer, higher-quality trades so costs eat less of the profit."),
+    ("30-DAY PAYOUT", "Raise the profit per trade (target distance) or the trade frequency, or choose a preset with a longer payout window."),
+    ("SEED INSTABILITY", "Raise the Monte Carlo simulation count; if it is still unstable the sample is too small to trust."),
+    ("CAPPED AT MARGINAL", "The score is fine; the missing items are checks that were not measured. Run them in Validate and re-run the Full Pipeline."),
+)
+
 # Reasons that are context, not causes.
 _SKIP_PREFIXES = (
     "For reference,", "Evidence (", "This verdict does NOT lock", "Supporting diagnostic",
@@ -79,6 +109,13 @@ def _plain_for(reason: str) -> Optional[str]:
     return None
 
 
+def _fix_for(reason: str) -> Optional[str]:
+    for prefix, fix in _FIX:
+        if reason.startswith(prefix):
+            return fix
+    return None
+
+
 def explain_verdict(
     verdict: Optional[str],
     reasons: Optional[Iterable[str]] = None,
@@ -95,6 +132,7 @@ def explain_verdict(
     """
     v = (verdict or "").upper().strip() or "UNTESTED"
     points: list[str] = []
+    fixes: list[str] = []
     seen: set[str] = set()
     for raw in reasons or []:
         raw = str(raw)
@@ -107,6 +145,9 @@ def explain_verdict(
         if text and text not in seen:
             seen.add(text)
             points.append(text)
+            _fx = _fix_for(raw)
+            if _fx and _fx not in fixes:
+                fixes.append(_fx)
         if len(points) >= 5:
             break
     if not points and fallback:
@@ -122,5 +163,6 @@ def explain_verdict(
         summary = f"{summary} T58 Score: {score:.0f}/100{tier_txt}."
     title = {"READY": "Why it is READY", "MARGINAL": "Why it is MARGINAL",
              "NOT READY": "Why it is NOT READY"}.get(v, "No verdict yet")
-    return {"verdict": v, "title": title, "summary": summary, "points": points,
+    return {"verdict": v, "title": title, "summary": summary, "points": points, "fixes": fixes,
+            "what_is_it": CHAMPION_CHECK_EXPLAINED,
             "score": None if score is None else round(float(score), 1)}

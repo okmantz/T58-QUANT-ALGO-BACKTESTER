@@ -79,11 +79,13 @@ def _f(v: Any) -> Optional[float]:
 
 
 def _pct(v: Any) -> Optional[float]:
-    """Accepts 0-1 or 0-100 probabilities, returns 0-100."""
+    """Returns a 0-100 percentage. Every writer in the app (Full Pipeline, Quick Optimize, run history) already stores
+    PERCENT, so the value is shown as-is. The old "0 < x <= 1 means a fraction" guess turned a genuine 1% or 0.5% pass
+    rate into 100% / 50% -- one of the ways the same strategy showed different numbers on different pages."""
     x = _f(v)
     if x is None:
         return None
-    return round(x * 100.0 if 0 < x <= 1.0 else x, 1)
+    return round(x, 1)
 
 
 def robustness_inputs(meta: dict) -> dict:
