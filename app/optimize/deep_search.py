@@ -90,6 +90,27 @@ def propfit_from_metrics(*, eval_pass: float, payout: float, profit_factor: floa
     return max(0.0, score), comps
 
 
+def propfit_from_mc(mc, stats: dict, *, dd_limit_pct: float, stressed_net: float | None = None):
+    """THE one ranking score (2026-11-12 audit P1-9): PropFit from a Monte Carlo summary plus a statistics dict.
+
+    ``mc`` carries probabilities in PERCENT (0..100, as every MonteCarloResult does); PropFit's weights expect 0..1, so this
+    converts exactly once, here. Per-attempt odds are preferred over the chain-level "any attempt ever passed" number.
+    ``stressed_net`` defaults to the 1x net profit when no 2x-cost figure exists (conservative sign check only)."""
+    g = (lambda o, k, d=None: (o.get(k, d) if isinstance(o, dict) else getattr(o, k, d)))
+    ep = g(mc, "per_attempt_pass_probability", None)
+    if ep is None:
+        ep = g(mc, "evaluation_pass_probability", 0.0)
+    pp = g(mc, "per_attempt_payout_probability", None)
+    if pp is None:
+        pp = g(mc, "first_payout_probability", 0.0)
+    net = float(stats.get("net_profit", 0.0) or 0.0)
+    return propfit_from_metrics(
+        eval_pass=min(max(float(ep or 0.0) / 100.0, 0.0), 1.0), payout=min(max(float(pp or 0.0) / 100.0, 0.0), 1.0),
+        profit_factor=float(stats.get("profit_factor", 0.0) or 0.0), n_trades=int(stats.get("total_trades", 0) or 0),
+        expectancy=float(stats.get("expectancy", 0.0) or 0.0), max_dd_pct=float(stats.get("max_drawdown_pct", 0.0) or 0.0),
+        dd_limit_pct=float(dd_limit_pct or 0.0), stressed_net=net if stressed_net is None else float(stressed_net))
+
+
 def verified_score(screen_score: float, *, cpcv_oos_pf, stress_net: float,
                    seed_std_pts: float) -> float:
     """Stage-2 re-score. An edge that evaporates out-of-sample is worth
