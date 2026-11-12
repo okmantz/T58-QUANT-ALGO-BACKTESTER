@@ -78,6 +78,13 @@ class MultiInstrumentResult:
     job: InstrumentJob
     summary: SearchSummary | None
     error: str | None = None
+    # 2026-11-12 audit P1-7: the champion's locked-holdout verdict (promote_champion's ``locked_holdout`` result). None = not yet
+    # evaluated; False = failed the holdout; True = passed. ``best_result_across_instruments`` never names a holdout FAILURE best.
+    holdout_passed: bool | None = None
+    holdout_detail: dict | None = None
+
+    def attach_holdout_verdict(self, passed: bool, detail: dict | None = None) -> None:
+        self.holdout_passed, self.holdout_detail = bool(passed), detail
 
     @property
     def label(self) -> str:
@@ -187,6 +194,7 @@ def best_result_across_instruments(results: dict[str, MultiInstrumentResult]) ->
     candidates = [
         r for r in results.values()
         if r.summary is not None and r.summary.champion_candidate_id and r.summary.leaderboard
+        and r.holdout_passed is not False        # bound to its own holdout verdict: a holdout failure is never "best"
     ]
     if not candidates:
         return None
@@ -198,7 +206,8 @@ def best_result_across_instruments(results: dict[str, MultiInstrumentResult]) ->
                 return score if isinstance(score, (int, float)) and math.isfinite(score) else float("-inf")
         return float("-inf")
 
-    return max(candidates, key=champion_score)
+    # holdout-verified results outrank unverified ones regardless of composite score
+    return max(candidates, key=lambda r: (r.holdout_passed is True, champion_score(r)))
 
 
 # ---------------------------------------------------------------------------

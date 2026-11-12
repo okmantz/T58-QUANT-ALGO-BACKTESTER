@@ -210,6 +210,8 @@ def _ledger_record_trials(strategy, n, data_fp: str | None = None) -> None:
 class FullPipelineConfig:
     preflight_enforce: bool = field(default_factory=lambda: __import__('os').environ.get('T58_PREFLIGHT_ENFORCE', '1') != '0')          # stop at step 0 on a structurally bad configuration
     preflight_min_trades: int = 100
+    # 2026-11-12 audit P1-8: when the Rulebook's hypothesis register is empty, READY is either blocked (False) or explicitly waived (True, logged).
+    rulebook_waive_empty_register: bool = True
     extra_gates_enabled: bool = field(default_factory=lambda: __import__('os').environ.get('T58_SKIP_EXTRA_GATES', '0') != '1')
     attempt_replay_starts: int = 48       # (2026-10-15: raised from 24) fresh-account attempts re-run through the real engine
     # v9.16 (audit P0-1/P0-2): the business target is "first payout within 30 calendar days of
@@ -1460,6 +1462,14 @@ def _make_verdict_inner(*args, attempt_replay=None, replay_disagreement_pts: flo
                 f"is {_lb:+.3f}R (READY needs > {min_expectancy_lb_r:+.2f}R). With a typical 1.2-1.5R spread per trade the sample cannot yet "
                 "distinguish this edge from zero -- capped at MARGINAL.")
             return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
+    # -- 2026-11-12 audit P1-10: the expectancy-bound fallback. With fewer than `min_trades_for_expectancy_gate` unseen trades (or no
+    # bound at all) the size of the edge is simply unmeasured -- that can never support READY, with or without `evidence_required`.
+    if _eb is None or _eb.get("lb") is None or int(_eb.get("n", 0)) < min_trades_for_expectancy_gate:
+        _n_seen = int(_eb.get("n", 0)) if isinstance(_eb, dict) else 0
+        reasons.append(
+            f"INSUFFICIENT UNSEEN EVIDENCE: only {_n_seen} trade(s) after 2x costs on unseen data (READY needs >= {min_trades_for_expectancy_gate}), "
+            "so the lower bound on expectancy cannot be computed -- capped at MARGINAL.")
+        return "MARGINAL", reasons, scorecard, ruin_fail, look_fail
     # -- 2026-10-17 audit weakness 5: missing independent evidence caps READY (it never lifts it) -------------------
     if evidence_required:
         _missing = []
@@ -1859,7 +1869,7 @@ def _gate_vector(core: dict, extra: dict, scorecard=None, core_verdict: str | No
     def _exp():
         eb = extra.get("expectancy_bound")
         if not eb or eb.get("lb") is None or int(eb.get("n", 0)) < int(extra.get("min_trades_for_expectancy_gate", 30)):
-            return add("expectancy", "Expectancy after 2x costs", "n/a")
+            return add("expectancy", "Expectancy after 2x costs", "cap", "insufficient unseen evidence")
         st_ = "fail" if float(eb.get("ub", 0.0)) < 0 else ("pass" if float(eb["lb"]) > float(extra.get("min_expectancy_lb_r", 0.0)) else "cap")
         add("expectancy", "Expectancy after 2x costs", st_, f"mean {eb.get('mean'):+.3f}R, LB {eb['lb']:+.3f}R over {eb['n']}")
     def _replay():
@@ -3859,6 +3869,18 @@ def run_full_pipeline(
                     _audit_ev["rulebook_v2"] = _rbp
                     for _ln in _rbk.render(_rbp):
                         log("  " + _ln)
+                    # 2026-11-12 audit P1-8: the Rulebook is a GATE, not decoration. A failed gate caps READY at MARGINAL; an empty
+                    # register is either blocking (cfg.rulebook_waive_empty_register=False) or an explicit, logged waiver.
+                    _failed = [g for g, v in (_rbp.get("gates") or {}).items() if isinstance(v, dict) and v.get("passed") is False and not v.get("incomplete")]
+                    if "G2" in _skip:
+                        if getattr(cfg, "rulebook_waive_empty_register", True):
+                            verdict_reasons = list(verdict_reasons) + ["RULEBOOK G2 WAIVED: the hypothesis register is empty (explicit waiver, cfg.rulebook_waive_empty_register=True)."]
+                        else:
+                            _failed.append("G2 (empty hypothesis register)")
+                    if _failed and verdict == "READY":
+                        verdict = "MARGINAL"
+                        verdict_reasons = list(verdict_reasons) + [f"RULEBOOK GATE FAILED: {', '.join(map(str, _failed))} -- capped at MARGINAL (Full Pipeline READY requires the Rulebook gates)."]
+                        log(f"  Rulebook gate failed ({', '.join(map(str, _failed))}) -> verdict capped at MARGINAL.")
             except Exception as exc:  # noqa: BLE001 -- informational; never blocks a run
                 log(f"  Rulebook v2 gates skipped: {exc}")
             from app.orchestration.verdict_ladder import ladder_stage as _ls
