@@ -34,10 +34,19 @@ def compute_edge_fitness(
     notes: list[str] = []
     pass_p = max(0.0, min(1.0, float(mc_summary.get("per_attempt_pass_probability", mc_summary.get("evaluation_pass_probability", 0.0)) or 0.0) / 100.0))
     pay_p = max(0.0, min(1.0, float(mc_summary.get("per_attempt_payout_probability", mc_summary.get("first_payout_probability", 0.0)) or 0.0) / 100.0))
-    robustness = max(0.0, min(1.0, float(robustness_dict["stability_ratio"]))) if robustness_dict else 0.5
-    oos = 0.5
-    if walk_forward_dict is not None:
-        oos = max(0.0, min(1.0, float(walk_forward_dict.get("walk_forward_efficiency", 0.5))))
+    _missing: list[str] = []
+    if robustness_dict:
+        robustness = max(0.0, min(1.0, float(robustness_dict["stability_ratio"])))
+    else:
+        robustness = 1.0      # 2026-11-12 audit P1-11: no invented 0.5 -- dropped, named in evidence_missing
+        _missing.append("robustness")
+    if walk_forward_dict is not None and walk_forward_dict.get("walk_forward_efficiency") is not None:
+        oos = max(0.0, min(1.0, float(walk_forward_dict["walk_forward_efficiency"])))
+    else:
+        oos = 1.0
+        _missing.append("walk-forward")
+    if _missing:
+        notes.append("UNSCORED (not measured, no default invented): " + ", ".join(_missing))
     dd = max(float(stats.get("max_drawdown_pct", 0.0) or 0.0), 1.0)
 
     if not math.isfinite(lb):
@@ -83,7 +92,7 @@ def compute_edge_fitness(
     out = PropFitnessBreakdown(
         pass_probability=pass_p, payout_probability=pay_p, robustness=robustness, oos_consistency=oos, drawdown_pct=dd, base_score=base,
         penalty_too_few_trades=pen_few, penalty_param_sensitivity=pen_param, penalty_high_pbo=pen_pbo,
-        penalty_is_oos_degradation=pen_deg, penalty_concentration=pen_conc, notes=notes,
+        penalty_is_oos_degradation=pen_deg, penalty_concentration=pen_conc, notes=notes, evidence_missing=_missing,
     )
     out.final_score = base - out.total_penalty()
     return out

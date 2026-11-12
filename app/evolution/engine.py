@@ -2827,12 +2827,14 @@ class EvolutionRunner(DiscoveryMixin):
             pbo_result = compute_pbo(
                 self.df, [r.spec for r in pool], self.risk,
                 n_groups=self.cfg.cpcv_n_groups, n_test_groups=self.cfg.cpcv_n_test_groups,
-                metric=self.cfg.cpcv_metric, max_paths=self.cfg.cpcv_max_paths,
+                metric=self._effective_cpcv_metric(), max_paths=self.cfg.cpcv_max_paths,
                 prop_rules=self.prop_rules,
             )
             pbo_value = pbo_result.pbo
-        except Exception:
-            pass
+        except Exception as _pbo_exc:  # noqa: BLE001 -- 2026-11-12 audit P1-11: a failed PBO is unproven, so nobody is promotable
+            self._log(f"  PBO failed ({type(_pbo_exc).__name__}: {_pbo_exc}) -- candidates in this pool are flagged unpromotable.")
+            for _r in pool:
+                self._flag_unpromotable(_r, "PBO computation failed")
 
         for r in pool:
             if self._stop_flag.is_set():
@@ -2843,20 +2845,18 @@ class EvolutionRunner(DiscoveryMixin):
                 cpcv_result = run_cpcv(
                     self.df, lambda spec=r.spec: build_strategy_from_spec(spec), self.risk,
                     n_groups=self.cfg.cpcv_n_groups, n_test_groups=self.cfg.cpcv_n_test_groups,
-                    metric=self.cfg.cpcv_metric, max_paths=self.cfg.cpcv_max_paths,
+                    metric=self._effective_cpcv_metric(), max_paths=self.cfg.cpcv_max_paths,
                     prop_rules=self.prop_rules,
                 )
                 cpcv_degradation = cpcv_result.degradation
-                if self.cfg.cpcv_metric == "eval_pass_probability":
+                if self._effective_cpcv_metric() == "eval_pass_probability":
                     oos_metric = cpcv_result.mean_oos_metric
-                elif self.cfg.cpcv_metric == "mean_r":
+                elif self._effective_cpcv_metric() == "mean_r":
                     r.cpcv_oos_mean_r = float(cpcv_result.mean_oos_metric)
                     self._log(f"  CPCV [{r.candidate_id}]: out-of-sample mean R {r.cpcv_oos_mean_r:+.3f} "
                               f"(in-sample {cpcv_result.mean_is_metric:+.3f}, degradation {cpcv_degradation:+.3f}R)")
-            except CPCVError:
-                pass
-            except Exception:
-                pass
+            except (CPCVError, Exception) as _cp_exc:  # noqa: BLE001 -- 2026-11-12 audit P1-11: unproven != fine
+                self._flag_unpromotable(r, f"CPCV failed: {type(_cp_exc).__name__}")
             r.pbo = pbo_value
             r.cpcv_degradation = cpcv_degradation
             r.cpcv_oos_eval_pass_probability = oos_metric
@@ -2885,6 +2885,25 @@ class EvolutionRunner(DiscoveryMixin):
                 )
         return pool
 
+    def _effective_cpcv_metric(self) -> str:
+        """2026-11-12 audit P1-11: the CPCV metric must match what the loop below does with it. The default ``mean_r`` is in R,
+        which only the edge objective's penalty understands (it charges ``cpcv_degradation`` in R); the prop-fitness objective charges
+        degradation on a percent scale, so under it a ``mean_r`` degradation was being fed in the wrong units. Prop-fitness objectives
+        therefore run CPCV on ``eval_pass_probability`` unless the caller chose something other than the default."""
+        m = self.cfg.cpcv_metric
+        if m == "mean_r" and self.cfg.objective != "edge_lb_r":
+            return "eval_pass_probability"
+        return m
+
+    def _flag_unpromotable(self, r, reason: str) -> None:
+        meta = getattr(r, "meta", None)
+        if meta is None:
+            try:
+                r.meta = meta = {}
+            except Exception:  # noqa: BLE001
+                return
+        meta["unpromotable"] = (meta.get("unpromotable") + "; " if meta.get("unpromotable") else "") + reason
+
     def _exclude_lookahead_bugs(self, pool: list[EvolutionCandidateRecord]) -> list[EvolutionCandidateRecord]:
         """See the FIX (audit) note at this method's call site in
         _cpcv_and_pbo for why this is a separate, unconditional pass over
@@ -2911,8 +2930,9 @@ class EvolutionRunner(DiscoveryMixin):
                 # checks every source type and is unchanged.
                 src = r.spec.get("source_type", "manual")
                 if src not in ("manual", "python", "pinescript", "mql5"):
-                    # Unknown source type -- nothing the checker
-                    # understands; keep the old fail-open behavior.
+                    # Unknown source type -- nothing the checker understands. 2026-11-12 audit P1-11: kept for ranking but
+                    # flagged UNPROMOTABLE (never crowned / saved as a champion) instead of silently cleared.
+                    self._flag_unpromotable(r, f"lookahead check does not understand source type {src!r}")
                     clean_pool.append(r)
                     continue
                 try:
@@ -2928,12 +2948,13 @@ class EvolutionRunner(DiscoveryMixin):
                     lookahead_result = check_for_lookahead(strategy, self.df)
                     r.lookahead_bug_detected = lookahead_result.bug_detected
                     r.lookahead_summary = lookahead_result.summary()
-                except Exception:
-                    # Best-effort, same as every other validation step in this
-                    # method (CPCV/PBO above) -- a check that itself failed to
-                    # run is never treated as a positive result.
+                except Exception as _la_exc:  # noqa: BLE001
+                    # 2026-11-12 audit P1-11: FAIL CLOSED. A check that crashed proves nothing, so the candidate is EXCLUDED
+                    # (it used to fall through into the clean pool as if it had passed).
                     r.lookahead_bug_detected = None
                     r.lookahead_summary = None
+                    self._log(f"  LOOKAHEAD CHECK FAILED [{r.candidate_id}]: {type(_la_exc).__name__}: {_la_exc} -- excluded (not cleared).")
+                    continue
                 if r.lookahead_bug_detected:
                     self._log(f"  LOOKAHEAD BUG [{r.candidate_id}]: excluded regardless of every other score.")
                     continue
@@ -3051,6 +3072,9 @@ class EvolutionRunner(DiscoveryMixin):
         gated: list[EvolutionCandidateRecord] = []
         champion_found = False
         for record in ranked:
+            if (getattr(record, "meta", None) or {}).get("unpromotable"):
+                self._log(f"  Holdout gate: {record.candidate_id} is flagged unpromotable ({record.meta['unpromotable']}) -- cannot be crowned.")
+                continue
             check = record.holdout_check
             # Evaluate lazily, in rank order, only until the first PASS --
             # the gate costs one holdout backtest + Monte Carlo per
@@ -3066,13 +3090,12 @@ class EvolutionRunner(DiscoveryMixin):
                     self._log(f"  Holdout gate: {exc} -- {record.candidate_id} cannot be crowned.")
                     record.holdout_check = {"passed": False, "error": str(exc), "budget_exhausted": True}
                     continue
-                except Exception as exc:  # noqa: BLE001 -- inconclusive, not a failure
+                except Exception as exc:  # noqa: BLE001 -- 2026-11-12 audit P1-11: fail CLOSED
                     self._log(
                         f"  Holdout gate: {record.candidate_id} could not be evaluated on the "
-                        f"locked holdout ({type(exc).__name__}: {exc}) -- kept, flagged inconclusive."
+                        f"locked holdout ({type(exc).__name__}: {exc}) -- inconclusive, so it cannot be crowned."
                     )
-                    record.holdout_check = {"passed": None, "error": f"{type(exc).__name__}: {exc}"}
-                    gated.append(record)
+                    record.holdout_check = {"passed": False, "inconclusive": True, "error": f"{type(exc).__name__}: {exc}"}
                     continue
                 passed = bool(holdout["per_attempt_pass_probability"] >= target)
                 if self.cfg.objective == "edge_lb_r":

@@ -130,6 +130,8 @@ class PropFitnessBreakdown:
     # v6 (2026-10-04): margin-of-safety gradient -- additive bonus for
     # running far from the prop limits (see _headroom_bonus).
     headroom_bonus: float = 0.0
+    # 2026-11-12 audit P1-11: evidence that was NOT measured (no invented 0.5 default): the factor is dropped (not scored) and named here.
+    evidence_missing: list = field(default_factory=list)
 
     final_score: float = 0.0
     notes: list = field(default_factory=list)
@@ -221,15 +223,21 @@ def compute_prop_fitness(
     _chain_payout = mc_summary.get("first_payout_probability", 0.0)
     pass_probability = max(0.0, min(1.0, mc_summary.get("per_attempt_pass_probability", _chain_pass) / 100.0))
     payout_probability = max(0.0, min(1.0, mc_summary.get("per_attempt_payout_probability", _chain_payout) / 100.0))
-    robustness = float(robustness_dict["stability_ratio"]) if robustness_dict else 0.5
-    robustness = max(0.0, min(1.0, robustness))
+    _missing: list[str] = []
+    if robustness_dict:
+        robustness = max(0.0, min(1.0, float(robustness_dict["stability_ratio"])))
+    else:
+        robustness = 1.0          # factor dropped (x**w == 1 neutral), NOT a fabricated 0.5; named in evidence_missing
+        _missing.append("robustness")
     # walk-forward efficiency is test/train metric ratio -- can run above 1
     # (test outperformed train) or deeply negative; clip to [0, 1] for use
     # as a multiplicative consistency factor (this function only wants
     # "how much of in-sample performance survived," not the raw ratio).
-    oos_consistency = 0.5
-    if walk_forward_dict is not None:
-        oos_consistency = max(0.0, min(1.0, float(walk_forward_dict.get("walk_forward_efficiency", 0.5))))
+    if walk_forward_dict is not None and walk_forward_dict.get("walk_forward_efficiency") is not None:
+        oos_consistency = max(0.0, min(1.0, float(walk_forward_dict["walk_forward_efficiency"])))
+    else:
+        oos_consistency = 1.0     # dropped, not invented
+        _missing.append("walk-forward")
     drawdown_pct = max(float(stats.get("max_drawdown_pct", 0.0) or 0.0), 1.0)  # floor at 1 to avoid div-by-~0 blowups
 
     # Each 0..1 factor raised to its own weight/exponent (weight 1.0 ==
@@ -268,6 +276,8 @@ def compute_prop_fitness(
         notes.append(f"Only {n_trades} trades (target {min_trades_target}+) -- fitness discounted for small sample size.")
 
     penalty_param_sensitivity = (1.0 - robustness) * 10.0
+    if _missing:
+        notes.append("UNSCORED (not measured, no default invented): " + ", ".join(_missing) + " -- treat this rank as provisional.")
     if robustness_dict is not None and not robustness_dict.get("is_stable", True):
         notes.append(
             f"Parameter-neighborhood stability {robustness:.2f} -- nearby parameter values behave "
@@ -311,7 +321,7 @@ def compute_prop_fitness(
         penalty_concentration=penalty_concentration,
         penalty_losing_streak=penalty_losing_streak,
         headroom_bonus=headroom_bonus,
-        notes=notes,
+        notes=notes, evidence_missing=_missing,
     )
     breakdown.final_score = base_score - breakdown.total_penalty()
     return breakdown
