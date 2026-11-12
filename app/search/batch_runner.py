@@ -425,6 +425,8 @@ class SearchStageConfig:
 
     full_mc_sims: int = 3000
     walk_forward_folds: int = 4
+    # 2026-11-12 audit P0-2: fraction of bars the Stage-2 GA may fit on; the rest is held back for Stage 3's walk-forward.
+    wf_fit_frac: float = 0.7
     # 2026-10-25: walk-forward folds are scored on mean R per trade (the same quantity the search ranks on), not on a Monte-Carlo
     # prop-pass probability. Prop pass probability is computed for the finalists and used last, for sizing.
     walk_forward_metric: str = "mean_r"
@@ -569,6 +571,8 @@ class SearchSummary:
     pool_pnl_path: str | None = None
     pool: dict | None = None           # Reality Check / SPA over the whole pool + PBO on a stratified sample of it
     trial_info: dict | None = None     # raw / ledger / effective trials behind this run's Deflated Sharpe
+    # 2026-11-12 audit P1-7: best Stage-3 survivor even when it did not clear Stage 4's own DSR/pool evidence (never auto-promoted).
+    finalist_candidate_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -964,6 +968,17 @@ def _stage2_task(
     """Stage 2: the app's existing GA refinement, run on one Stage 1 survivor."""
     df, risk, prop_rules = _WORKER["df"], _WORKER["risk"], _WORKER["prop_rules"]
     tmp_dir = _WORKER.get("tmp_dir")
+    # 2026-11-12 audit P0-2 (VAL-005): the GA used to fit on EVERY bar, so Stage 3's walk-forward then "validated" on data the
+    # GA had already tuned on. The GA now fits on the first ``wf_fit_frac`` of the bars (when there is room for a meaningful
+    # walk-forward on the rest) and records ``ga_fit_bars`` so Stage 3 can pass it as ``embargo_start_bar``.
+    ga_fit_bars = None
+    _frac = float(refine_kwargs.get("wf_fit_frac") or 0.0)
+    _folds = int(refine_kwargs.get("wf_folds") or 0)
+    if 0.0 < _frac < 1.0 and _folds >= 2:
+        _n_fit = int(len(df) * _frac)
+        if len(df) - _n_fit >= _folds * 40 and _n_fit >= 200:
+            df = df.iloc[:_n_fit].reset_index(drop=True)
+            ga_fit_bars = _n_fit
     strategy = build_strategy_from_spec(spec, tmp_dir)
     reset_on_breach = refine_kwargs.get("reset_on_breach", False)
     mc_cfg = MonteCarloConfig(n_simulations=mc_search_sims, random_seed=seed, reset_on_breach=reset_on_breach)
@@ -1005,7 +1020,7 @@ def _stage2_task(
             # D4(c): no GA inner loop ran on this path -- the single
             # backtest+MC above is the baseline trial (counted by the
             # caller), not a GA evaluation.
-            "ga_total_evaluations": 0,
+            "ga_total_evaluations": 0, "ga_fit_bars": ga_fit_bars,
         }
 
     best = result.best
@@ -1030,6 +1045,7 @@ def _stage2_task(
         # population*(generations+1) budget would under/over-count:
         # auto-shrink-on-low-trades and AI-assist move the real number.
         "ga_total_evaluations": int(getattr(result, "total_evaluations", 0) or 0),
+        "ga_fit_bars": ga_fit_bars,
     }
 
 
@@ -1125,11 +1141,15 @@ def _stage3_task(candidate_id: str, spec: dict, cfg: dict) -> dict:
     wf_result = None
     wf_dict = None
     if cfg["walk_forward_folds"] >= 2:
+        _emb = cfg.get("ga_fit_bars")
+        if not _emb:
+            notes.append("Walk-forward NOT independent of the GA fit window (too little data to hold bars back): treat the walk-forward as in-sample.")
         wf_result = run_walk_forward(
             df, lambda: build_strategy_from_spec(spec, tmp_dir), risk,
             n_folds=cfg["walk_forward_folds"], metric=cfg["walk_forward_metric"],
             stability_threshold=cfg["walk_forward_min_efficiency"],
             prop_rules=prop_rules, mc_cfg=mc_cfg,
+            embargo_start_bar=int(_emb) if _emb else None,   # VAL-005: skip the bars the GA fitted on
         )
         if wf_result is not None:
             wf_dict = {
@@ -1915,6 +1935,7 @@ def run_search(
                 "optimizer_mode": stage_cfg.optimizer_mode,
                 "plateau_robust_selection": stage_cfg.plateau_robust_selection,
                 "plateau_finalist_pool": stage_cfg.plateau_finalist_pool,
+                "wf_fit_frac": getattr(stage_cfg, "wf_fit_frac", 0.7), "wf_folds": stage_cfg.walk_forward_folds,
                 # ----- v5 B1-1 grammar candidate hook: passthrough (BEGIN) -----
                 # Carried so _stage2_task's worker-side code (and any future
                 # grammar-aware refinement) can see which source mode this
@@ -2032,7 +2053,8 @@ def run_search(
                 "capture_daily": bool(getattr(stage_cfg, "capture_pool_pnl", False)),
             }
             futures = {
-                pool_box[0].submit(_stage3_task, r["candidate_id"], _spec_from_record(r), stage3_cfg): r["candidate_id"]
+                pool_box[0].submit(_stage3_task, r["candidate_id"], _spec_from_record(r),
+                                   {**stage3_cfg, "ga_fit_bars": r.get("ga_fit_bars")}): r["candidate_id"]
                 for r in survivors2
             }
             done = 0
@@ -2179,12 +2201,23 @@ def run_search(
             # P0-1: rank on per-attempt (single-account) odds, not the
             # chain-level "did >=1 rebuy attempt ever pass" number -- the
             # chain-level fields stay in mc_summary for reporting only.
-            rec["composite_score"] = (
+            # 2026-11-12 audit P1-9: ONE ranking formula -- PropFit (app.optimize.deep_search). The old blend is kept ONLY under a
+            # different name (stage4_blend_legacy) so nothing else shares "composite_score" with a different formula.
+            rec["stage4_blend_legacy"] = (
                 mc.get("per_attempt_pass_probability", mc.get("evaluation_pass_probability", 0.0)) * 0.35
                 + mc.get("per_attempt_payout_probability", mc.get("first_payout_probability", 0.0)) * 0.25
                 - mc.get("risk_of_ruin_pct", 0.0) * 0.15
                 + dsr.probabilistic_sharpe * 100 * 0.25
             )
+            try:
+                from app.optimize.deep_search import propfit_from_mc
+                _stressed = _st.get("doubled_cost_net_profit", rec.get("doubled_cost_net_profit"))
+                _pf, _pfc = propfit_from_mc(mc, _st, dd_limit_pct=float(prop_rules.max_drawdown_pct or 0.0),
+                                            stressed_net=None if _stressed is None else float(_stressed))
+                rec["propfit_components"] = _pfc
+                rec["composite_score"] = float(_pf)
+            except Exception:  # noqa: BLE001 -- never lose a candidate over the scorer
+                rec["composite_score"] = rec["stage4_blend_legacy"]
         else:
             rec["composite_score"] = -1.0
         db.insert_candidate(run_id, rec["candidate_id"], "stage3", rec)
@@ -2202,7 +2235,20 @@ def run_search(
             log(f"Random-entry control skipped: {_exc}")
 
     leaderboard = db.leaderboard(run_id, stage="stage3", top_n=25, only_passed=False)
-    champion = next((r for r in leaderboard if r.get("passed_stage3_gate")), None)
+    # 2026-11-12 audit P1-7: Stage 4 used to COMPUTE the DSR / whole-pool tests and then ignore them when naming the champion.
+    # The best Stage-3 survivor is now only a FINALIST; it becomes the CHAMPION only when it also clears its own Stage-4 evidence
+    # (deflated Sharpe significant, and the whole-pool correction when one was run).
+    def _stage4_ok(r: dict) -> bool:
+        if not r.get("passed_stage3_gate"):
+            return False
+        if not (r.get("deflated_sharpe") or {}).get("is_significant"):
+            return False
+        pt = r.get("pool_tests")
+        return bool(pt.get("family_wise_passed")) if pt else True
+    finalist = next((r for r in leaderboard if r.get("passed_stage3_gate")), None)
+    champion = next((r for r in leaderboard if _stage4_ok(r)), None)
+    for r in leaderboard:
+        r["stage4_passed"] = _stage4_ok(r)
     db.finish_run(run_id, status="completed")
     db.close()
 
@@ -2221,6 +2267,11 @@ def run_search(
             f"(composite score {champion.get('composite_score', 0):.2f}, "
             f"PSR {champion.get('deflated_sharpe', {}).get('probabilistic_sharpe', 0):.2f})."
         )
+    elif finalist:
+        log(
+            f"Finalist (NOT a champion): {finalist['candidate_id']} passed every Stage 3 gate but not Stage 4's own evidence "
+            "(deflated Sharpe significance and the whole-pool correction). Route it through Full Pipeline / Discovery before trusting it."
+        )
     else:
         log(
             "No candidate passed every Stage 3 gate. That is an honest, useful result -- "
@@ -2232,6 +2283,7 @@ def run_search(
         run_id=run_id, mode=space.mode, family=space.family, total_candidates=len(space.candidates),
         stage1_survivors=len(survivors1), stage2_survivors=len(survivors2), stage3_survivors=len(stage3_records),
         champion_candidate_id=champion["candidate_id"] if champion else None,
+        finalist_candidate_id=finalist["candidate_id"] if finalist else None,
         elapsed_seconds=elapsed, db_path=str(db_path), leaderboard=leaderboard,
         graveyard_path=str(graveyard_path) if graveyard_path else None,
         locked_holdout_frac=stage_cfg.locked_holdout_frac,

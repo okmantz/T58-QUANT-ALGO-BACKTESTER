@@ -181,13 +181,28 @@ def param_signature(family: str, config: dict | None, keys: tuple[str, ...] = ()
     if not config:
         return family
     try:
-        items = []
+        items: list[str] = []
         source = config if not keys else {k: config.get(k) for k in keys if k in config}
-        for k, v in sorted(source.items()):
-            if isinstance(v, bool):
-                continue
-            if isinstance(v, (int, float)):
-                items.append(f"{k}={_round_sig(v)}")
+
+        def _walk(node, path: str, depth: int) -> None:
+            # 2026-11-12 audit P0-1: Manual configs nest their parameters ({"entry": {"conditions": [...]}}), and the old
+            # top-level-only walk signed every one of them as the bare family name -> the graveyard hard-skip then
+            # blocked the whole family after a single failure. Walk dicts/lists recursively; numbers are rounded,
+            # and nested string leaves (indicator / operator names) keep structurally different strategies apart.
+            if isinstance(node, bool) or node is None:
+                return
+            if isinstance(node, dict):
+                for k, v in sorted(node.items(), key=lambda kv: str(kv[0])):
+                    _walk(v, f"{path}.{k}" if path else str(k), depth + 1)
+            elif isinstance(node, (list, tuple)):
+                for i, v in enumerate(node):
+                    _walk(v, f"{path}[{i}]", depth + 1)
+            elif isinstance(node, (int, float)):
+                items.append(f"{path}={_round_sig(node)}")
+            elif isinstance(node, str) and depth > 1:
+                items.append(f"{path}={node}")
+
+        _walk(source, "", 0)
         return family + "|" + ",".join(items) if items else family
     except Exception:  # noqa: BLE001 -- signature is a best-effort dedupe key, never load-bearing
         return family
