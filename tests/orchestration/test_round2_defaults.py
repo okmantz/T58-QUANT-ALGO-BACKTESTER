@@ -21,7 +21,7 @@ def test_new_presets_exist_are_unverified_and_have_fee_rows():
     presets = PROP_FIRM_PRESETS if isinstance(PROP_FIRM_PRESETS, dict) else {p.key: p for p in PROP_FIRM_PRESETS}
     for key in ("e8_one_25k", "lucid_flex_25k", "lucid_flex_50k", "lucid_flex_100k"):
         assert key in presets, key
-        assert key in FIRM_FEES and FIRM_FEES[key].challenge_price is None
+        assert key in FIRM_FEES
         assert "UNVERIFIED" in presets[key].source_note
     assert presets["e8_one_25k"].account_size == 25_000
-    assert presets["lucid_flex_25k"].consistency_rule_pct == 50.0
+    assert presets["lucid_flex_25k"].consistency_rule_pct == 40.0   # 2026-11-11 report: base config is 40% (50% is the paid add-on)

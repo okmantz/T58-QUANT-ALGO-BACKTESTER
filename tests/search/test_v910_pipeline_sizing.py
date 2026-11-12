@@ -108,7 +108,7 @@ def _cfg(**over):
 def test_apply_instrument_spec_populates_micro_fields():
     risk = apply_instrument_spec(RiskConfig(), "ES")
     assert risk.micro_contract_size == 5.0          # MES is $5/point
-    assert risk.micro_commission_per_contract == pytest.approx(1.42)
+    assert risk.micro_commission_per_contract == pytest.approx(1.32)
     # an explicit caller value is never overwritten
     risk2 = apply_instrument_spec(RiskConfig(micro_contract_size=9.0), "ES")
     assert risk2.micro_contract_size == 9.0

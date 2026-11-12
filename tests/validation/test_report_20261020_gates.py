@@ -182,8 +182,8 @@ def test_cost_model_ticks_not_pips():
     nq = resolve_cost("NQ_5m.csv")
     assert nq.spread_ticks == 1 and nq.slippage_ticks == 1
     assert nq.spread_pips == pytest.approx(0.25)                         # 1 tick = 0.25 points, NOT the legacy 1.0 pip
-    assert nq.round_trip_dollars() == pytest.approx(2 * 2 * 5.0 + 4.20)
-    assert nq.stress(2.0).round_trip_dollars() == pytest.approx(2 * 4 * 5.0 + 4.20)   # commission not scaled
+    assert nq.round_trip_dollars() == pytest.approx(2 * 2 * 5.0 + 4.78)
+    assert nq.stress(2.0).round_trip_dollars() == pytest.approx(2 * 4 * 5.0 + 4.78)   # commission not scaled
     tr = _trades([0.3] * 50, risk=10.0, size=2.0)
     lad = compute_tick_cost_ladder(tr, nq, (1.0, 2.0))
     assert lad[1]["net_profit"] < lad[0]["net_profit"]

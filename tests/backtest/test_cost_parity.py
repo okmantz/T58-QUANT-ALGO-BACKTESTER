@@ -8,7 +8,7 @@ from app.backtest.risk import RiskConfig, UntouchedDefault, describe_simulation
 from app.data.instrument_specs import apply_instrument_spec, get_instrument_spec
 from app.search.instrument_risk import resolve_leg_risk, resolve_run_costs
 
-EXPECTED_PTS = {"ES": 1.084, "MES": 1.284, "NQ": 1.210, "MNQ": 1.710}
+EXPECTED_PTS = {"ES": 1.0956, "MES": 1.264, "NQ": 1.239, "MNQ": 1.660}
 
 
 def _rt_points(r: RiskConfig) -> float:
@@ -44,4 +44,4 @@ def test_marker_survives_replace_and_behaves_like_float():
 
 def test_report_prints_round_turn_cost():
     r = apply_instrument_spec(RiskConfig(pip_size=1.0), "ES")
-    assert "Round-turn cost: 1.084 price points" in describe_simulation(r)
+    assert "Round-turn cost: 1.096 price points" in describe_simulation(r)

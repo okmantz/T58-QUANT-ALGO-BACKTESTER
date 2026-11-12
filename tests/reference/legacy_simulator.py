@@ -614,6 +614,11 @@ def simulate_account(
                     # move, no day attribution); the breached day's close
                     # is recorded so DLL-base bookkeeping stays consistent.
                     day_close[cur_day_idx] = balance
+                    if balance <= dd_floor:
+                        failed = True
+                        failure_reason = f"max_drawdown ({rules.drawdown_type})"
+                        failure_day_index = cur_day_idx
+                        break
                     while j < n and day_index_per_trade[j] == cur_day_idx:
                         j += 1
                     continue

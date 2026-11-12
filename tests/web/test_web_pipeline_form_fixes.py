@@ -25,9 +25,9 @@ def _risk(commission=0.0):
 
 
 def test_unposted_costs_use_instrument_spec_not_fx_defaults():
-    r = server._fill_unposted_costs(MultiDict({}), _risk(4.2), "NQ1! parquet")
+    r = server._fill_unposted_costs(MultiDict({}), _risk(4.78), "NQ1! parquet")
     assert (r.spread_pips, r.slippage_pips) == (0.25, 0.25)           # 1 tick each side, not 1.5 points
-    assert r.commission_per_trade == 0.0 and r.commission_per_contract == 4.2   # no double billing
+    assert r.commission_per_trade == 0.0 and r.commission_per_contract == 4.78   # no double billing
 
 
 def test_typed_costs_are_never_overridden_and_unknown_instruments_keep_legacy_defaults():

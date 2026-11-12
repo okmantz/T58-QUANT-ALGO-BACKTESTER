@@ -326,7 +326,7 @@ def test_fundednext_values():
         assert p.payout_frequency_days == 14
         assert "21" in p.source_note  # 21-day first-payout caveat documented
         assert p.consistency_rule_pct is None          # 2026-10-17: no consistency rule in the Stellar evaluation
-        assert p.funded_consistency_rule_pct == 40.0
+        assert p.funded_consistency_rule_pct is None   # 2026-11-11 report: no funded consistency rule
         assert p.min_trading_days == 5
         assert p.winning_days_for_payout == 5
     assert p25.min_winning_day_profit == 100.0
@@ -339,9 +339,11 @@ def test_the5ers_high_stakes_relabel():
         assert "High-Stakes" in p.label
         assert "Bootcamp" not in p.label
         # 2026-10-17 re-verification: 10% target / 3% (stricter of two conflicting official pages) / 10% static / no consistency / 3d
+        # 2026-11-11 report: daily 5%/DD 10% (<=$25k) and 4%/8% ($50k-$100k)
+        exp = (10.0, 5.0, 10.0) if key == "the5ers_20k" else (10.0, 4.0, 8.0)
         assert (p.evaluation_profit_target_pct, p.daily_loss_limit_pct,
-                p.max_drawdown_pct, p.drawdown_type,
-                p.consistency_rule_pct, p.min_trading_days) == (10.0, 3.0, 10.0, "static", None, 3)
+                p.max_drawdown_pct) == exp
+        assert (p.drawdown_type, p.consistency_rule_pct, p.min_trading_days) == ("static", None, 3)
     note = get_preset("the5ers_20k").source_note
     assert "Bootcamp" in note and "NOT modeled" in note
 

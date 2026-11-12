@@ -4,7 +4,7 @@ from app.discovery_engine import objective as obj
 
 
 def test_g3_is_a_mandatory_step_right_after_reproduction():
-    assert pr.STEP_ORDER[:2] == ("reproduction", "rulebook_g3") and len(pr.STEP_ORDER) == 6
+    assert pr.STEP_ORDER[:3] == ("reproduction", "rulebook_g3", "honest_eval") and len(pr.STEP_ORDER) == 7
 
 
 def test_failing_g3_stops_the_sequence_and_skips_the_rest():
@@ -13,7 +13,7 @@ def test_failing_g3_stops_the_sequence_and_skips_the_rest():
     steps.rulebook_g3 = lambda c, ctx: pr.StepResult("rulebook_g3", False, detail="E_plan +0.012R < +0.05R")
     res = pr.run_promotion_sequence({"spec": {}}, steps)
     assert not res.passed and res.failed_step == "rulebook_g3"
-    assert [s.skipped for s in res.steps] == [False, False, True, True, True, True]
+    assert [s.skipped for s in res.steps] == [False, False, True, True, True, True, True]
 
 
 def test_missing_g3_implementation_is_a_failure_not_a_pass():

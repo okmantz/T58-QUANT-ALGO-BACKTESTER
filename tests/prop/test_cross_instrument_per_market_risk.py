@@ -46,7 +46,7 @@ def test_each_market_gets_its_own_risk():
     # B2-4 (2026-10-04): the spec's round-turn rate now lands on
     # commission_per_contract (per-contract at settle), not the old flat
     # commission_per_trade fill.
-    assert risks["MGC_1m_2023-2026"].commission_per_contract == 1.60   # filled from spec because shared commission was 0
+    assert risks["MGC_1m_2023-2026"].commission_per_contract == 1.82   # (INST: Alpha MGC $1.82) filled from spec because shared commission was 0
     assert risks["MGC_1m_2023-2026"].commission_per_trade == 0.0       # no longer auto-filled (would double-charge)
     assert len(report) == 4 and all(r.describe() for r in report)
 

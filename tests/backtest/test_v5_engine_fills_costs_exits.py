@@ -162,27 +162,27 @@ def test_per_contract_commission_charged_at_settle():
     signals = pd.Series([1, 1, 1, 0, 0])
     risk = RiskConfig(initial_balance=50_000.0, risk_value=2.0, pip_size=1.0,
                       contract_size=10.0,
-                      commission_per_trade=2.0, commission_per_contract=1.60)
+                      commission_per_trade=2.0, commission_per_contract=1.82)
     # $1000 budget; costs sit inside it: one contract's worst case is
-    # $200 stop + $1.60 commission, plus the $2 flat charge -> 4 contracts
+    # $200 stop + $1.82 commission, plus the $2 flat charge -> 4 contracts
     # (5 would risk $1010).
     trades, _ = run_execution(df, signals, risk,
                               stop_loss_pips=20, take_profit_pips=None)
     assert len(trades) == 1
     t = trades[0]
     assert t.size == pytest.approx(40.0)  # 4 contracts x 10 units
-    assert t.commission == pytest.approx(2.0 + 1.60 * 4)
+    assert t.commission == pytest.approx(2.0 + 1.82 * 4)
     # And the P&L actually paid it.
     gross = (t.exit_price - t.entry_price) * t.size
     assert t.pnl == pytest.approx(gross - t.commission)
 
 
 def test_mgc_spec_fills_per_contract_commission_end_to_end():
-    """apply_instrument_spec('MGC') -> $1.60/contract; a 2-contract trade
-    is charged $3.20 at settle, not the old flat $1.60."""
+    """apply_instrument_spec('MGC') -> $1.82/contract; a 2-contract trade
+    is charged $3.20 at settle, not the old flat $1.82."""
     risk = apply_instrument_spec(
         RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, initial_balance=50_000.0, risk_value=1.0), "MGC")
-    assert risk.commission_per_contract == pytest.approx(1.60)
+    assert risk.commission_per_contract == pytest.approx(1.82)
     assert risk.commission_per_trade == 0.0
     rows = [
         (2000.0, 2001.0, 1999.0, 2000.5),
@@ -197,7 +197,7 @@ def test_mgc_spec_fills_per_contract_commission_end_to_end():
     trades, _ = run_execution(df, signals, risk,
                               stop_loss_pips=20, take_profit_pips=None)
     assert len(trades) == 1
-    assert trades[0].commission == pytest.approx(1.60 * 2)
+    assert trades[0].commission == pytest.approx(1.82 * 2)
 
 
 # ----------------------------------------------------------------------
