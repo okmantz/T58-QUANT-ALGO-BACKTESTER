@@ -136,6 +136,6 @@ def test_risk_sweep_form_sizing_mode_survives():
     risk = RiskConfig(initial_balance=100_000.0, **kw)
     assert risk.sizing_mode == "fit_stop"
     hardened = harden_risk_config(risk, prop_rules=PropRules(account_size=100_000.0), form=form)
-    assert hardened.sizing_mode == "fit_stop"
+    assert hardened.sizing_mode == "rr_planned"  # audit P0-6: prop path bans fit_stop
     assert hardened.max_stop_dollars == 450.0
     assert hardened.account_model == "prop"
