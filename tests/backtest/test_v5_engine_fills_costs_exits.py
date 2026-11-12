@@ -100,7 +100,7 @@ def test_entry_fill_lag_zero_uses_signal_bar_open():
     df = _df(rows)
     signals = pd.Series([1, 1, 1])
     risk = RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, initial_balance=10_000.0, risk_value=1.0, pip_size=1.0,
-                      entry_fill_lag_bars=0)
+                      entry_fill_lag_bars=0, allow_same_bar_fill=True)
     trades, _ = run_execution(df, signals, risk,
                               stop_loss_pips=50, take_profit_pips=None)
     assert len(trades) == 1

@@ -89,10 +89,11 @@ def test_halt_on_breach_true_is_the_opt_in_legacy_halt_and_explains_the_stall():
 
 # 2. profit target ------------------------------------------------------------
 def test_profit_target_is_wired_from_prop_rules_and_trading_continues():
-    df = _walk_df(seed=3)
-    rules = PropRules(account_size=10_000, evaluation_profit_target_pct=3.0, max_drawdown_pct=50.0, daily_loss_limit_pct=50.0)
-    risk = with_prop_safety_defaults(RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, initial_balance=10_000, risk_value=3.0, pip_size=1.0), rules)
-    assert risk.profit_target_pct == 3.0 and risk.reset_on_target is True
+    df = _walk_df(seed=7)
+    rules = PropRules(account_size=10_000, evaluation_profit_target_pct=1.0, max_drawdown_pct=50.0, daily_loss_limit_pct=50.0)
+    # audit P0-5: prop paths clamp risk to 1%/trade, so the target is sized to match
+    risk = with_prop_safety_defaults(RiskConfig(spread_pips=0.0, slippage_pips=0.0, commission_per_trade=0.0, initial_balance=10_000, risk_value=1.0, pip_size=1.0), rules)
+    assert risk.profit_target_pct == 1.0 and risk.reset_on_target is True
     trades, eq, _ = _run(df, risk)
     payouts = eq.attrs["payout_events"]
     assert len(payouts) >= 1
