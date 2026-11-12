@@ -870,6 +870,20 @@ def _futures_timezone_warning(df: pd.DataFrame, source_name: str, issues: list) 
         return
 
 
+def _data_shows_quarterly_roll_splices(df: pd.DataFrame) -> bool:
+    """True when the price data itself carries isolated contract splices that all sit in the quarterly (Mar/Jun/Sep/Dec) roll windows --
+    the signature of a continuous equity-index future regardless of what the file is called. Never raises."""
+    try:
+        if len(df) < 500 or df["close"].min() <= 0:
+            return False
+        from app.data.continuous_contract import back_adjust_continuous
+        _, rep = back_adjust_continuous(df, roll_months=(3, 6, 9, 12), roll_days=range(4, 22))
+        rolls = list(rep.splice_rolls)
+        return bool(rolls) and all(pd.Timestamp(r.timestamp).month in (3, 6, 9, 12) for r in rolls)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _maybe_back_adjust_continuous(df: pd.DataFrame, source_name: str, issues: list) -> pd.DataFrame:
     """Difference-back-adjust a continuous futures frame at load (v9.5).
 
@@ -886,11 +900,17 @@ def _maybe_back_adjust_continuous(df: pd.DataFrame, source_name: str, issues: li
     instrument. It now uses `back_adjust_continuous` (see
     app.data.continuous_contract): isolated date-boundary splices + repair of
     interleaved-contract windows; ordinary weekend/holiday gaps are left alone."""
-    if df is None or len(df) < 50 or not _looks_like_continuous_future(source_name):
+    if df is None or len(df) < 50:
         return df
     if not {"timestamp", "open", "high", "low", "close"}.issubset(df.columns):
         return df
     from app.data.continuous_contract import back_adjust_continuous
+    # 2026-11-12 audit P2-15: adjustment is no longer gated on the FILENAME alone. A file whose name does not look like a continuous
+    # future (a renamed export, "data.csv") but whose DATA carries isolated quarterly-window splices is adjusted too; the file name only
+    # lets us skip the probe for obviously-not-futures names (spot FX / crypto / equities keep their gaps).
+    if not _looks_like_continuous_future(source_name):
+        if not _data_shows_quarterly_roll_splices(df):
+            return df
 
     # Equity-index futures roll only in Mar/Jun/Sep/Dec, in the weeks around the
     # third Friday -- candidates outside that calendar window are not rolls.
