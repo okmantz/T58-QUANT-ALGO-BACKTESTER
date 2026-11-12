@@ -113,7 +113,7 @@ def test_prop_safety_defaults_activate_prop_account_and_fit_stop():
     risk = with_prop_safety_defaults(RiskConfig(), _owen_rules())
     assert risk.account_model == "prop"
     assert risk.prop_account_rules is not None
-    assert risk.sizing_mode == "fit_stop"
+    assert risk.sizing_mode == "rr_planned"  # audit P0-6: fit_stop banned in prop paths
     assert risk.intrabar_replay is True
     assert risk.initial_balance == 50_000.0
 
