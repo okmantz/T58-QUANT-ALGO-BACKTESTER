@@ -103,3 +103,15 @@ def test_shared_pool_is_reused_and_recreated_on_size_change_or_shutdown():
     sp.shutdown_shared_mc_pool()
     assert sp.get_shared_mc_pool(3) is not p2
     sp.shutdown_shared_mc_pool()
+
+
+def test_lookahead_cache_key_is_not_structure_only(cache_dir):
+    """2026-11-12 audit: configs differing only in numbers, or data differing only in the middle, must NOT share a verdict."""
+    from types import SimpleNamespace
+    df = _df()
+    a = SimpleNamespace(source_type="manual", config={"entry": {"rsi": 14, "lvl": 30}})
+    b = SimpleNamespace(source_type="manual", config={"entry": {"rsi": 14, "lvl": 31}})
+    assert bt_engine._lookahead_cache_key(a, df) != bt_engine._lookahead_cache_key(b, df)
+    df2 = df.copy(); df2.loc[7, "close"] += 1.0
+    assert bt_engine._lookahead_cache_key(a, df) != bt_engine._lookahead_cache_key(a, df2)
+    assert bt_engine._strategy_content_hash(a) != bt_engine._strategy_content_hash(b)

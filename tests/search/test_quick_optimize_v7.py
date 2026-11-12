@@ -106,7 +106,11 @@ def test_quick_optimize_improves_on_held_out_data():
     baseline_strategy = make_bad_fade_strategy(bb_period=15)
 
     # Sanity: the bad baseline actually trades and the edge is real.
-    base_holdout_bt = run_backtest(holdout_df, baseline_strategy, risk)
+    # audit P0-6: the optimizer now evaluates under prop sizing (rr_planned, risk capped),
+    # so the baseline must be measured under the SAME sizing to be a fair comparison.
+    from app.backtest.risk import with_prop_safety_defaults
+    base_risk = with_prop_safety_defaults(risk, rules)
+    base_holdout_bt = run_backtest(holdout_df, baseline_strategy, base_risk)
     assert len(base_holdout_bt.trades) >= 20, "planted edge must trade on holdout"
     baseline_holdout_net = base_holdout_bt.statistics.net_profit
 

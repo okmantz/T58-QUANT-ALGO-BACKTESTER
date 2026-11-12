@@ -138,6 +138,11 @@ def test_no_stop_default_is_visible_atr_and_non_mutating():
 
 def test_remedy_candidates_order_micro_then_floor():
     risk, _ = _lucid_risk()
+    # audit P0-6: the prop run context is rr_planned, which has no auto-remedy
+    assert risk.sizing_mode == "rr_planned"
+    assert sizing_remedy_candidates(risk, "ES1!") == []
+    import dataclasses
+    risk = dataclasses.replace(risk, sizing_mode="fit_stop")  # the remedy ladder itself, off the prop path
     kinds = [k for k, _, _ in sizing_remedy_candidates(risk, "ES1!")]
     assert kinds == ["micro_fallback", "fit_stop_floor"]
     _, detail, cand = sizing_remedy_candidates(risk, "ES1!")[0]

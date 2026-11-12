@@ -95,7 +95,12 @@ def test_lookahead_check_runs_once_per_structure(monkeypatch):
                       spread_pips=1.0, slippage_pips=1.0, commission_per_contract=0.1)
     for p in (10, 20, 30):
         eng.run_backtest(df, ManualStrategy(cfg(p)), risk)
-    assert len(calls) == 1
+    # audit 2026-11-12: verdict cache is keyed on the FULL config (a changed
+    # parameter can change what a strategy peeks at) -> once per distinct config.
+    assert len(calls) == 3
+    for p in (10, 20, 30):
+        eng.run_backtest(df, ManualStrategy(cfg(p)), risk)
+    assert len(calls) == 3  # repeats of the same config are still cached
     eng._LOOKAHEAD_CACHE.clear(); calls.clear()
     for p in (10, 20):
         eng.run_backtest(df, ManualStrategy(cfg(p)), risk, lookahead_check="always")
