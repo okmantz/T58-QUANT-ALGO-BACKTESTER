@@ -58,7 +58,7 @@ def perturbed_variant_specs(strategy, n_variants: int, seed: int) -> list[dict]:
 
 def dispatch_validation_checks(df, strategy, risk, rules, checks, form, baseline_trades=None,
                                 on_start=None, on_done=None, cancel_event=None, log=None,
-                                on_fraction=None):
+                                on_fraction=None, mc_config=None):
     """Run the ticked checks against ONE hardened baseline. Every check is
     isolated: a failure is reported per-check, never fatal to the others.
     Returns a list of {check, ok, summary, error} with honest numbers.
@@ -85,7 +85,7 @@ def dispatch_validation_checks(df, strategy, risk, rules, checks, form, baseline
             if check == "monte_carlo":
                 if not baseline_trades:
                     raise ValueError("Baseline backtest produced no trades to resample.")
-                mc = run_monte_carlo(baseline_trades, rules, MonteCarloConfig(n_simulations=mc_sims))
+                mc = run_monte_carlo(baseline_trades, rules, mc_config or MonteCarloConfig(n_simulations=mc_sims))
                 summary = {
                     "evaluation_pass_probability": mc.headline_evaluation_pass_probability,
                     "first_payout_probability": mc.headline_first_payout_probability,

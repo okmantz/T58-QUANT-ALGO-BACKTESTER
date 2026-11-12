@@ -1971,16 +1971,36 @@ def _replay_and_null_evidence(final_strategy, dev_df, risk, prop_rules, final_bt
             + (f" with a {_horizon}-day window (2x the median time to pass)" if _horizon else "") + "...")
         try:
             from app.prop.attempt_replay import run_attempt_replay
-            replay = run_attempt_replay(
-                d2, sr.signals, risk, prop_rules, sr.stop_loss_pips, sr.take_profit_pips,
-                n_starts=cfg.attempt_replay_starts, horizon_days=_horizon,
-                stop_loss_distance=sr.stop_loss_distance, take_profit_distance=sr.take_profit_distance,
-                trailing_stop_distance=sr.trailing_stop_distance, breakeven_trigger_r=sr.breakeven_trigger_r,
-                partial_exit_config=sr.partial_exit,
-                max_workers=workers,
-                progress_cb=(lambda d, t: progress_hook(
-                    7, 0.02 + 0.12 * (d / max(t, 1)), "Attempt replay")) if progress_hook else None,
-            )
+
+            def _replay_at(hz, coverage):
+                return run_attempt_replay(
+                    d2, sr.signals, risk, prop_rules, sr.stop_loss_pips, sr.take_profit_pips,
+                    n_starts=cfg.attempt_replay_starts, horizon_days=hz, min_horizon_coverage=coverage,
+                    stop_loss_distance=sr.stop_loss_distance, take_profit_distance=sr.take_profit_distance,
+                    trailing_stop_distance=sr.trailing_stop_distance, breakeven_trigger_r=sr.breakeven_trigger_r,
+                    partial_exit_config=sr.partial_exit,
+                    max_workers=workers,
+                    progress_cb=(lambda d, t: progress_hook(
+                        7, 0.02 + 0.12 * (d / max(t, 1)), "Attempt replay")) if progress_hook else None,
+                )
+
+            replay = _replay_at(_horizon, 0.25)
+            # RECONCILIATION (2026-11): the Monte Carlo has no clock when the firm sets no evaluation time limit, so it
+            # reports the eventual pass rate. A replay whose fixed window ends before a realistic account can reach the
+            # target reports "0% passed, 100% unresolved" -- a window artifact, not evidence against the strategy (it made
+            # a 97% Monte Carlo look contradicted by a 0% replay). With no firm limit, keep widening the window until
+            # the unresolved share is small (or the data cannot give a longer window), and count only attempts whose
+            # whole window was observed, so the replay measures the same thing the Monte Carlo does.
+            if not getattr(prop_rules, "max_eval_calendar_days", None):
+                _ts = pd.to_datetime(d2["timestamp"])
+                _span = float((_ts.iloc[-1] - _ts.iloc[0]).total_seconds() / 86400.0)
+                _hz_max = int(max(120, min(_span * 0.55, 1500)))
+                _hz = int(replay.horizon_days or _horizon or 120)
+                while (replay.n_attempts and replay.n_open / replay.n_attempts > 0.30 and _hz < _hz_max):
+                    _hz = int(min(_hz_max, max(_hz * 2, 240)))
+                    log(f"  Attempt replay: {replay.n_open}/{replay.n_attempts} fresh accounts had neither passed nor busted "
+                        f"inside the window -- widening it to {_hz} days so it measures the eventual pass rate, like the Monte Carlo.")
+                    replay = _replay_at(_hz, 1.0)
             log("  " + replay.render().replace("\n", "\n  ") if hasattr(replay, "render") else "  attempt replay done")
         except Exception as exc:  # noqa: BLE001
             log(f"  Attempt replay skipped: {exc}")
@@ -3950,7 +3970,7 @@ def _finish(
     # Evaluation basis: what these pass-rate numbers were measured on, saved next to them so Validate / Optimize /
     # the Dashboard can say exactly why their own numbers differ (app.reports.basis).
     try:
-        from app.reports.basis import make_basis
+        from app.reports.basis import engine_from_run, make_basis
         _acct = float(getattr(prop_rules, "account_size", 0) or 0)
         _sa = sizing_adjustment or {}
         _risk_usd = _sa.get("planned_risk_dollars") if _sa.get("applied") else None
@@ -3959,7 +3979,14 @@ def _finish(
             "full_pipeline", prop_preset=str(getattr(prop_rules, "preset_key", "") or ""), risk_pct=_risk_pct,
             sizing_mode=str(getattr(risk, "sizing_mode", "") or ""), timeframe=_fp_timeframe,
             window="dev_80" if (cfg.reserve_true_holdout and final_holdout is not None) else "full",
-            trades=len(final_bt.trades), reset_on_breach=bool(getattr(cfg, "reset_on_breach", False)))
+            trades=len(final_bt.trades), reset_on_breach=bool(getattr(cfg, "reset_on_breach", False)),
+            engine=engine_from_run(
+                risk,
+                adaptive=({"enabled": True, "mode": cfg.adaptive_risk_mode,
+                           "lock_pct": cfg.adaptive_risk_daily_profit_lock_pct} if cfg.adaptive_risk_enabled else {"enabled": False}),
+                mc={"sims": int(cfg.final_mc_sims), "seed": int(cfg.random_seed),
+                    "reset_on_breach": bool(cfg.reset_on_breach)},
+                holdout_frac=(float(cfg.holdout_frac) if cfg.reserve_true_holdout and final_holdout is not None else None)))
     except Exception:  # noqa: BLE001 -- provenance is a convenience, never fatal
         _fp_basis = None
     save_name = _fp_formula if (mutated_by_ga and _fp_formula != "(FULL PIPELINE)") else display_name

@@ -98,6 +98,12 @@
             {% endfor %}
           </select>
           <div class="lc-hint" style="margin-top:5px;">Its rules show in the rail &rarr; and harden this run.</div>
+          <label class="flabel" for="lc-setup-mode" style="margin-top:10px;">Evaluation setup</label>
+          <select class="inp" name="setup_mode" id="lc-setup-mode">
+            <option value="saved" selected>Same as this strategy's last Full Pipeline run (recommended: numbers match)</option>
+            <option value="custom">Use the fields below (numbers can differ from the pipeline)</option>
+          </select>
+          <div class="lc-hint" style="margin-top:5px;">Optimize, Validate and the Full Pipeline report the same pass rate only when they use the same risk size, sizing and data window. Without a saved Full Pipeline run the fields below are used.</div>
           <div class="lc-rules-line" id="lc-rules-line"></div>
         </div>
       </div>

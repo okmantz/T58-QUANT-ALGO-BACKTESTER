@@ -99,6 +99,12 @@
             {% endfor %}
           </select>
           <div class="lc-hint" style="margin-top:5px;">Its rules show in the rail &rarr; and harden this run.</div>
+          <label class="flabel" for="lc-setup-mode" style="margin-top:10px;">Evaluation setup</label>
+          <select class="inp" name="setup_mode" id="lc-setup-mode">
+            <option value="saved" selected>Same as this strategy's last Full Pipeline run (recommended: numbers match)</option>
+            <option value="custom">Use the fields below (numbers can differ from the pipeline)</option>
+          </select>
+          <div class="lc-hint" style="margin-top:5px;">A pass rate is only comparable between two pages when both used the same risk size, sizing, data window and prop rules. If the strategy has no saved Full Pipeline run yet, the fields below are used.</div>
           <div class="lc-rules-line" id="lc-rules-line"></div>
         </div>
       </div>

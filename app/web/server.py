@@ -3007,8 +3007,10 @@ def job_strategy_name(job_id):
 
 
 def _run_optimize_simple_job(job_id: str, df, strategy, risk, rules, engines, form, library_ref=None, dataset_label="",
-                             cancel_event=None, df_full=None, auto_widen: bool = True) -> None:
+                             cancel_event=None, df_full=None, auto_widen: bool = True, setup=None) -> None:
     _stamp_job_strategy(job_id, strategy, library_ref=library_ref)
+    if setup:
+        JOB_MANAGER.log(job_id, setup["text"])
     summary: dict = {}
     tracker = SimpleProgress(engine_total=len(engines))
     JOB_MANAGER.update(job_id, progress=tracker.payload())
@@ -3047,7 +3049,8 @@ def _run_optimize_simple_job(job_id: str, df, strategy, risk, rules, engines, fo
                             save_as_copy=(form.get("save_as_copy") == "on"),
                             # Same scoring basis as Full Pipeline (a blown eval
                             # resets and keeps going) unless explicitly unticked.
-                            reset_on_breach=(form.get("reset_on_breach", "on") == "on"),
+                            reset_on_breach=(((setup or {}).get("mc_cfg").reset_on_breach) if setup else (form.get("reset_on_breach", "on") == "on")),
+                            **({"final_mc_sims": int(setup["mc_cfg"].n_simulations)} if setup else {}),
                         ),
                         progress_cb=lambda m: JOB_MANAGER.log(job_id, m),
                         progress_hook=_hook,
@@ -3167,6 +3170,8 @@ def optimize_simple_start():
             pass
         rules = _simple_prop_rules(form)
         risk = _simple_base_risk(form, rules)
+        # Same default as Validate: measure on the setup the Full Pipeline used so the two pages agree (setup_mode=custom opts out).
+        risk, _opt_setup = _vs_saved_setup(form, library_ref, rules, risk)
         # Day/time restrictions (from the Full Pipeline's worst-time findings): apply to every engine's backtests and, for
         # a library strategy, save onto it so it stays in force everywhere that strategy runs.
         _slot_note = ""
@@ -3202,7 +3207,8 @@ def optimize_simple_start():
                          args=(job_id, df, strategy, risk, rules, engines, form),
                          kwargs={"library_ref": library_ref, "dataset_label": active_label,
                                  "cancel_event": cancel_event, "df_full": df_full,
-                                 "auto_widen": (form.get("auto_widen_window", "on") == "on")},
+                                 "auto_widen": (form.get("auto_widen_window", "on") == "on"),
+                                 "setup": _opt_setup},
                          daemon=True).start()
         return redirect(url_for("optimize_simple_job", job_id=job_id))
     except (StrategyError, RefinementError, ValueError) as exc:
@@ -3430,8 +3436,43 @@ def _vs_save_run_report(report: dict, results: list, form, meta: dict, baseline_
     return doc
 
 
+def _vs_saved_setup(form, library_ref, rules, risk):
+    """Validate's "same setup as the Full Pipeline" mode (the default). If the strategy's last Full Pipeline run recorded
+    the engine settings it was measured on (risk model, adaptive throttle, Monte Carlo seed/sims/reset flag, holdout split),
+    re-use them so Validate's Monte Carlo reproduces the pipeline's number instead of measuring a different setup.
+    Returns (risk, setup_or_None). ``setup_mode=custom`` (or no usable saved run) keeps the form's own values."""
+    if (form.get("setup_mode") or "saved") == "custom" or not library_ref:
+        return risk, None
+    try:
+        from app.reports import basis as _basis
+        saved = (load_strategy_metadata(*library_ref).get("last_run") or {})
+        preset = (form.get("prop_preset") or "").strip() or str(getattr(rules, "preset_key", "") or "")
+        b = _basis.reproducible_engine(saved, preset)
+        if not b:
+            return risk, None
+        eng = b["engine"]
+        upd = {k: eng[k] for k in ("risk_mode", "risk_value", "sizing_mode", "planned_target_dollars") if eng.get(k) is not None}
+        risk = replace(risk, **upd, reset_on_breach=bool((eng.get("mc") or {}).get("reset_on_breach", False)))
+        ad = eng.get("adaptive") or {}
+        adaptive = adaptive_from_settings(rules, ad.get("mode"), ad.get("lock_pct")) if ad.get("enabled") else None
+        mc = eng.get("mc") or {}
+        from app.monte_carlo.engine import MonteCarloConfig, default_method_for_adaptive_risk
+        mc_cfg = MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive), n_simulations=int(mc.get("sims") or 1000),
+                                  random_seed=int(mc.get("seed") or 42), reset_on_breach=bool(mc.get("reset_on_breach", False)))
+        hf = eng.get("holdout_frac")
+        text = (f"Using the same setup the Full Pipeline measured this strategy on: {b.get('risk_pct'):g}% risk per trade, "
+                f"{_basis.SIZING_LABEL.get(b.get('sizing_mode'), b.get('sizing_mode') or 'default sizing')}, "
+                + ("adaptive risk on, " if adaptive is not None else "")
+                + (f"first {int(round((1 - float(hf)) * 100))}% of the history for the baseline and Monte Carlo" if hf else "the full history")
+                + f", {mc_cfg.n_simulations:,} simulations. Pick 'Use the fields below' to test something different.")
+        return risk, {"adaptive": adaptive, "mc_cfg": mc_cfg, "holdout_frac": (float(hf) if hf else None), "text": text,
+                      "basis": b}
+    except Exception:  # noqa: BLE001 -- fall back to the form's own values
+        return risk, None
+
+
 def _run_validate_simple_job(job_id: str, df, strategy, risk, rules, checks, form, library_ref=None,
-                             dataset_label: str = "", tf_note=None, cancel_event=None, ctx=None, sim_text: str = "") -> None:
+                             dataset_label: str = "", tf_note=None, cancel_event=None, ctx=None, sim_text: str = "", setup=None) -> None:
     _stamp_job_strategy(job_id, strategy, library_ref=library_ref)
     tracker = SimpleProgress()
     checks = sorted(checks, key=lambda c: simple_report.CHECK_ORDER.index(c) if c in simple_report.CHECK_ORDER else 99)
@@ -3454,7 +3495,15 @@ def _run_validate_simple_job(job_id: str, df, strategy, risk, rules, checks, for
     try:
         JOB_MANAGER.log(job_id, "Running the baseline backtest…")
         push(0.0, "Baseline backtest")
-        baseline = run_backtest(df, strategy, risk)
+        if setup:
+            JOB_MANAGER.log(job_id, setup["text"])
+            _bdf = df
+            if setup.get("holdout_frac"):
+                _cut = max(1, min(int(len(df) * (1 - setup["holdout_frac"])), len(df) - 1))
+                _bdf = df.iloc[:_cut].reset_index(drop=True)
+            baseline = run_backtest(_bdf, strategy, risk, adaptive_risk=setup.get("adaptive"))
+        else:
+            baseline = run_backtest(df, strategy, risk)
         baseline_summary = {
             "trades": len(baseline.trades), "net_profit": baseline.statistics.net_profit,
             "win_rate": baseline.statistics.win_rate, "max_drawdown_pct": baseline.statistics.max_drawdown_pct,
@@ -3467,6 +3516,24 @@ def _run_validate_simple_job(job_id: str, df, strategy, risk, rules, checks, for
                                     "Each failed check below explains why and what to change.")
         state["done"] = simple_report.BASELINE_WEIGHT
         push(0.0, "Baseline done")
+
+        def _vs_annotate_mc(item, result):
+            # Say plainly whether this number disagrees with the Full Pipeline's or merely measured a different
+            # setup (risk size / sizing / data window) -- the "three engines, three answers" confusion.
+            try:
+                from app.reports import basis as _basis
+                _vb = (dict(setup["basis"], source="validate") if setup else None) or _basis.make_basis(
+                    "validate", prop_preset=meta.get("prop_preset") or "",
+                    risk_pct=(float(risk.risk_value) if getattr(risk, "risk_mode", "percent") != "fixed"
+                              else float(risk.risk_value) / max(float(getattr(risk, "initial_balance", 0) or 0), 1.0) * 100.0),
+                    sizing_mode=str(getattr(risk, "sizing_mode", "") or ""), timeframe=meta.get("timeframe") or "",
+                    window="full", trades=baseline_summary.get("trades"),
+                    reset_on_breach=bool(getattr(risk, "reset_on_breach", False)))
+                _saved = (load_strategy_metadata(*library_ref).get("last_run") or {}) if library_ref else {}
+                _basis.annotate_mc_item(item, _vb, _saved)
+                (result.get("summary") or {})["basis"] = _vb
+            except Exception:  # noqa: BLE001 -- explanation only
+                pass
 
         def on_start(check):
             state["cur"], state["label"] = weights[check], simple_report.CHECK_LABELS.get(check, check)
@@ -3481,22 +3548,7 @@ def _run_validate_simple_job(job_id: str, df, strategy, risk, rules, checks, for
             state["cur"] = 0.0
             item = simple_report.interpret_check(result, ctx)
             if check == "monte_carlo":
-                # Say plainly whether this number disagrees with the Full Pipeline's or merely measured a different
-                # setup (risk size / sizing / data window) -- the "three engines, three answers" confusion.
-                try:
-                    from app.reports import basis as _basis
-                    _vb = _basis.make_basis(
-                        "validate", prop_preset=meta.get("prop_preset") or "",
-                        risk_pct=(float(risk.risk_value) if getattr(risk, "risk_mode", "percent") != "fixed"
-                                  else float(risk.risk_value) / max(float(getattr(risk, "initial_balance", 0) or 0), 1.0) * 100.0),
-                        sizing_mode=str(getattr(risk, "sizing_mode", "") or ""), timeframe=meta.get("timeframe") or "",
-                        window="full", trades=baseline_summary.get("trades"),
-                        reset_on_breach=bool(getattr(risk, "reset_on_breach", False)))
-                    _saved = (load_strategy_metadata(*library_ref).get("last_run") or {}) if library_ref else {}
-                    _basis.annotate_mc_item(item, _vb, _saved)
-                    result.setdefault("summary", {})["basis"] = _vb
-                except Exception:  # noqa: BLE001 -- explanation only
-                    pass
+                _vs_annotate_mc(item, result)
             partial.append(item)
             JOB_MANAGER.update(job_id, partial_items=_vs_clean(partial))
             JOB_MANAGER.log(job_id, f"{item['label']}: {item['status'].upper()} — {item['headline']}")
@@ -3507,6 +3559,7 @@ def _run_validate_simple_job(job_id: str, df, strategy, risk, rules, checks, for
             df, strategy, risk, rules, checks, form, baseline_trades=baseline.trades,
             on_start=on_start, on_done=on_done, cancel_event=cancel_event,
             log=lambda m: JOB_MANAGER.log(job_id, f"  {m}"), on_fraction=on_fraction,
+            mc_config=(setup or {}).get("mc_cfg"),
         )
 
         on_record: set = set()
@@ -3516,6 +3569,11 @@ def _run_validate_simple_job(job_id: str, df, strategy, risk, rules, checks, for
             except Exception:  # noqa: BLE001
                 on_record = set()
         report = simple_report.build_report(results, context=ctx or {}, methods_on_record=on_record)
+        for _it in report.get("items", []):
+            if _it.get("check") == "monte_carlo":
+                _res = next((r for r in results if r.get("check") == "monte_carlo" and r.get("ok")), None)
+                if _res is not None:
+                    _vs_annotate_mc(_it, _res)
         report["saved_to_library"] = bool(library_ref)
         report["strategy"] = library_ref[1] if library_ref else meta["strategy_name"]
         report["library_type"] = library_ref[0] if library_ref else ""
@@ -3567,6 +3625,7 @@ def _start_validate_job(form, files, candidate: str = "", source: str = "validat
         strategy, library_ref = _simple_load_strategy(load_form)
         rules = _simple_prop_rules(form)
         risk = _simple_base_risk(form, rules)
+        risk, _setup = _vs_saved_setup(form, library_ref, rules, risk)
     except (StrategyError, RefinementError, ValueError) as exc:
         return None, (str(exc), 400)
     except Exception as exc:  # noqa: BLE001
@@ -3593,7 +3652,8 @@ def _start_validate_job(form, files, candidate: str = "", source: str = "validat
         target=_run_validate_simple_job,
         args=(job_id, df, strategy, risk, rules, checks, form),
         kwargs={"library_ref": library_ref, "dataset_label": active_label, "tf_note": tf_note,
-                "cancel_event": cancel_event, "ctx": ctx, "sim_text": describe_simulation_text(risk, rules)},
+                "cancel_event": cancel_event, "ctx": ctx, "sim_text": describe_simulation_text(risk, rules),
+                "setup": _setup},
         daemon=True,
     ).start()
     return job_id, None

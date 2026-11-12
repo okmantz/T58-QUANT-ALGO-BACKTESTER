@@ -483,7 +483,7 @@ class QuickOptimizeResult:
 def _save_optimized_to_library(
     *, final_source_type, final_code_text, final_config, final_bt, final_mc,
     baseline_mc, improved, cfg, display_name, mutated_by_ga,
-    run_instrument, run_timeframe, run_indicator, log, final_code_ext=None,
+    run_instrument, run_timeframe, run_indicator, log, final_code_ext=None, risk=None, prop_rules=None,
 ):
     """Saves ONE optimized strategy to the Strategy Library and returns
     (saved_path, note, code_text, code_ext).
@@ -505,8 +505,25 @@ def _save_optimized_to_library(
             return f"{safe_filename_stem(display_name, 'optimized_strategy')}_optimized{ext}"
         return name
 
+    def _basis() -> dict | None:
+        """What these numbers were measured on (app.reports.basis) -- saved with the result so every page can say
+        whether another engine's number is comparable."""
+        try:
+            from app.reports.basis import make_basis
+            _acct = float(getattr(prop_rules, "account_size", 0) or 0)
+            _rp = (float(risk.risk_value) if getattr(risk, "risk_mode", "percent") != "fixed"
+                   else float(risk.risk_value) / max(_acct or float(getattr(risk, "initial_balance", 0) or 0), 1.0) * 100.0)
+            return make_basis(
+                "optimize", prop_preset=str(getattr(prop_rules, "preset_key", "") or ""), risk_pct=_rp,
+                sizing_mode=str(getattr(risk, "sizing_mode", "") or ""), timeframe=run_timeframe or "",
+                window="dev_80" if getattr(cfg, "reserve_holdout", False) else "full", trades=len(final_bt.trades),
+                reset_on_breach=bool(getattr(cfg, "reset_on_breach", False)))
+        except Exception:  # noqa: BLE001
+            return None
+
     def _stats() -> dict:
         return {
+            "basis": _basis(),
             "improved": improved,
             "trades": len(final_bt.trades),
             "net_profit": round(final_bt.statistics.net_profit, 2),
@@ -514,13 +531,14 @@ def _save_optimized_to_library(
             "max_dd": round(final_bt.statistics.max_drawdown_pct, 2),
             "eval_pass_probability": round(final_mc.headline_evaluation_pass_probability, 1),
             "first_payout_probability": round(final_mc.headline_first_payout_probability, 1),
-            "baseline_eval_pass_probability": round(baseline_mc.evaluation_pass_probability, 1),
+            "baseline_eval_pass_probability": round(baseline_mc.headline_evaluation_pass_probability, 1),
         }
 
     def _unchanged_stats() -> dict:
         return {
+            "basis": _basis(),
             "improved": False,
-            "baseline_eval_pass_probability": round(baseline_mc.evaluation_pass_probability, 1),
+            "baseline_eval_pass_probability": round(baseline_mc.headline_evaluation_pass_probability, 1),
             "note": "No robust improvement found; the strategy was left unchanged.",
         }
 
@@ -787,8 +805,8 @@ def run_quick_optimize(
     )
     log(
         f"Baseline: {len(baseline_bt.trades)} trades, net ${baseline_bt.statistics.net_profit:,.2f}, "
-        f"win rate {baseline_bt.statistics.win_rate:.1f}%, eval pass {baseline_mc.evaluation_pass_probability:.1f}%, "
-        f"payout {baseline_mc.first_payout_probability:.1f}%."
+        f"win rate {baseline_bt.statistics.win_rate:.1f}%, eval pass {baseline_mc.headline_evaluation_pass_probability:.1f}%, "
+        f"payout {baseline_mc.headline_first_payout_probability:.1f}%."
         + reset_chain_note(
             baseline_bt.statistics, baseline_mc.evaluation_pass_probability, baseline_mc.first_payout_probability,
             baseline_mc.per_attempt_pass_probability, baseline_mc.per_attempt_payout_probability,
@@ -936,8 +954,8 @@ def run_quick_optimize(
         )
     log(
         f"Optimized: {len(final_bt.trades)} trades, net ${final_bt.statistics.net_profit:,.2f}, "
-        f"win rate {final_bt.statistics.win_rate:.1f}%, eval pass {final_mc.evaluation_pass_probability:.1f}%, "
-        f"payout {final_mc.first_payout_probability:.1f}%."
+        f"win rate {final_bt.statistics.win_rate:.1f}%, eval pass {final_mc.headline_evaluation_pass_probability:.1f}%, "
+        f"payout {final_mc.headline_first_payout_probability:.1f}%."
         + reset_chain_note(
             final_bt.statistics, final_mc.evaluation_pass_probability, final_mc.first_payout_probability,
             final_mc.per_attempt_pass_probability, final_mc.per_attempt_payout_probability,
@@ -1073,8 +1091,8 @@ def run_quick_optimize(
                     MonteCarloConfig(method=default_method_for_adaptive_risk(adaptive_risk), n_simulations=cfg.final_mc_sims, random_seed=cfg.random_seed, reset_on_breach=cfg.reset_on_breach),
                     selection_bias_caveat=False,  # this slice was never used to select/score the winner
                 )
-                holdout_eval_pass_probability = holdout_mc.evaluation_pass_probability
-                holdout_payout_probability = holdout_mc.first_payout_probability
+                holdout_eval_pass_probability = holdout_mc.headline_evaluation_pass_probability
+                holdout_payout_probability = holdout_mc.headline_first_payout_probability
                 holdout_note = (
                     f"Holdout: {holdout_trades} trades, net ${holdout_net_profit:,.2f}, "
                     f"win rate {holdout_win_rate:.1f}%, eval pass {holdout_eval_pass_probability:.1f}%, "
@@ -1187,7 +1205,7 @@ def run_quick_optimize(
             baseline_mc=baseline_mc, improved=improved, cfg=cfg,
             display_name=display_name, mutated_by_ga=mutated_by_ga,
             run_instrument=run_instrument, run_timeframe=run_timeframe,
-            run_indicator=run_indicator, final_code_ext=final_code_ext,
+            run_indicator=run_indicator, final_code_ext=final_code_ext, risk=risk, prop_rules=prop_rules,
         )
         if defer_library_save:
             # Timeframe sweep: only the WINNING timeframe's result is
@@ -1224,8 +1242,8 @@ def run_quick_optimize(
             win_rate=final_bt.statistics.win_rate,
             profit_factor=final_bt.statistics.profit_factor,
             max_drawdown_pct=final_bt.statistics.max_drawdown_pct,
-            eval_pass_probability=final_mc.evaluation_pass_probability,
-            first_payout_probability=final_mc.first_payout_probability,
+            eval_pass_probability=final_mc.headline_evaluation_pass_probability,
+            first_payout_probability=final_mc.headline_first_payout_probability,
             risk_of_ruin_pct=final_mc.risk_of_ruin_pct,
             lesson="; ".join(warnings[:3]) if warnings else "",
         )
@@ -1244,14 +1262,14 @@ def run_quick_optimize(
         baseline_trades=len(baseline_bt.trades),
         baseline_net_profit=baseline_bt.statistics.net_profit,
         baseline_win_rate=baseline_bt.statistics.win_rate,
-        baseline_eval_pass_probability=baseline_mc.evaluation_pass_probability,
-        baseline_payout_probability=baseline_mc.first_payout_probability,
+        baseline_eval_pass_probability=baseline_mc.headline_evaluation_pass_probability,
+        baseline_payout_probability=baseline_mc.headline_first_payout_probability,
         baseline_per_attempt_pass_probability=baseline_per_attempt,
         optimized_trades=len(final_bt.trades),
         optimized_net_profit=final_bt.statistics.net_profit,
         optimized_win_rate=final_bt.statistics.win_rate,
-        optimized_eval_pass_probability=final_mc.evaluation_pass_probability,
-        optimized_payout_probability=final_mc.first_payout_probability,
+        optimized_eval_pass_probability=final_mc.headline_evaluation_pass_probability,
+        optimized_payout_probability=final_mc.headline_first_payout_probability,
         optimized_per_attempt_pass_probability=final_per_attempt,
         ga_result=ga_result,
         improved=improved,
