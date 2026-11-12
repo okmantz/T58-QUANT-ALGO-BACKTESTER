@@ -54,6 +54,8 @@ class ForwardTestStatus:
     halted_reason: Optional[str] = None
     baseline_win_rate: Optional[float] = None
     drift_flag: Optional[str] = None
+    sprt: Optional[dict] = None          # 2026-11-12 audit P1-13: latest SPRT / kill-switch status (decision, LLR, ladder state)
+    floating_pnl: float = 0.0
 
 
 @dataclass
@@ -66,6 +68,10 @@ class ForwardTestConfig:
     min_drift_sample: int = 20        # trades needed before comparing to baseline_win_rate
     drift_tolerance_pts: float = 20.0  # percentage points of win-rate deviation to flag
     baseline_win_rate: Optional[float] = None  # from the strategy's own backtest report, if known
+    # 2026-11-12 audit P1-13: the forward test is now a real sequential test, not a log.
+    h1_r: float = 0.05                         # the edge (R per trade) the backtest earned after costs/shrinkage; SPRT H1
+    expected_max_drawdown_r: Optional[float] = None   # backtest's worst drawdown in R; live drawdown beyond it is flagged as drift
+    strategy_config: Optional[dict] = None     # frozen at start; any later change refuses new entries (the evidence clock must not restart silently)
 
 
 class ForwardTestSession:
@@ -97,6 +103,17 @@ class ForwardTestSession:
         self._daily_realized_pnl = 0.0
         self._daily_key: Optional[str] = None
         self._mt5_down = False  # tracks reconnect state across polls, for the recovered-log message
+        # 2026-11-12 audit P1-13: sequential monitor + frozen-code guard, owned by the session the UI starts.
+        from app.forward_test import frozen as _frozen
+        from app.forward_test.sprt_monitor import SprtMonitor
+        self._frozen_mod = _frozen
+        self._sprt = SprtMonitor(h1_r=max(float(config.h1_r), 1e-4))
+        if config.strategy_config is None:
+            _cfg_attr = getattr(strategy, "config", None)
+            config.strategy_config = dict(_cfg_attr) if isinstance(_cfg_attr, dict) else {"type": strategy_type, "file": strategy_filename}
+        self._frozen = _frozen.freeze(config.strategy_config, config.risk)
+        self._open_risk_dollars: Optional[float] = None
+        self._entries_blocked_reason: Optional[str] = None
         self.last_problem = None  # set by start() when it fails: the structured, plain-language explanation
 
     # -- public controls ----------------------------------------------------
@@ -206,11 +223,47 @@ class ForwardTestSession:
             self._daily_realized_pnl = 0.0
             self.status.halted_reason = None
 
+    def _floating_pnl(self) -> float:
+        """Unrealized P&L of the open position (0 when flat or unreadable)."""
+        if self.status.open_position_ticket is None:
+            return 0.0
+        try:
+            return float(sum(float(getattr(p, "profit", 0.0) or 0.0)
+                             for p in self.connector.get_open_positions(self.cfg.symbol)
+                             if p.ticket == self.status.open_position_ticket))
+        except Exception:  # noqa: BLE001
+            return 0.0
+
     def _daily_loss_breached(self) -> bool:
         if self.cfg.risk.daily_loss_limit_pct is None:
             return False
         limit_amount = self.cfg.risk.initial_balance * (self.cfg.risk.daily_loss_limit_pct / 100.0)
-        return self._daily_realized_pnl <= -abs(limit_amount)
+        # 2026-11-12 audit P1-13: the breaker counts UNREALIZED loss too -- a firm's daily limit is on equity, not on closed trades.
+        floating = self._floating_pnl()
+        self.status.floating_pnl = floating
+        return (self._daily_realized_pnl + min(floating, 0.0)) <= -abs(limit_amount)
+
+    def _sequential_checks(self) -> None:
+        """Frozen-code guard + SPRT/kill-switch + expectancy/drawdown drift. Sets ``_entries_blocked_reason`` (fail-closed)."""
+        ok, problems = self._frozen_mod.verify(
+            self._frozen, self.cfg.strategy_config if self.cfg.strategy_config is not None
+            else {"type": self.strategy_type, "file": self.strategy_filename}, self.cfg.risk)
+        if not ok:
+            self._entries_blocked_reason = "FROZEN-CODE GUARD: " + "; ".join(problems) + " -- no new entries (restart a fresh forward test)."
+            return
+        st = self._sprt.status()
+        self.status.sprt = {k: st.get(k) for k in ("decision", "ladder_state", "halted", "kill_switch", "live_sim_days", "rulebook_llr")}
+        reasons = list(st.get("kill_switch") or [])
+        if st.get("decision") in ("ACCEPT_H0", "STOP_FUTILE"):
+            reasons.append(f"SPRT decision {st['decision']}: the live edge is not consistent with the backtest's")
+        dd_cap = self.cfg.expected_max_drawdown_r
+        if dd_cap:
+            eq = peak = dd = 0.0
+            for x in self._sprt.r_values:
+                eq += x; peak = max(peak, eq); dd = max(dd, peak - eq)
+            if dd > float(dd_cap):
+                reasons.append(f"live drawdown {dd:.1f}R exceeds the backtest's worst ({float(dd_cap):.1f}R)")
+        self._entries_blocked_reason = "FORWARD-TEST HALT: " + "; ".join(reasons) if reasons else None
 
     def _resolve_stop_distance(self, result, price: float) -> float:
         """Same precedence order as app.backtest.execution: per-bar dynamic
@@ -303,6 +356,16 @@ class ForwardTestSession:
             self._check_drift()
             return
 
+        self._sequential_checks()
+        if self._entries_blocked_reason:
+            if self.status.halted_reason != self._entries_blocked_reason:
+                self._log("warn", self._entries_blocked_reason)
+            self.status.halted_reason = self._entries_blocked_reason
+            if self.status.open_position_ticket is not None:
+                self._close_current_trade("forward-test halt")
+            self._check_drift()
+            return
+
         result = self.strategy.generate(df)
         signal = int(result.signals.iloc[-1])
         price = float(df["close"].iloc[-1])
@@ -353,6 +416,7 @@ class ForwardTestSession:
             return
 
         self.status.open_position_ticket = order.ticket
+        self._open_risk_dollars = float(self.cfg.risk.risk_amount(equity))   # intended $ risk = 1R for the SPRT
         self._open_trade_row_id = self.journal.record_open(
             self._session_id, order.ticket, signal, order.volume or volume,
             order.price or price, sl_price, tp_price,
@@ -418,5 +482,11 @@ class ForwardTestSession:
             pnl = pnl_override if pnl_override is not None else (exit_p - row.entry_price) * row.direction * row.volume
             self.journal.record_close(row.id, exit_p, pnl)
         self._daily_realized_pnl += pnl
+        if self._open_risk_dollars and self._open_risk_dollars > 0:
+            try:
+                self._sprt.add(pnl / self._open_risk_dollars, day=self._daily_key)
+            except Exception as exc:  # noqa: BLE001
+                self._log("warn", f"SPRT monitor could not record the trade: {exc}")
+        self._open_risk_dollars = None
         self.status.open_position_ticket = None
         self._open_trade_row_id = None
